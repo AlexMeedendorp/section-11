@@ -4,6 +4,16 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.139 - Activity fields keep legitimate zero values.
+  recent_activities[] built decoupling, avg_temp and wind_speed with an "or"
+  fallback chain, so a real 0 (0.0 % decoupling, 0 °C, calm air) was treated as
+  missing: it became null, or the next source in the chain was used instead (a
+  0 °C weather temperature was silently replaced by the device temperature).
+  These three fields now fall through only when a source is absent or null.
+  Fields where an upstream 0 means "no sensor or no data" (power, NP, HR,
+  max HR, cadence, speed, work, calories, pace) and humidity keep their
+  previous behaviour, so a missing sensor still reads as null rather than 0.
+
 Version 3.138 - --init installs exactly what --update manages; maintainer folders
   are no longer distributed.
   --init extracted the whole repository archive, while --update refreshes only the
@@ -613,7 +623,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.138"
+    VERSION = "3.139"
     INTERVALS_FILE = "intervals.json"
     ROUTES_FILE = "routes.json"
     SAVED_WORKOUTS_FILE = "saved_workouts.json"
@@ -10202,6 +10212,15 @@ class IntervalsSync:
             if e.get("activity_id") is not None
         }
         chat_notes_cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        def _first_set(src: Dict, *keys: str):
+            """First value among keys that is present and not None (0 is kept)."""
+            for key in keys:
+                value = src.get(key)
+                if value is not None:
+                    return value
+            return None
+
         formatted = []
         for i, act in enumerate(activities):
             avg_power = (act.get("average_watts") or act.get("avg_watts") or 
@@ -10219,13 +10238,15 @@ class IntervalsSync:
             
             avg_cadence = (act.get("average_cadence") or act.get("avg_cadence") or
                           act.get("icu_average_cadence"))
-            avg_temp = (act.get("average_weather_temp") or act.get("average_temp") or 
-                       act.get("avg_temp") or act.get("average_temperature"))
+            # v3.139: 0 °C is a real temperature; fall through only on absent/None.
+            avg_temp = _first_set(act, "average_weather_temp", "average_temp",
+                                  "avg_temp", "average_temperature")
             joules = act.get("icu_joules")
             work_kj = round(joules / 1000, 1) if joules else None
             calories = act.get("calories") or act.get("icu_calories")
             variability_index = act.get("icu_variability_index")
-            decoupling = act.get("icu_hr_decoupling") or act.get("decoupling")
+            # v3.139: 0.0 % decoupling is a real value; fall through only on absent/None.
+            decoupling = _first_set(act, "icu_hr_decoupling", "decoupling")
             
             avg_speed_ms = act.get("average_speed")
             max_speed_ms = act.get("max_speed")
@@ -10235,7 +10256,8 @@ class IntervalsSync:
             
             weather = act.get("weather_description") or act.get("weather")
             humidity = act.get("humidity") or act.get("average_humidity")
-            wind_speed = act.get("average_wind_speed") or act.get("wind_speed")
+            # v3.139: calm (0) is a real wind speed; fall through only on absent/None.
+            wind_speed = _first_set(act, "average_wind_speed", "wind_speed")
             
             carbs_used = act.get("carbs_used")
             carbs_ingested = act.get("carbs_ingested")
