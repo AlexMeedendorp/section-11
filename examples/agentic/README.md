@@ -378,20 +378,21 @@ Maps Section 11 Workout Reference template IDs to Intervals.icu description synt
 
 | Template ID | Name | Description Syntax |
 |-------------|------|--------------------|
-| AE-1 | Recovery Spin | `- 5m ramp 40%-50%\n- 30m 50-55%\n- 5m ramp 50%-40%` |
-| AE-2 | Medium Endurance | `- 10m ramp 50%-65%\n- 90m 65-75%\n- 10m ramp 65%-50%` |
-| AE-3 | Long Endurance | `- 15m ramp 50%-65%\n- 150m 65-75%\n- 15m ramp 65%-50%` |
-| SS-1 | Sweet Spot 3x15 | `- 15m ramp 50%-75%\n\n3x\n- 15m 88-92%\n- 5m 55%\n\n- 10m 50%` |
-| SS-2 | Sweet Spot 2x20 | `- 15m ramp 50%-75%\n\n2x\n- 20m 88-92%\n- 5m 55%\n\n- 10m 50%` |
-| SS-3 | Sweet Spot 2x30 | `- 15m ramp 50%-75%\n\n2x\n- 30m 88-92%\n- 5m 55%\n\n- 10m 50%` |
-| TH-1 | Threshold 3x10 | `- 15m ramp 50%-75%\n\n3x\n- 10m 95-105%\n- 5m 55%\n\n- 10m 50%` |
-| TH-2 | Threshold 2x15 | `- 15m ramp 50%-75%\n\n2x\n- 15m 95-105%\n- 5m 55%\n\n- 10m 50%` |
-| TH-3 | Threshold 2x20 | `- 15m ramp 50%-75%\n\n2x\n- 20m 95-105%\n- 5m 55%\n\n- 10m 50%` |
-| VO2-1 | VO2max 5x4 | `- 15m ramp 50%-75%\n\n5x\n- 4m 106-120%\n- 3m Z1\n\n- 10m 50%` |
-| VO2-2 | VO2max 4x5 | `- 15m ramp 50%-75%\n\n4x\n- 5m 106-120%\n- 4m Z1\n\n- 10m 50%` |
-| VO2-3 | VO2max 6x3 | `- 15m ramp 50%-75%\n\n6x\n- 3m 106-120%\n- 3m Z1\n\n- 10m 50%` |
-| AN-1 | Anaerobic 8x30s | `- 15m ramp 50%-75%\n\n8x\n- 30s 150%\n- 4m30s Z1\n\n- 10m 50%` |
-| AN-2 | Anaerobic 10x1m | `- 15m ramp 50%-75%\n\n10x\n- 1m 130-150%\n- 3m Z1\n\n- 10m 50%` |
+| AE-1 | Steady-State Endurance (Short) | `- 10m ramp 50%-65%\n- 55m 65-75%\n- 10m ramp 65%-50%` |
+| AE-2 | Steady-State Endurance (Medium) | `- 10m ramp 50%-65%\n- 90m 65-75%\n- 10m ramp 65%-50%` |
+| AE-3 | Long Durability Ride | `- 15m ramp 50%-65%\n- 150m 65-75%\n- 15m ramp 65%-50%` |
+| AE-4 | Active Recovery | `- 5m ramp 40%-50%\n- 30m 50-55%\n- 5m ramp 50%-40%` |
+| SS-1 | Sustained Sweet Spot 3x15 | `- 15m ramp 50%-75%\n\n3x\n- 15m 88-92%\n- 5m 55%\n\n- 10m 50%` |
+| SS-2 | Progressive Sweet Spot 12/15/20 | `- 15m ramp 50%-75%\n- 12m 88-92%\n- 5m 55%\n- 15m 88-92%\n- 5m 55%\n- 20m 88-92%\n- 10m 50%` |
+| SS-3 | Over-Unders 3x9 | `- 15m ramp 50%-75%\n\n3x\n- 2m 90-95%\n- 1m 106-110%\n\n- 5m 55%\n\n3x\n- 2m 90-95%\n- 1m 106-110%\n\n- 5m 55%\n\n3x\n- 2m 90-95%\n- 1m 106-110%\n\n- 10m 50%` |
+| TH-1 | Classic Threshold 3x12 | `- 15m ramp 50%-75%\n\n3x\n- 12m 95-105%\n- 5m 55%\n\n- 10m 50%` |
+| TH-1 | Classic Threshold 2x20 (variant) | `- 15m ramp 50%-75%\n\n2x\n- 20m 95-105%\n- 6m 55%\n\n- 10m 50%` |
+| TH-2 | Seiler-Style Long Intervals 4x8 | `- 15m ramp 50%-75%\n\n4x\n- 8m 102-108%\n- 2m 55%\n\n- 10m 50%` |
+| VO2-1 | Classic Long Intervals 5x4 | `- 15m ramp 50%-75%\n\n5x\n- 4m 106-120%\n- 3m Z1\n\n- 10m 50%` |
+| VO2-2 | Short-Short Intervals 2x10 30/15 | `- 15m ramp 50%-75%\n\n10x\n- 30s 120%\n- 15s Z1\n\n- 5m Z1\n\n10x\n- 30s 120%\n- 15s Z1\n\n- 10m 50%` |
+| VO2-3 | Descending Rest Intervals 5x3 | `- 15m ramp 50%-75%\n- 3m 106-120%\n- 3m Z1\n- 3m 106-120%\n- 2m30s Z1\n- 3m 106-120%\n- 2m Z1\n- 3m 106-120%\n- 1m30s Z1\n- 3m 106-120%\n- 10m 50%` |
+| AN-1 | Short Power Repeats 8x30s | `- 15m ramp 50%-75%\n\n8x\n- 30s 150%\n- 3m Z1\n\n- 10m 50%` |
+| AN-2 | Sprint Intervals 6x15s | `- 15m ramp 50%-70%\n\n6x\n- 15s 200%\n- 5m Z1\n\n- 20m 65-75%\n- 10m 50%` |
 
 ### What NOT To Do
 
