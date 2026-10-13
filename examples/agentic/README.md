@@ -374,7 +374,7 @@ Other clear forms work too, such as `- 5m 55% - Recovery` or `- Recovery 5m 55%`
 
 ### Template Mappings
 
-Maps Section 11 Workout Reference template IDs to Intervals.icu description syntax. **Use these as inspiration and adapt to the athlete**. Don't copy-paste templates without considering current fitness, goals, and constraints. **Always use %FTP ranges, not absolute watts**. Intervals.icu resolves % to the athlete's current FTP.
+Maps Section 11 Workout Reference template IDs to Intervals.icu description syntax. **Adapt these examples to the athlete within the referenced template's permitted variants and constraints**. Follow Section 11's readiness and progression rules. Don't copy-paste templates without considering current fitness, goals, and constraints. **Always use %FTP ranges, not absolute watts**. Intervals.icu resolves % to the athlete's current FTP.
 
 | Template ID | Name | Description Syntax |
 |-------------|------|--------------------|

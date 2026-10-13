@@ -4,7 +4,7 @@ Companion document to **Section 11 B: AI Training Plan Protocol**.
 
 ## What This Is
 
-A catalog of structured workout templates that AI coaching systems can select from when prescribing sessions. It provides the *how*; Section 11 provides the *when* and *why*.
+The normative source of session structures that AI coaching systems must use when prescribing structured sessions, with details adapted to the athlete's data and current state. It provides the *how*; Section 11 provides the *when* and *why*.
 
 ## Relationship to Section 11
 
@@ -36,14 +36,14 @@ Two different things are called a library. This folder is the **Workout Referenc
 
 ## Customisation
 
-This document is designed to be forked. You can:
+Athletes and human coaches can fork this document to maintain their library. These are human library-maintenance choices; the AI must not extend or replace templates on its own. You can:
 
 - Add sport-specific sessions (running, swimming, SkiErg)
 - Adjust durations for your available training time
 - Replace templates with sessions that work for you
 - Map to a different zone model if not using Intervals.icu
 
-As long as your sessions follow the template format (name, zones, structure, duration, coaching notes, selection criteria), the AI coaching system can reference them.
+Before the AI uses a human-added or revised template, it must be part of the library being used and include the YAML metadata and prose fields described in `WORKOUT_REFERENCE.md` §1. Prescriptions must still follow Section 11 B §8, including its constraints and audit requirements.
 
 ## From Template to Intervals.icu Workout
 
@@ -51,4 +51,4 @@ The templates here describe sessions conceptually (zones, structure, duration), 
 
 ## Version
 
-Current: **0.5.0**
+Current: **0.7.1**

@@ -26,7 +26,7 @@ An open protocol for deterministic, auditable AI-powered endurance coaching. Bui
 | File | Description |
 |------|-------------|
 | [SECTION_11.md](SECTION_11.md) | Complete protocol: AI Coach Guidance (11 A), Training Plan Protocol (11 B), Validation Protocol (11 C) |
-| [examples/workout-library/](examples/workout-library/) | Workout Reference Library: 26 session templates that Section 11 B §8 requires AI systems to select from |
+| [examples/workout-library/](examples/workout-library/) | Workout Reference Library: 26 evidence-based session structures, adapted to your data instead of improvised (Section 11 B §8) |
 | [examples/agentic/](examples/agentic/) | Agentic tools (calendar writes, raw activity stream reads, external API reference) for runtimes with verified access, configured credentials and a tested execution path |
 | [examples/agentic/fit-file-and-merger/](examples/agentic/fit-file-and-merger/) | FIT File & Merger: a reusable reference architecture for multi-source FIT fusion, device identity, verification, recovery and platform-specific duplicate cleanup. Documentation, no runnable scripts in this phase |
 | [examples/json-local-sync/](examples/json-local-sync/) | Local automated sync for runtimes that can reach your filesystem (no GitHub needed) |

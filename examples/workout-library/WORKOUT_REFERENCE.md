@@ -1,25 +1,25 @@
 # Section 11: Workout Reference Library
 
-**Version:** 0.7  
+**Version:** 0.7.1  
 **Companion to:** Section 11 B: AI Training Plan Protocol  
-**Last updated:** 2026-08-20
+**Last updated:** 2026-10-13
 
 ---
 
 ## Purpose & Scope
 
-This document is a **library of session templates for inspiration**, not a rigid prescription list. It provides structured workout formats that an AI coaching system can reference when designing sessions under Section 11 B.
+This document is the **normative source of evidence-based session structures** for AI coaching under Section 11 B §8. The AI must base structured sessions on its templates and adapt the prescribed details to the athlete's data and current state.
 
-**Templates are starting points. The AI must adapt structure, duration, intensity, and recovery to the individual athlete's current fitness, goals, phase, and constraints.** Copy-pasting a template without customization is the wrong approach. A good coach never prescribes the same workout the same way to every athlete.
+**The AI must adapt interval count, duration, intensity, and recovery to the individual athlete's current fitness, goals, phase, and constraints, within the template's permitted variants and execution constraints.** Copy-pasting a template without considering the athlete is the wrong approach. A good coach never prescribes the same workout the same way to every athlete.
 
-**Section 11 decides *when* and *what type*. This document provides *how*, as a starting point.**
+**Section 11 decides *when* and *what type*. This document provides *how*: session structures and permitted variants adapted to the athlete.**
 
 ### Design Principles
 
 - **Section 11 A readiness logic always has final say.** No template in this document overrides go/modify/skip decisions.
 - **Zone references use the athlete's Intervals.icu zone configuration.** Power targets are expressed as zone ranges, not hardcoded %FTP values, because athlete zones are individually calibrated and update with fitness changes.
-- **This is a living catalog.** Athletes and coaches should adapt, extend, or replace templates to match individual needs, equipment, and sport demands.
-- **Templates are inspiration, not prescription.** The AI should use these as structural references, then adjust interval count, duration, rest periods, and intensity to match the athlete's current state. A Sweet Spot 3x15 might become 3x12 for a fatigued athlete or 3x18 for a fresh one approaching peak.
+- **This is a living catalog.** Athletes and human coaches may adapt, extend, or replace templates in the library to match individual needs, equipment, and sport demands. Extending or replacing templates is a human library-maintenance decision; the AI must flag gaps rather than make those changes on its own.
+- **Adapt the prescription within the template.** The AI should adjust interval count, duration, rest periods, and intensity to match the athlete's current state while preserving the template's target adaptation and execution constraints. A Sweet Spot 3x15 might become 3x12 for a fatigued athlete or 3x18 for a fresh one approaching peak, only when the applicable readiness and progression rules permit it (§5.2).
 - **Optional/advanced templates are clearly marked.** Templates flagged as *(Optional)* or *(Advanced)* are not necessary for every athlete and should not be prescribed by default. The AI should only select these when the athlete's goals, phase, and readiness specifically warrant them.
 
 ---
@@ -685,7 +685,7 @@ When the athlete has less time than the prescribed session requires, apply these
 
 ### 6.1 How to Modify This Document
 
-This document is designed to be forked and edited. Athletes and coaches should:
+Athletes and human coaches can fork and edit this document to maintain their library. The options below do not authorize the AI to extend or replace templates on its own. New or revised templates must include the metadata and format described in §1. Athletes and human coaches can:
 
 - **Add sport-specific sessions:** Running intervals, swimming sets, SkiErg formats, etc. Use the same template structure (name, zones, structure, duration, coaching notes, selection criteria).
 - **Adjust durations and volumes:** The templates assume a trained endurance athlete with ~12–16 h/week available. Scale durations proportionally for lower-volume athletes.
@@ -719,6 +719,7 @@ The catalog above is cycling-focused. For multi-sport or alternative-sport athle
 | 0.5.0 | 2026-02-25 | Added machine-readable YAML metadata to all 26 templates (id, domain, is_hard_session, work_minutes, est_total_minutes). Updated catalog header with metadata schema description. |
 | 0.6.0 | 2026-02-28 | Hard-session classification split into the five-rung power ladder and two-rung HR fallback, with HR-classified hard days identified by `intensity_basis: "hr"`. (History row backfilled 2026-08-20; header had already read 0.6.) |
 | 0.7.0 | 2026-08-20 | §5.2 precedence clarified: a template's own progression note governs which progression variable changes and in what order; failing that the applicable Section 11 A progression pathway (§*1 for endurance, or the VO₂max or Sweet Spot rules in §*2); the generic duration/recovery/intensity ordering applies only when neither defines an order. Section 11 A gates unaffected. |
+| 0.7.1 | 2026-10-13 | Library role aligned with Section 11 B §8: templates are the binding session structures, adapted to the athlete within each template's permitted variants and constraints, not optional inspiration. Extending or replacing templates is a human library-maintenance decision; the AI flags gaps. The 3x18 progression example now defers to readiness and progression rules. No template content, IDs or metadata changed. |
 
 ---
 
