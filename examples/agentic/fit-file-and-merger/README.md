@@ -58,7 +58,7 @@ These are stated as limits, not as work in progress.
 Cleanup isolates failures by item and platform, checkpoints verified progress, and treats an
 exact Garmin source-delete 404 as already absent. Other failures stay visible to the scheduler
 as an unhealthy exit during persisted backoff. Expected propagation waits, the trigger-first
-Strava late-duplicate watch and Strava rate waits remain healthy pending states. Two Strava
+Strava and Companion watches, and Strava rate waits remain healthy pending states. Two Strava
 outcomes differ: on a file-first item, a listing with no candidate or with one copy that does
 not match the merge is a deterministic block that waits for review, even when the cause is
 ordinary sync lag; on a trigger-first item, an ambiguous listing, or one without exactly one
@@ -80,8 +80,9 @@ checkpoint failure, backoff, policy changes, grandfathering, dry runs and identi
 bounded live observation saw completed upload-target, analysis-platform and Companion steps,
 trigger-first items held healthy-pending by the Strava late-duplicate watch, no blocked or
 error step, and unhealthy exits while earlier failures were unresolved. None of this exercises
-every branch; the file-first Strava path has no live observation. Companion deletion remains a
-separate explicit switch. See the operating boundaries in [RUNBOOK.md](RUNBOOK.md).
+every branch; the file-first Strava path has no live observation. The Companion late-import
+watch was added afterwards and is covered by offline regressions; a real late import has not
+yet been observed live. Companion deletion remains a separate explicit switch. See the operating boundaries in [RUNBOOK.md](RUNBOOK.md).
 
 ## Current gaps
 
@@ -96,6 +97,7 @@ listed so nobody reads the sections above as stronger guarantees than they are.
 | File-first Garmin deletion does not wait for downstream verification | The trigger-first mode waits; the file-first mode does not. |
 | Deletion is flag-gated, not approval-gated | Three of the four deletion flags default on in the runner. The dry run is an operator habit, not an enforced per-item gate. |
 | File-first Strava cleanup has no late-duplicate watch | A single Strava candidate that matches the merge completes the step, so a source copy that syncs later is not removed. |
+| Companion late-import coverage ends at completion | An import arriving after the successful final watch check is not revisited by this watch. |
 | File-first Strava lag blocks rather than waits | No candidate, or one non-matching copy, blocks the step until an operator reviews and clears it. |
 | Trigger-first Strava ambiguity does not alert | An ambiguous listing, or one without exactly one native activity, deletes nothing but keeps the item pending with a healthy exit indefinitely. |
 

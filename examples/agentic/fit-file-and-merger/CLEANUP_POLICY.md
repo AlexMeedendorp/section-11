@@ -42,7 +42,7 @@ Then, per platform:
 | Upload target (Garmin), trigger-first item | Waits for the merged activity to be verified on the analysis platform, when analysis-platform cleanup is enabled. If that cleanup is disabled, the wait does not apply. | Each successful deletion or accepted exact-target 404 is checkpointed. Non-delete 404s and non-404 errors cannot mark a source deleted. No independent server readback. |
 | Upload target (Garmin), file-first item | **No downstream wait.** The source is deleted once the merged activity has passed step 2, whether or not it has appeared on the analysis platform. | None, as above. |
 | Strava | Waits until analysis-platform cleanup has completed, when that cleanup is enabled. Trigger-first: requires exactly one positively identified native activity and at most one of each import, with every candidate classified; the protected activity is re-read and re-confirmed as native immediately before any sibling is deleted. File-first: the candidate closest to the merge is kept only if its distance matches the merge within a small tolerance, and exactly one other candidate is deleted. | Yes. The cached read is invalidated and the API is queried again; an activity that still exists is an error. |
-| Zwift Companion | Waits for upload-target and analysis-platform cleanup to complete, each when its cleanup is enabled. Requires three distinct recorded activity ids, exactly one protected native card, at most one of each import, and a consistent time label across them. Only cards exposing an imported-activity delete control are eligible. | Yes. The feed is reloaded after each deletion and again at the end; success requires the native card present and both imports absent. |
+| Zwift Companion | Waits for upload-target and analysis-platform cleanup to complete, each when its cleanup is enabled. Requires three distinct recorded activity ids, exactly one protected native card, at most one of each import, and a consistent time label across them. Only cards exposing an imported-activity delete control are eligible. | Yes. The feed is reloaded after each deletion and again at the end; a successful pass requires the native card present and both imports absent. Step completion also requires the late-import watch described below. |
 
 **Strava late-duplicate watch (trigger-first only).** When the protected native activity is
 present but one or both imports are not, the imports that are present are deleted and the
@@ -51,6 +51,21 @@ is rechecked 30 minutes and 2 hours into the watch and at its deadline, not on e
 run. An import that appears during the watch is deleted normally. If none appears by the
 deadline, the step completes without it. File-first items have no watch: a single candidate
 that matches the merge completes the step immediately.
+
+**Companion late-import watch (trigger-first only).** The first successful, non-preview pass
+for an unfinished Companion step starts a watch rather than completing the step. Follow-up
+checks are due 30 minutes, 2 hours and 24 hours after that success and run on ordinary
+scheduler passes when due. An imported copy that appears later is deleted under the same
+rules; nothing about matching, protection or deletion is relaxed. A clean pass before the
+last checkpoint leaves the Companion step in a healthy pending state. The step completes
+only after a successful, verified pass at or after the 24-hour checkpoint. A failed or
+ambiguous pass keeps the existing retry and block behaviour; elapsed time alone never
+completes it. Due times survive restarts. Missed checkpoints do not cause several immediate
+checks or a fresh watch: a successful current check schedules the next future checkpoint,
+or completes the step if the final checkpoint has passed or is due.
+
+Already completed Companion steps are not reopened by this watch, even when another
+platform remains pending. Existing item holds remain in place.
 
 ## Fail-closed conditions
 
@@ -134,6 +149,7 @@ policy is not read as a description of what is enforced.
 | Merged-activity selection does not report ambiguity | Several qualifying candidates resolve silently to the closest one. |
 | Obsolete earlier merged activities are neither tracked nor removed | They are not excluded from candidate selection either, since only recorded source ids are excluded. Worse, an item that already holds a verified merged id skips re-verification, so a stale id keeps being used. |
 | File-first Strava has no late-duplicate watch | A single candidate matching the merge completes the step, so a source copy that syncs later remains. |
+| Companion late-import coverage ends at completion | An import arriving after the successful final watch check is not revisited by this watch. |
 | Trigger-first Strava ambiguity does not alert | Nothing is deleted, but the scheduler sees a healthy exit indefinitely. Items that stay pending past the watch window need inspection. |
 | Completion is relative to an explicit policy | Excluded destinations may still contain duplicates. Exclusion never sets deletion flags; an existing explicit policy can reopen unfinished work. Completed legacy records without a saved policy remain grandfathered by a persisted policy-origin marker until a reviewed migration replaces the policy and clears that marker. |
 
@@ -182,8 +198,8 @@ The verified merged id and cached verification FIT are reused. This avoids repea
 but does not detect a subsequently removed or replaced merge. Replacement reconciliation
 remains manual. Do not treat a saved id as fresh live verification.
 
-Expected propagation waits, the trigger-first Strava late-duplicate watch and Strava rate waits
-remain healthy pending states. Transport failures, Garmin and Intervals rate limits and
+Expected propagation waits, the trigger-first Strava and Companion watches, and Strava rate
+waits remain healthy pending states. Transport failures, Garmin and Intervals rate limits and
 deterministic blocks remain unhealthy during backoff. Two Strava cases are easy to misread:
 trigger-first ambiguity is a healthy pending state with no time limit, and file-first sync lag
 can be a deterministic block (see [Fail-closed conditions](#fail-closed-conditions)). Unknown

@@ -1,10 +1,11 @@
 # Architecture
 
 How a multi-source activity is discovered, merged, uploaded and verified. Everything here
-describes behaviour established by the working implementation. The cleanup behaviour
-summarised in the README's [cleanup reliability](README.md#cleanup-reliability) section has
-offline regression coverage and a bounded live observation. Cases that are not
-established are named as such in [Untested and unsupported](#untested-and-unsupported).
+describes the working implementation, with evidence limits noted where relevant. The README's
+[cleanup reliability](README.md#cleanup-reliability) section distinguishes offline regression
+coverage from bounded live observation. The Companion late-import watch has offline coverage;
+a real late-import cycle has not yet been observed live. Other untested or unsupported cases
+are listed in [Untested and unsupported](#untested-and-unsupported).
 
 ## Components
 
@@ -275,8 +276,9 @@ failures, including Garmin and Intervals HTTP 429, exit unhealthy while backed o
 at 30 minutes and doubling to a six-hour cap. Longer existing Strava/Companion deadlines and
 exposed Retry-After values are retained. Garmin and Intervals HTTP 401/403 blocks and 429
 deadlines are shared across items; deterministic failures are blocked until reviewed. Strava
-keeps a global rate limit, which is a healthy wait, and a late-duplicate watch for
-trigger-first items; both are described in [CLEANUP_POLICY.md](CLEANUP_POLICY.md).
+keeps a global rate limit, which is a healthy wait. Strava and Companion each keep a
+late-duplicate watch for trigger-first items. All three are described in
+[CLEANUP_POLICY.md](CLEANUP_POLICY.md).
 
 Garmin source-delete 404 handling is confined to the exact deletion call. Structured status
 is preferred; contradictory status or endpoint metadata is rejected. A narrowly matched
