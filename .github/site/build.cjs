@@ -203,6 +203,8 @@ function build(root, output) {
   files.set('assets/site.css', ordinary(root, '.github/site/site.css'));
   files.set('LICENSE.txt', ordinary(root, 'LICENSE'));
   files.set('sitemap.xml', sitemap(['index.html', ...documents.map(d => d.route)]));
+  // Allow-all plus the sitemap address. No per-bot rules or content signals.
+  files.set('robots.txt', `User-agent: *\nAllow: /\n\nSitemap: ${canonical('sitemap.xml')}\n`);
   // All rendering and link checks finish before any output is written.
   for (const [name, data] of files) {
     const target = path.join(output, name);

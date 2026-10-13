@@ -2,8 +2,10 @@
 
 The site renders a small, explicit set of public repository Markdown with
 markdown-it. Edit the canonical source documents to update setup instructions.
-`pages.json` owns the source/route map; `build.cjs` owns the short landing copy and
-HTML shell; `site.css` owns the design. No client JavaScript or remote assets.
+`pages.json` owns the source/route map; `build.cjs` owns the short landing copy,
+HTML shell and search metadata; `site.css` owns the design. No client JavaScript or
+remote assets. The home page carries one Schema.org `application/ld+json` data
+block; it is structured data that browsers do not execute, not a script.
 
 ## Local build
 
@@ -22,8 +24,12 @@ Open `index.html` directly for a local preview; no server is required.
 
 ## Content boundary
 
-Only routes in `pages.json`, the authored landing page, `assets/site.css` and
-the repository license are written. No recursive source-directory copy occurs.
+Only routes in `pages.json`, the authored landing page, `assets/site.css`, the
+repository license as `LICENSE.txt`, the committed icon set and `site.webmanifest`
+from `icons/`, `sitemap.xml` and `robots.txt` are written. The sitemap lists the
+canonical page URLs only, with no dates or hints. `robots.txt` allows all crawlers
+and names the sitemap; it adds no per-bot rules or content signals. No recursive
+source-directory copy occurs.
 Missing selected Markdown, missing local link targets or missing linked headings
 fail the build before writing output. README's Quick Start is selected by heading,
 not line numbers. Missing or duplicate section titles fail rather than drifting.

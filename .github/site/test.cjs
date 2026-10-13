@@ -27,7 +27,7 @@ function fixture(t) {
 
 test('build emits only the explicit public inventory', t => {
   const output = path.join(scratch(t), 'public');
-  assert.deepEqual(build(root, output), ['LICENSE.txt', 'assets/site.css', 'index.html', 'sitemap.xml', ...ICONS, ...pages.map(p => p.route)].sort());
+  assert.deepEqual(build(root, output), ['LICENSE.txt', 'assets/site.css', 'index.html', 'robots.txt', 'sitemap.xml', ...ICONS, ...pages.map(p => p.route)].sort());
   const index = fs.readFileSync(path.join(output, 'index.html'), 'utf8');
   assert.match(index, /href="getting-started.html"/);
   assert.match(index, /Data first\.<br> Context alongside it\./);
@@ -258,7 +258,9 @@ test('search metadata, home structured data and sitemap change only the head and
   assert.equal(fs.readFileSync(path.join(output, 'sitemap.xml'), 'utf8'),
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${canonicals.map(url => `<url><loc>${url}</loc></url>\n`).join('')}</urlset>\n`);
   assert.deepEqual(canonicals, ['https://section11.net/', ...pages.map(p => `https://section11.net/${p.route}`)]);
-  assert.equal(fs.existsSync(path.join(output, 'robots.txt')), false);
+  // robots.txt: allow-all plus the sitemap address, nothing else.
+  assert.equal(fs.readFileSync(path.join(output, 'robots.txt'), 'utf8'),
+    'User-agent: *\nAllow: /\n\nSitemap: https://section11.net/sitemap.xml\n');
 });
 
 test('Quick Start is an exact source section, excluding adjacent sections', () => {
