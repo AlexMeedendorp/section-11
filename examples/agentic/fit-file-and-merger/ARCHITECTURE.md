@@ -271,6 +271,15 @@ items. An explicit policy can exclude a disabled platform without marking it del
 source modes reopen when an existing explicit policy requires unfinished work. With every
 deletion flag off, no work runs.
 
+Companion feed handling is local to each cleanup invocation. Every preparation waits for
+non-empty content stable across at least three consecutive polls and 12 seconds. Its
+fingerprint ignores order, coordinates and rolling time labels without relaxing identity
+matching. Each preparation has one immediate retry for recognised navigation, readiness or
+UI-dump failures, excluding login and identity ambiguity. A safe final feed with an import
+role not yet deleted permits one extra deletion pass; it does not enforce a per-role
+never-repeat guarantee. These local bounds are separate from the persisted late-import
+watch. Details and the repeat-role limitation are in [CLEANUP_POLICY.md](CLEANUP_POLICY.md).
+
 Expected propagation waits use a five-minute minimum and exit healthy. Transport or adapter
 failures, including Garmin and Intervals HTTP 429, exit unhealthy while backed off, starting
 at 30 minutes and doubling to a six-hour cap. Longer existing Strava/Companion deadlines and

@@ -44,6 +44,24 @@ Then, per platform:
 | Strava | Waits until analysis-platform cleanup has completed, when that cleanup is enabled. Trigger-first: requires exactly one positively identified native activity and at most one of each import, with every candidate classified; the protected activity is re-read and re-confirmed as native immediately before any sibling is deleted. File-first: the candidate closest to the merge is kept only if its distance matches the merge within a small tolerance, and exactly one other candidate is deleted. | Yes. The cached read is invalidated and the API is queried again; an activity that still exists is an error. |
 | Zwift Companion | Waits for upload-target and analysis-platform cleanup to complete, each when its cleanup is enabled. Requires three distinct recorded activity ids, exactly one protected native card, at most one of each import, and a consistent time label across them. Only cards exposing an imported-activity delete control are eligible. | Yes. The feed is reloaded after each deletion and again at the end; a successful pass requires the native card present and both imports absent. Step completion also requires the late-import watch described below. |
 
+**Companion feed readiness.** Every feed preparation requires a non-empty activity feed
+with unchanged content for at least three consecutive polls and at least 12 seconds.
+The content fingerprint ignores card order, screen coordinates and rolling relative-time
+labels; it retains source, title, distance, duration and whether an imported-activity delete
+control is present. Ignoring a time label for stability does not waive the matching rule
+that the non-empty time labels of the selected roles must agree.
+
+Each feed preparation allows one immediate retry for a recognised navigation, feed-readiness
+or UI-dump failure. This allowance applies again to later feed preparations in the same
+invocation; it is not one retry for the entire cleanup. Login failures and identity ambiguity
+do not qualify, and the allowance does not wrap a delete attempt or its confirmation.
+An empty or unsettled feed is never evidence that imports are absent.
+
+After the normal deletion pass, a safe final feed containing a head-unit or trainer import
+role not yet deleted in that invocation permits one extra deletion pass. Safety and
+post-delete checks still apply. This is separate from the scheduled late-import watch and
+is not a guarantee against repeating a role; see [Current gaps](#current-gaps).
+
 **Strava late-duplicate watch (trigger-first only).** When the protected native activity is
 present but one or both imports are not, the imports that are present are deleted and the
 item stays pending, with a healthy exit, for up to 24 hours from that first partial match. It
@@ -84,7 +102,7 @@ the source in place. The scope column matters: these are not all global.
 | Authentication expired | Per service | Garmin/Intervals 401/403 persist a service block for operator repair. Strava/Companion retain their minimum waits; failures remain unhealthy during recorded backoff. |
 | Rate limited | Per service | Preserve Strava global limits; share Garmin/Intervals 429 backoff across items and honor exposed Retry-After. Do not poll each scheduler minute. |
 | A delete attempt cannot be confirmed | Strava, Companion | Stop and record the failure. The item stays pending. |
-| An activity feed or listing did not load | Companion | Treated as ambiguity. An empty view is never evidence that duplicates are gone. |
+| An activity feed or listing did not load or settle | Companion | One immediate retry is allowed for each feed preparation's recognised readiness failure. If it still fails, stop that attempt and retain the normal unhealthy retry/backoff state. An empty view never proves that imports are gone. |
 | An item is explicitly held | All platforms | Skipped entirely, regardless of every other condition. |
 
 Two of these deserve emphasis, because they are the ones that look like success:
@@ -149,6 +167,7 @@ policy is not read as a description of what is enforced.
 | Merged-activity selection does not report ambiguity | Several qualifying candidates resolve silently to the closest one. |
 | Obsolete earlier merged activities are neither tracked nor removed | They are not excluded from candidate selection either, since only recorded source ids are excluded. Worse, an item that already holds a verified merged id skips re-verification, so a stale id keeps being used. |
 | File-first Strava has no late-duplicate watch | A single candidate matching the merge completes the step, so a source copy that syncs later remains. |
+| A Companion extra pass can target a previously cleared import again | This is intended behaviour, not a defect: a reappeared import is still a duplicate. A previously cleared import reappearing alone cannot open the extra pass. If it reappears alongside an import role not yet deleted, the extra pass can target it again. Existing identity and post-delete checks still apply, and the protected native activity is never a target. |
 | Companion late-import coverage ends at completion | An import arriving after the successful final watch check is not revisited by this watch. |
 | Trigger-first Strava ambiguity does not alert | Nothing is deleted, but the scheduler sees a healthy exit indefinitely. Items that stay pending past the watch window need inspection. |
 | Completion is relative to an explicit policy | Excluded destinations may still contain duplicates. Exclusion never sets deletion flags; an existing explicit policy can reopen unfinished work. Completed legacy records without a saved policy remain grandfathered by a persisted policy-origin marker until a reviewed migration replaces the policy and clears that marker. |
