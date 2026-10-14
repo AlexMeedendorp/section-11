@@ -153,15 +153,15 @@ Gemini CLI has full filesystem access to the working directory.
 
 ### Hermes Agent
 
-Hermes reads the filesystem of its runtime host, which may be this machine or a remote box you control, not necessarily the one you are reading this on. It uses the agentic contract named under [Project instructions](#project-instructions) below. Its Section 11 workflow has not been validated end to end on this runtime.
+Hermes reads the filesystem of its runtime host, which may be this machine or a remote box you control, not necessarily the one you are reading this on. It uses the agentic contract named under [Project instructions](#project-instructions) below.
 
-Point it at your data with a pointer file rather than copying files onto the host. Its working directory is not guaranteed to be where you think it is; set paths explicitly and check the resolved working directory before relying on a relative path, particularly when driving Hermes through a messaging gateway.
+Point it at your data with a pointer file rather than copying files onto the host. Its working directory is not guaranteed to be where you think it is; set paths explicitly and check the resolved working directory before relying on a relative path.
 
 ### Grok Bot (experimental)
 
 Grok Bot's filesystem is provider-hosted, so it cannot read this machine. It still has the agentic capability class and uses the agentic contract named under [Project instructions](#project-instructions) below; the data reaches it by connector or authenticated repository rather than from your disk. It is **experimental**: not validated end to end against the Section 11 pipeline, and capability class is not a support promise. Verify any write against the specific target before relying on it.
 
-All Bots on your account share one cloud computer, cloud storage is required, and Legacy Privacy Mode is unavailable. Check your xAI and Cursor privacy settings before pointing it at a dossier carrying medication or health context.
+All Bots on your account share one cloud computer: files, browser sessions and command-line credentials are not isolated. Deleting a Bot does not clear shared files or browser sessions. Cloud storage is required and Legacy Privacy Mode is unavailable. Check your xAI and Cursor privacy settings before pointing it at a dossier carrying medication or health context.
 
 ### Open-weight options
 

@@ -110,9 +110,11 @@ For runtimes that can execute code, access the filesystem, and run shell command
 
 > **Recommended where the runtime reaches your filesystem: [Local sync](examples/json-local-sync/SETUP.md).** sync.py runs on a 60-second timer, the agent reads files directly. Cheapest, fastest, most reliable. No GitHub needed.
 
-> **Alternative: GitHub sync.** A private repo with GitHub Actions gives you multi-device access and backup. Follow the per-platform instructions below.
+> **Alternative: [GitHub sync](examples/json-auto-sync/SETUP.md).** A private repo with GitHub Actions gives you multi-device access and backup. Follow the per-platform instructions below.
 
 Your agent needs `SECTION_11.md` (the protocol), plus your `DOSSIER.md` if you use one. If you cloned the repos locally, the agent reads them from the filesystem. If using GitHub sync, the agent reads them from the repo (no manual upload needed).
+
+To point each agent at your local data folder, see [Connect Your Agent](examples/json-local-sync/SETUP.md#connect-your-agent) in the local sync guide.
 
 ### OpenClaw (formerly ClawdBot/MoltBot)
 
@@ -151,13 +153,13 @@ All Bots on your account share one cloud computer: files, browser sessions and c
 
 ### Hermes Agent
 
-Reads the filesystem of its runtime host, not your machine. Its Section 11 workflow has not been validated end to end on this runtime.
+Reads the filesystem of its runtime host, not your machine.
 
 Point it at your data with a pointer file rather than copying files onto the host. Its working directory is not guaranteed to be where you think it is. Set paths explicitly and check the resolved working directory before relying on a relative path.
 
 ### OpenCode
 
-An open-source coding agent for the terminal, IDE and desktop. Its Section 11 workflow has not been validated end to end on this runtime.
+An open-source coding agent for the terminal, IDE and desktop.
 
 **Control interfaces.** T3 Code provides an interface for supported agents such as Claude Code, ChatGPT Codex and OpenCode. Section 11 access depends on the underlying agent's configured filesystem and tool permissions; T3 Code is not a separate coaching runtime.
 
