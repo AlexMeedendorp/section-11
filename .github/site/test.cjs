@@ -104,8 +104,8 @@ test('OpenCode leaves Quick Start; its full entry and T3 Code stay in Agentic Se
   const titles = parse(readme).headings.filter(h => h.level === 3).map(h => h.text);
   assert.deepEqual(titles.slice(titles.indexOf('Hermes Agent'), titles.indexOf('Agentic Tools') + 1), ['Hermes Agent', 'OpenCode', 'Agentic Tools']);
   const entry = readme.slice(readme.indexOf('\n### OpenCode\n'), readme.indexOf('\n### Agentic Tools\n'));
-  assert.equal(entry, '\n### OpenCode\n\nAn open-source coding agent for the terminal, IDE and desktop. Its Section 11 workflow has not been validated end to end on this runtime.\n\n**Control interfaces.** T3 Code provides an interface for supported agents such as Claude Code, ChatGPT Codex and OpenCode. Section 11 access depends on the underlying agent\'s configured filesystem and tool permissions; T3 Code is not a separate coaching runtime.\n');
-  assert.match(entry, /has not been validated end to end on this runtime\.\n\n\*\*Control interfaces\.\*\* T3 Code provides an interface for supported agents[^\n]*T3 Code is not a separate coaching runtime\.\n$/);
+  assert.equal(entry, '\n### OpenCode\n\nAn open-source coding agent for the terminal, IDE and desktop.\n\n**Control interfaces.** T3 Code provides an interface for supported agents such as Claude Code, ChatGPT Codex and OpenCode. Section 11 access depends on the underlying agent\'s configured filesystem and tool permissions; T3 Code is not a separate coaching runtime.\n');
+  assert.match(entry, /An open-source coding agent for the terminal, IDE and desktop\.\n\n\*\*Control interfaces\.\*\* T3 Code provides an interface for supported agents[^\n]*T3 Code is not a separate coaching runtime\.\n$/);
   assert.equal(readme.split('T3 Code').length, 3);
   assert.ok(start.selected.includes('\nChoose your path:\n\n- **[Agentic Platforms](#agentic-setup)**: OpenClaw, Claude Code, ChatGPT Codex, Grok Bot, and Hermes Agent, etc.\n- **[Web Chat Platforms](#web-chat-setup)**: ChatGPT, Claude, Gemini, Grok, Mistral Vibe, etc.\n\n### 4. Make Files Available to Your AI\n'));
   assert.doesNotMatch(start.selected, /OpenCode/);
