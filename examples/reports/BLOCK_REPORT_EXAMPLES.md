@@ -366,7 +366,7 @@ Sustainability Ceilings:
 
 DFA a1 Profile:
   Sessions in window: 7 sufficient (easy_guard: 7 crossings / 7 eligible; LT1: 5 / 5; LT2: 1 / 1)
-  Average DFA a1: 1.18 (drift mean: -0.08)
+  Average DFA a1: 1.18 (eligible drift mean: -0.08, 5 sessions)
 
   Easy-state guard (α1 1.0), descriptive / compliance only, NOT a calibration delta:
     145 bpm (from 7 sessions) / outdoor 220 W (from 5 sessions) / indoor 208 W (from 2 sessions)
@@ -539,7 +539,7 @@ Sustainability Ceilings:
 
 DFA a1 Profile:
   Sessions in window: 7 sufficient (easy_guard: 6 crossings / 6 eligible; LT1: 5 / 5; LT2: 7 / 7)
-  Average DFA a1: 0.79 (drift mean: -0.12)
+  Average DFA a1: 0.79 (eligible drift mean: -0.12, 3 sessions)
 
   Easy-state guard (α1 1.0), descriptive / compliance only, NOT a calibration delta:
     148 bpm (from 6 sessions) / outdoor 232 W (from 4 sessions) / indoor 224 W (from 2 sessions)

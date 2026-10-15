@@ -81,7 +81,8 @@ DFA a1 Profile: evaluate these branches IN ORDER and take the first that matches
 
   4. OTHERWISE → omit. All three crossing counts zero is expected no-dwell riding, not a hidden eligibility failure.
   Sessions in window: [N] sufficient (easy_guard: [G] crossings / [Ge] eligible; LT1: [X] / [Xe]; LT2: [Y] / [Ye]) [crossings = dwell-qualified marker-sessions; eligible = also usable as a threshold estimate. Estimates gate on the eligible count. Where they differ, cite the relevant *_reason rather than the raw crossing count]
-  Average DFA a1: [X.XX] (drift mean: [+/-X.XX])
+  Average DFA a1: [X.XX] (eligible drift mean: [+/-X.XX], [D] sessions)
+  [Use emitted drift_delta_mean and drift_sessions, not n_sessions or marker counts. The latest-seven-sufficient window is unchanged; only eligible contrasts contribute. If drift_sessions is 0 and the mean is null, render "drift unavailable: 0 eligible sessions"; never substitute zero. Missing/unsupported drift metadata means eligibility unknown. Numerical eligibility alone does not establish steady workload or physiological drift. Keep the diagnostic fallback's no-average/drift rule above.]
 
   Easy-state guard (α1 1.0), descriptive / compliance only, NOT a calibration delta:
     [XXX] bpm (from [N] sessions) / outdoor [XXX] W (from [N] sessions) / indoor [XXX] W (from [N] sessions) [render whenever easy_guard_estimate present, INDEPENDENT of threshold confidence; omit environment line if that n_sessions is 0]

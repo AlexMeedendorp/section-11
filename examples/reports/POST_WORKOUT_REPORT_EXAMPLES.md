@@ -304,19 +304,21 @@ recovering well heading into tomorrow's interval session. Braved the rain at 4°
 
 ## Example 6: Long Endurance Ride with DFA a1 Drift Flag
 
+Fictional schema-2 scenario: the full 4h12m recording has verified 1 Hz timing and passes endpoint coverage, sixth coverage and gap checks. `drift_quality.status` is `eligible`, reasons are empty and `interpretable` is true. The session structure confirms continuous easy/endurance work without hard blocks. Fuel and fluid intake were not recorded; "Carbs used" is estimated expenditure, not intake.
+
 ```
 Data (last_updated UTC: 2026-02-08T16:30:00)
 
-Long Z2 ride completed at planned duration but DFA a1 drifted negative across the second half: fueling/heat signal worth noting.
+Long Z2 ride finished 12 minutes beyond plan, with an eligible negative DFA contrast between the original first and last thirds; review fueling, heat and fatigue context.
 
-Outdoor context: rolling route (8 m/km), calm cool conditions; variability likely terrain-driven.
+Outdoor context: rolling route (8 m/km), calm cool conditions; steady effort maintained.
 
 Completed workout: Ride Long Endurance - Saturday
 Start time: 09:15:00
 Duration: 4h12m (planned 4h00m)
 Distance: 118.50 km
-Power: 168 W avg / 174 W NP
-IF: 0.72
+Power: 168 W avg / 171 W NP
+IF: 0.71
 Power zones: 18% Zone 1, 78% Zone 2, 4% Zone 3
 Grey Zone (Z3): 4%
 Quality (Z4+): 0%
@@ -325,10 +327,10 @@ HR: 132 avg / 154 max
 HR zones: 62% Zone 1, 36% Zone 2, 2% Zone 3
 Cadence: 87 avg
 Decoupling: 6.85%
-EF: 1.32
+EF: 1.30
 HRRc: 28 bpm
-Variability Index: 1.06 (variable)
-DFA a1: 0.94 avg, 38% easy/52% endurance/10% tempo/0% supra (drift -0.31, interpretable)
+Variability Index: 1.02 (good)
+DFA a1: 0.94 avg, 38% easy/52% endurance/10% tempo/0% supra (drift -0.31, eligible)
 Calories: 2480 kcal
 Carbs used: 412 g
 TSS: 218 (planned 210)
@@ -353,17 +355,14 @@ Hours: 13h05m
 TSS: 528
 
 Interpretation:
-Duration and external load on plan, but multiple internal signals point to a costly session.
-DFA a1 averaged 0.94, split across `tiz_easy` (38%) and `tiz_endurance` (52%). For a long
-endurance ride, time in the endurance band (0.75–1.0, working toward LT1) is acceptable in
-itself; it is not the flag. The flag is the drift: -0.31 across the session, and interpretable
-(no time above LT2 to distort it). DFA a1 falling toward LT1 as the ride wore on points to
-rising internal cost (fueling state, accumulated heat, or fatigue) rather than a steady
-aerobic effort, and crosses the threshold for fueling/heat/fatigue cross-reference per DFA a1
-Protocol §Session Interpretation. Decoupling 6.85% and HRRc dropping to 28 bpm reinforce the
-same picture. Carbs in (412g, ~98g/h) were on the lower bound for a 4h+ ride at this
-intensity; raise to 110–120g/h on the next long ride and see if DFA holds. Easy day tomorrow
-regardless. 🥵
+The ride exceeded planned duration by 12 minutes; the easy/endurance DFA split is consistent
+with the prescription. The eligible -0.31 contrast is below -0.2 on confirmed steady
+endurance cycling, so it warrants a possible physiological-drift flag and context review,
+not a diagnosis: missing hard efforts or selective loss can still bias an eligible contrast.
+Cool conditions do not support a heat explanation here, and fuel/fluid intake is unknown;
+412g is estimated carbohydrate use, so it cannot establish underfueling or justify a new
+intake target. Review intake and accumulated fatigue alongside decoupling and subjective
+response; DFA alone does not change readiness or tomorrow's plan.
 
 Tomorrow: Recovery 1h, Z1 only
 ```
@@ -371,6 +370,8 @@ Tomorrow: Recovery 1h, Z1 only
 ---
 
 ## Example 7: Sweet Spot Session with Consonant DFA Reading
+
+Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficient session data and passing timing/coverage/gap checks. The only drift reason is `short_session`; 3% supra does not trigger the >15% veto.
 
 ```
 Data (last_updated UTC: 2026-02-10T11:45:00)
@@ -394,7 +395,7 @@ Decoupling: 2.45%
 EF: 1.51
 HRRc: 32 bpm
 Variability Index: 1.10
-DFA a1: 0.78 avg, 18% easy/35% endurance/44% tempo/3% supra (drift +0.04, structural)
+DFA a1: 0.78 avg, 18% easy/35% endurance/44% tempo/3% supra (drift +0.04, descriptive_only: short_session, under 90 recorded minutes)
 Calories: 825 kcal
 Carbs used: 168 g
 TSS: 88 (planned 85)
@@ -421,9 +422,10 @@ TSS: 295
 Interpretation:
 Clean sweet spot session. Power on target across all four intervals, DFA a1 sat predominantly
 in the 0.5–0.75 tempo band (44%) where sweet spot work should land per the protocol
-threshold mapping; internal intensity matched prescription. Drift was slightly positive but
-flagged structural (work above LT2 present), so no autonomic drift signal. Decoupling 2.45%
-and stable HRRc round out a session that did exactly what it was meant to do.
+threshold mapping; internal intensity matched prescription. Drift +0.04 is descriptive only
+because the recording is under 90 minutes; the 3% supra share does not trigger the supra
+veto or establish that the contrast is structural. No physiological drift flag applies,
+and this interval session would also fail the separate steady easy/endurance context rule.
 
 Tomorrow: Endurance 2h, Z2 steady
 ```

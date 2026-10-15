@@ -234,11 +234,28 @@ and the symlink test are substituted, and special file types exist only as modes
 an in-memory zip, so no test creates a `.git` directory, a terminal, a symlink or a
 special file.
 
+## DFA drift producer
+
+`test_dfa_drift.py` exercises the actual rollup, summary, profile and fetch/cache
+paths with synthetic streams only. It covers original-index thirds and remainders,
+the unchanged whole-session gates and TIZ tie-breaking, separate retained and drift
+masks, missing artifacts, finite alpha1 normalization, continuous 1 Hz timing,
+endpoint and sixth coverage, scaled gap boundaries, deterministic failure reasons,
+consumer eligibility, latest-session selection and eligible trailing denominators.
+It also checks stream time retention, schema 2, hash-triggered 14-day backfill,
+activity flags and crossing preservation. HTTP calls are mocked under the shared
+network guard.
+
+The fixtures include long endpoint gaps, a lost synthetic climb response, interval
+work with low supra time, and value-dependent loss that passes the numerical
+screens despite bias. These are regression and limitation tests, not physiological
+validation or evidence that the thresholds generalize to all recordings.
+
 ## Not covered
 
-Everything else. No DFA computation, no report generation, and no `sync.py`
+Everything else. No report generation, and no `sync.py`
 surface outside per-endpoint fetch state, HTTP policy, the `history.json` refresh
-gate, the `--init` and `--update` distribution rules and the `workout_summary` renderer with its report-template field contract. `push.py` write paths are
+gate, the DFA producer paths above, the `--init` and `--update` distribution rules and the `workout_summary` renderer with its report-template field contract. `push.py` write paths are
 covered for their transport behaviour and outcome classification only, not for
 their validation rules or their calendar semantics. Treat this as focused regression guards, not as
 coverage of the repository.

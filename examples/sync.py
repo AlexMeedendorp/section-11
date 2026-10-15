@@ -4,6 +4,14 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.140 - DFA drift uses fixed recording thirds with timing, coverage and gap
+  checks. Schema 2 carries drift eligibility and coverage through summaries and
+  profiles; trailing drift uses eligible sessions only. Missing artifact readings
+  are drift gaps without changing session sufficiency. Non-finite alpha1 is excluded.
+  Computable drift below 90 recorded minutes is descriptive only (short_session).
+  The 5400 original-slot floor aligns with the decoupling durability duration
+  floor (moving_time >= 5400); DFA still uses original 1 Hz slots, not moving time.
+
 Version 3.139 - Activity fields keep legitimate zero values.
   recent_activities[] built decoupling, avg_temp and wind_speed with an "or"
   fallback chain, so a real 0 (0.0 % decoupling, 0 °C, calm air) was treated as
@@ -623,7 +631,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.139"
+    VERSION = "3.140"
     INTERVALS_FILE = "intervals.json"
     ROUTES_FILE = "routes.json"
     SAVED_WORKOUTS_FILE = "saved_workouts.json"
@@ -773,7 +781,20 @@ class IntervalsSync:
     DFA_MIN_VALID_VALUE = 0.01          # exclude AlphaHRV sentinel zeros
     DFA_MIN_DURATION_SECS = 1200        # 20 min minimum valid data for sufficient=True
     DFA_SUFFICIENT_MIN_VALID_PCT = 70.0 # min valid_pct for sufficient=True (excludes noisy AlphaHRV sessions)
-    DFA_DRIFT_INTERPRETABLE_MAX_LT2_PCT = 15.0  # if >15% time above LT2, drift is structural noise
+    DFA_DRIFT_INTERPRETABLE_MAX_LT2_PCT = 15.0  # retained supra fraction veto, not proof of steady work
+    DFA_DRIFT_METHOD = "original_index_thirds_v1"
+    DFA_DRIFT_MIN_SESSION_SAMPLES = 90 * 60  # original 1 Hz slots, not retained samples
+    DFA_DRIFT_MIN_WINDOW_SAMPLES = 60
+    DFA_DRIFT_MIN_VALID_SAMPLES = 60
+    DFA_DRIFT_MIN_COVERAGE_PCT = 70
+    DFA_DRIFT_BINS = 6
+    DFA_DRIFT_MIN_BIN_COVERAGE_PCT = 50
+    DFA_DRIFT_MAX_GAP_PCT = 10
+    DFA_DRIFT_GAP_FLOOR_SAMPLES = 60
+    DFA_DRIFT_GAP_CEILING_SAMPLES = 300
+    # Gap limits are sample counts; only a continuous 1 Hz time stream makes them
+    # seconds. These are missing-data screens, not proof of steady workload or of
+    # unbiased alpha1. The supra fraction is a veto, not a stationarity test.
     # v3.122 crossing estimate-eligibility. a1 is a windowed estimator (alphaHRV: prior 200
     # beats, so its span varies with HR - Rogers & Gronwald, Front Physiol 2022;13:879071),
     # while watts is instantaneous. Averaging them is valid only while power is stationary
@@ -1630,12 +1651,171 @@ class IntervalsSync:
                 summary[k] = round(v, 2)
         return {"weather_summary": summary}
 
+    def _dfa_coverage_by_third(self, valid_mask, drift_mask, artifacts):
+        """Coverage in original coordinates. Retained and drift masks are distinct."""
+        n = len(valid_mask)
+        third = n // 3
+
+        def _max_gap(mask):
+            longest = run = 0
+            for valid in mask:
+                run = 0 if valid else run + 1
+                longest = max(longest, run)
+            return longest
+
+        def _span(start, end):
+            total = end - start
+            valid = sum(valid_mask[start:end])
+            drift_valid = sum(drift_mask[start:end])
+            return {
+                "start_sample_idx": start,
+                "end_sample_idx_exclusive": end,
+                "total_samples": total,
+                "valid_samples": valid,
+                "valid_pct": round(100.0 * valid / total, 3) if total else None,
+                "drift_valid_samples": drift_valid,
+                "drift_valid_pct": round(100.0 * drift_valid / total, 3) if total else None,
+            }
+
+        spans = []
+        for role, start, end in (("early", 0, third), ("middle", third, n - third),
+                                 ("late", n - third, n)):
+            span = _span(start, end)
+            span.update({
+                "role": role,
+                "artifact_observed_samples": sum(a is not None for a in artifacts[start:end]),
+                "max_invalid_run_samples": _max_gap(valid_mask[start:end]),
+                "max_drift_gap_samples": _max_gap(drift_mask[start:end]),
+                "bins": None,
+                "min_bin_valid_pct": None,
+                "min_bin_drift_valid_pct": None,
+                "allowed_drift_gap_samples": None,
+            })
+            if role != "middle":
+                bins = []
+                if third >= self.DFA_DRIFT_BINS:
+                    bins = [
+                        _span(start + k * third // self.DFA_DRIFT_BINS,
+                              start + (k + 1) * third // self.DFA_DRIFT_BINS)
+                        for k in range(self.DFA_DRIFT_BINS)
+                    ]
+                span["bins"] = bins
+                span["min_bin_valid_pct"] = min((b["valid_pct"] for b in bins), default=None)
+                span["min_bin_drift_valid_pct"] = min(
+                    (b["drift_valid_pct"] for b in bins), default=None)
+                span["allowed_drift_gap_samples"] = min(
+                    self.DFA_DRIFT_GAP_CEILING_SAMPLES,
+                    max(self.DFA_DRIFT_GAP_FLOOR_SAMPLES,
+                        third * self.DFA_DRIFT_MAX_GAP_PCT // 100))
+            spans.append(span)
+        return spans
+
+    def _dfa_timebase_status(self, time_stream, n):
+        if not isinstance(time_stream, list) or len(time_stream) != n or not n:
+            return "unverified"
+        times = [self._finite_num(t) for t in time_stream]
+        if any(t is None for t in times):
+            return "unverified"
+        if any(t - times[0] != i for i, t in enumerate(times)):
+            return "nonuniform"
+        return "verified_1hz"
+
+    def _compute_dfa_drift(self, dfa_stream, drift_mask, time_stream, quality, supra_pct):
+        """Fixed recording-span contrast; eligibility does not prove steady effort."""
+        metadata = {
+            "method": self.DFA_DRIFT_METHOD,
+            "status": "unavailable",
+            "reasons": [],
+            "time_basis": "original_sample_index",
+            "timebase_status": self._dfa_timebase_status(time_stream, len(dfa_stream)),
+        }
+        reasons = metadata["reasons"]
+        if not quality["sufficient"]:
+            if quality["valid_secs"] < self.DFA_MIN_DURATION_SECS:
+                reasons.append("whole_session_duration")
+            if quality["valid_pct"] < self.DFA_SUFFICIENT_MIN_VALID_PCT:
+                reasons.append("whole_session_coverage")
+            return None, metadata
+
+        early, _, late = quality["coverage_by_third"]
+        if early["total_samples"] < self.DFA_DRIFT_MIN_WINDOW_SAMPLES:
+            reasons.append("window_too_short")
+        for span in (early, late):
+            if span["drift_valid_samples"] < self.DFA_DRIFT_MIN_VALID_SAMPLES:
+                reasons.append(span["role"] + "_too_few_samples")
+        if reasons:
+            return None, metadata
+
+        means = []
+        for span in (early, late):
+            values = [dfa_stream[i] for i in range(span["start_sample_idx"],
+                                                  span["end_sample_idx_exclusive"])
+                      if drift_mask[i]]
+            mean = self._finite_num(sum(values) / len(values))
+            if mean is None:
+                reasons.append("invalid_dfa")
+                return None, metadata
+            means.append(round(mean, 3))
+        delta = self._finite_num(round(means[1] - means[0], 3))
+        if delta is None:
+            reasons.append("invalid_dfa")
+            return None, metadata
+
+        if len(dfa_stream) < self.DFA_DRIFT_MIN_SESSION_SAMPLES:
+            reasons.append("short_session")
+        if metadata["timebase_status"] != "verified_1hz":
+            reasons.append("timebase_" + metadata["timebase_status"])
+        # Exact count inequalities, not rounded display percentages. Missing
+        # artifact readings are drift gaps only, including inside each sixth.
+        for span in (early, late):
+            if 100 * span["drift_valid_samples"] < self.DFA_DRIFT_MIN_COVERAGE_PCT * span["total_samples"]:
+                reasons.append(span["role"] + "_coverage")
+        for span in (early, late):
+            if any(100 * b["drift_valid_samples"] < self.DFA_DRIFT_MIN_BIN_COVERAGE_PCT * b["total_samples"]
+                   for b in span["bins"]):
+                reasons.append(span["role"] + "_distribution")
+        for span in (early, late):
+            if span["max_drift_gap_samples"] > span["allowed_drift_gap_samples"]:
+                reasons.append(span["role"] + "_gap")
+        if supra_pct > self.DFA_DRIFT_INTERPRETABLE_MAX_LT2_PCT:
+            reasons.append("supra_fraction")
+        metadata["status"] = "descriptive_only" if reasons else "eligible"
+        return {
+            "first_third_avg": means[0],
+            "last_third_avg": means[1],
+            "delta": delta,
+            "interpretable": not reasons,
+        }, metadata
+
+    def _dfa_drift_eligible(self, block):
+        """Fail closed for legacy, unsupported or contradictory cached metadata."""
+        quality = block.get("quality") or {}
+        drift = block.get("drift") or {}
+        metadata = block.get("drift_quality") or {}
+        return (
+            quality.get("sufficient") is True
+            and metadata.get("method") == self.DFA_DRIFT_METHOD
+            and metadata.get("status") == "eligible"
+            and metadata.get("reasons") == []
+            and metadata.get("time_basis") == "original_sample_index"
+            and metadata.get("timebase_status") == "verified_1hz"
+            and drift.get("interpretable") is True
+            and all(self._finite_num(drift.get(k)) is not None
+                    for k in ("first_third_avg", "last_third_avg", "delta"))
+        )
+
+    def _dfa_quality_summary(self, block):
+        quality = block.get("quality") or {}
+        return {key: quality.get(key) for key in (
+            "valid_secs", "total_secs", "valid_pct", "sufficient", "artifact_state",
+            "artifact_coverage_pct", "coverage_by_third")}
+
     def _compute_dfa_block(self, streams: Dict[str, List]) -> Optional[Dict]:
         """
         Compute per-session DFA a1 rollup from raw streams.
 
         Inputs: streams dict from _fetch_activity_streams, expected keys:
-          dfa_a1, artifacts, heartrate, watts (heartrate/watts optional but degrade output)
+          dfa_a1, artifacts, heartrate, watts, time (time proves continuous 1 Hz for drift)
 
         Returns the dfa block dict, or None if dfa_a1 stream is absent entirely
         (i.e. AlphaHRV did not record on this activity).
@@ -1646,7 +1826,7 @@ class IntervalsSync:
         ran but unusable" (block present, sufficient=False).
 
         Filtering rules (in order):
-          1. Drop seconds where dfa_a1 < DFA_MIN_VALID_VALUE (AlphaHRV sentinel zeros)
+          1. Drop non-finite alpha1 and values < DFA_MIN_VALID_VALUE (sentinel zeros)
           2. Drop seconds where artifacts > DFA_ARTIFACT_MAX_PCT (5%, Altini convention)
         Both filters applied jointly to dfa_a1, hr, watts so they stay aligned.
         """
@@ -1688,14 +1868,17 @@ class IntervalsSync:
         ]
         hr_stream = [self._finite_num(x) for x in hr_stream]
         watts_stream = [self._finite_num(x) for x in watts_stream]
+        # v3.140: NaN used to survive the minimum-value comparison and poison
+        # rollups. Normalise alpha1 independently of the new drift mask.
+        dfa_stream = [self._finite_num(x) for x in dfa_stream]
 
         # Apply filters
         # v3.113: valid_idx records each surviving sample's ORIGINAL stream index. The valid_*
         # arrays are compacted (dropped samples are skipped), so array-index adjacency != stream
         # adjacency. Crossing contiguity must be measured against valid_idx, not position.
         # NOTE (v3.122): stream index is a SAMPLE index, not an elapsed second - they coincide
-        # only at 1 Hz with no pauses. The *_secs locals and wire keys below are nominal 1 Hz
-        # sample counts; the local rename is deferred to the drift rewrite.
+        # only at 1 Hz with no pauses. Existing *_secs wire keys remain nominal
+        # sample counts for compatibility; locals explicitly name samples.
         valid_dfa, valid_hr, valid_watts, valid_idx = [], [], [], []
         artifact_sum = 0.0
         artifact_count = 0
@@ -1714,13 +1897,13 @@ class IntervalsSync:
             valid_watts.append(watts_stream[i])
             valid_idx.append(i)
 
-        valid_secs = len(valid_dfa)
-        total_secs = n
-        valid_pct = round(100.0 * valid_secs / total_secs, 1) if total_secs else 0.0
+        valid_samples = len(valid_dfa)
+        total_samples = n
+        valid_pct = round(100.0 * valid_samples / total_samples, 1) if total_samples else 0.0
         # v3.122: artifact_count is the OBSERVED (finite, non-negative) sample count, so it
         # doubles as coverage - a full-length stream containing nulls or NaN is partial, not
-        # complete. sufficient is deliberately NOT gated on artifact coverage; whole-session
-        # band and drift artifact verification remains unresolved and is deferred.
+        # complete. sufficient is deliberately NOT gated on artifact coverage.
+        # Drift additionally excludes unknown artifacts; TIZ retains the original mask.
         artifact_rate_avg = round(artifact_sum / artifact_count, 2) if artifact_count else None
         # Three decimals: at one decimal a near-complete stream (Jul 24: 10,802 of 10,806
         # observed = 99.962984%) serialises as 100.0 while artifact_state is partial, which
@@ -1734,21 +1917,29 @@ class IntervalsSync:
         else:
             artifact_state = "partial"
         sufficient = (
-            valid_secs >= self.DFA_MIN_DURATION_SECS
+            valid_samples >= self.DFA_MIN_DURATION_SECS
             and valid_pct >= self.DFA_SUFFICIENT_MIN_VALID_PCT
         )
 
         quality = {
-            "valid_secs": valid_secs,
-            "total_secs": total_secs,
+            "valid_secs": valid_samples,
+            "total_secs": total_samples,
             "valid_pct": valid_pct,
             "artifact_state": artifact_state,
             "artifact_coverage_pct": artifact_coverage_pct,
             "artifact_rate_avg": artifact_rate_avg,
             "sufficient": sufficient,
         }
+        valid_mask = [False] * n
+        for i in valid_idx:
+            valid_mask[i] = True
+        drift_mask = [valid_mask[i] and artifacts_stream[i] is not None for i in range(n)]
+        quality["coverage_by_third"] = self._dfa_coverage_by_third(
+            valid_mask, drift_mask, artifacts_stream)
 
         if not sufficient:
+            _, drift_quality = self._compute_dfa_drift(
+                dfa_stream, drift_mask, streams.get("time"), quality, None)
             # Emit minimal block — AI sees AlphaHRV ran but data unusable
             return {
                 "avg": None,
@@ -1758,6 +1949,7 @@ class IntervalsSync:
                 "tiz_tempo": None,
                 "tiz_supra": None,
                 "drift": None,
+                "drift_quality": drift_quality,
                 "easy_guard_crossing": None,
                 "lt1_crossing": None,
                 "lt2_crossing": None,
@@ -1766,17 +1958,17 @@ class IntervalsSync:
 
         # Sufficient — full rollup
         sorted_dfa = sorted(valid_dfa)
-        avg = round(sum(valid_dfa) / valid_secs, 3)
-        p25 = round(sorted_dfa[valid_secs // 4], 3)
-        p50 = round(sorted_dfa[valid_secs // 2], 3)
-        p75 = round(sorted_dfa[(valid_secs * 3) // 4], 3)
+        avg = round(sum(valid_dfa) / valid_samples, 3)
+        p25 = round(sorted_dfa[valid_samples // 4], 3)
+        p50 = round(sorted_dfa[valid_samples // 2], 3)
+        p75 = round(sorted_dfa[(valid_samples * 3) // 4], 3)
 
         # 4-band TIZ with HR/power cross-references per band
         def _band_stats(predicate):
             secs = 0
             hr_sum, hr_n = 0, 0
             w_sum, w_n = 0, 0
-            for i in range(valid_secs):
+            for i in range(valid_samples):
                 if predicate(valid_dfa[i]):
                     secs += 1
                     if valid_hr[i] is not None:
@@ -1789,7 +1981,7 @@ class IntervalsSync:
                 return None
             return {
                 "secs": secs,
-                "pct": round(100.0 * secs / valid_secs, 1),
+                "pct": round(100.0 * secs / valid_samples, 1),
                 "avg_hr": round(hr_sum / hr_n) if hr_n else None,
                 "avg_watts": round(w_sum / w_n) if w_n else None,
             }
@@ -1804,26 +1996,9 @@ class IntervalsSync:
         tiz_tempo = _band_stats(lambda d: self.DFA_LT2 <= d < self.DFA_LT1)
         tiz_supra = _band_stats(lambda d: d < self.DFA_LT2)
 
-        # Drift: first-third vs last-third of valid data
-        third = valid_secs // 3
-        if third >= 60:  # need at least 60s per third for meaningful drift
-            first_third = valid_dfa[:third]
-            last_third = valid_dfa[-third:]
-            first_avg = round(sum(first_third) / len(first_third), 3)
-            last_avg = round(sum(last_third) / len(last_third), 3)
-            drift_delta = round(last_avg - first_avg, 3)
-            # Drift is interpretable only on steady-state work — if significant time
-            # was spent above LT2, the session has hard intervals and drift is structural
-            supra_pct = tiz_supra["pct"] if tiz_supra else 0.0
-            interpretable = supra_pct <= self.DFA_DRIFT_INTERPRETABLE_MAX_LT2_PCT
-            drift = {
-                "first_third_avg": first_avg,
-                "last_third_avg": last_avg,
-                "delta": drift_delta,
-                "interpretable": interpretable,
-            }
-        else:
-            drift = None
+        drift, drift_quality = self._compute_dfa_drift(
+            dfa_stream, drift_mask, streams.get("time"), quality,
+            tiz_supra["pct"] if tiz_supra else 0.0)
 
         # LT1 / LT2 crossing-band estimates (the actually-coachable threshold candidates)
         def _crossing_stats(center, band):
@@ -1839,7 +2014,7 @@ class IntervalsSync:
             cur = None
             last_orig = None
             total_in_band = 0
-            for i in range(valid_secs):
+            for i in range(valid_samples):
                 if not (lo <= valid_dfa[i] <= hi):
                     continue
                 total_in_band += 1
@@ -1929,6 +2104,7 @@ class IntervalsSync:
             "tiz_tempo": tiz_tempo,
             "tiz_supra": tiz_supra,
             "drift": drift,
+            "drift_quality": drift_quality,
             "easy_guard_crossing": easy_guard_crossing,
             "lt1_crossing": lt1_crossing,
             "lt2_crossing": lt2_crossing,
@@ -2001,7 +2177,7 @@ class IntervalsSync:
             return "non_stationary_power"
         return "ok"
 
-    def _build_dfa_summary(self, dfa_block: Dict) -> Dict:
+    def _build_dfa_summary(self, dfa_block: Dict, schema_version: Optional[int] = 2) -> Dict:
         """
         Build the compact dfa_summary attached to recent_activities[] in latest.json (v3.100).
 
@@ -2014,6 +2190,8 @@ class IntervalsSync:
         and is not summarisable. Per-band None (zero time in band) is handled here as
         0.0 pct / 0 secs.
         Optional fields are omitted (not nulled) when their underlying data is absent.
+        The default schema is for freshly computed blocks. Cached activity callers
+        pass the enclosing schema explicitly so unsupported versions fail closed.
         """
         def _band_pct(name):
             b = dfa_block.get(name)
@@ -2048,12 +2226,14 @@ class IntervalsSync:
             "tiz_pct": bands,
             "valid_pct": dfa_block["quality"]["valid_pct"],
             "sufficient": dfa_block["quality"]["sufficient"],
+            "drift_quality": dfa_block.get("drift_quality"),
+            "quality": self._dfa_quality_summary(dfa_block),
         }
 
         drift = dfa_block.get("drift")
         if drift is not None and drift.get("delta") is not None:
             summary["drift_delta"] = drift["delta"]
-            summary["drift_interpretable"] = drift.get("interpretable", False)
+            summary["drift_interpretable"] = schema_version == 2 and self._dfa_drift_eligible(dfa_block)
 
         # v3.122: the compact summary is the AI-facing surface, so it carries threshold
         # numbers only when the crossing is estimate-eligible. The detailed crossing block
@@ -2484,7 +2664,7 @@ class IntervalsSync:
 
             if due.get("streams"):
                 status, payload = self._fetch_activity_streams(
-                    act_id, ["dfa_a1", "artifacts", "heartrate", "watts"])
+                    act_id, ["dfa_a1", "artifacts", "heartrate", "watts", "time"])
                 retry_after = self._last_retry_after_secs
                 if status == "terminal_error":
                     state["streams"] = self._advance_endpoint_state(
@@ -2584,7 +2764,7 @@ class IntervalsSync:
         # Build intervals.json
         self._intervals_data = {
             "generated_at": now_iso,
-            "schema_version": 1,
+            "schema_version": 2,
             "version": self.VERSION,
             "script_hash": self.script_hash,
             "scan_hours": self.INTERVAL_SCAN_HOURS,
@@ -4726,6 +4906,22 @@ class IntervalsSync:
                 "display_formatting": "For durations and sleep, always display the '_formatted' fields (e.g., sleep_formatted, duration_formatted, total_training_formatted) instead of converting decimal '_hours' values. The formatted fields are pre-calculated from raw seconds and avoid rounding errors.",
                 "data_period": f"Last {days_back} days (including today)",
                 "extended_data_note": f"ACWR and baselines calculated from {days_for_acwr} days of data",
+                "dfa_drift_note": (
+                    "DFA drift uses original_index_thirds_v1 in intervals schema 2. Read drift_quality "
+                    "and quality.coverage_by_third in detailed blocks, summaries and latest_session. "
+                    "Only sufficient data with the recognized method, eligible status, empty reasons, "
+                    "verified_1hz timing and interpretable=true licenses an eligible endpoint contrast. "
+                    "A numeric delta may be descriptive only; null is unavailable, not zero. Name the "
+                    "supplied reasons, which need not imply structural intervals. TIZ percentages and "
+                    "dominant band describe retained samples; valid_secs/total_secs are sample counts. "
+                    "Unknown artifacts are gaps for drift only. Inspect temporal and artifact coverage "
+                    "before whole-session claims. The latest-seven-sufficient-session window's drift "
+                    "mean uses only eligible contrasts; drift_sessions is its denominator. Eligibility "
+                    "does not prove steady workload or eliminate bias from missing data. A physiological "
+                    "drift flag additionally requires steady easy/endurance cycling context and delta "
+                    "strictly below -0.2; without that context use descriptive wording. DFA remains "
+                    "Tier 2 and never changes readiness, phase progression or configured thresholds."
+                ),
                 "capability_metrics_note": "The 'capability' block in derived_metrics contains durability trend (aggregate decoupling 7d/28d), efficiency factor trend (aggregate EF 7d/28d), HRRc trend (heart rate recovery 7d/28d), TID comparison (7d vs 28d distribution drift), power curve delta (MMP shift at anchor durations across 28d windows — energy system adaptation direction), HR curve delta (max sustained HR shift at anchor durations — cardiac adaptation, cross-sport), sustainability profile (per-sport power/HR sustainability table for race estimation — 42d window, sport-filtered), and DFA a1 profile (per-session non-linear HRV index from AlphaHRV Connect IQ field — latest_session + trailing_by_sport with crossing-band easy_guard / LT1 / LT2 estimates). These measure HOW the athlete expresses fitness, not just load. Use these for coaching context alongside traditional load metrics. Durability and EF trend direction matters more than absolute values. HRRc is display only — higher = better parasympathetic recovery. Power curve delta rotation_index reveals whether gains are sprint-biased (positive) or endurance-biased (negative). HR curve delta is ambiguous — rising max sustained HR may indicate fitness or fatigue; cross-reference with resting HRV/HR and RPE. Sustainability profile provides race estimation lookup: actual MMP, Coggan predicted (cycling only), CP/W' model (cycling only), model_divergence_pct (actual vs CP — divergence IS the coaching signal). CP/W' is primary for durations ≤20min; Coggan duration factors are the established reference for ≥60min. Source flag (observed_outdoor/observed_indoor) matters for cycling race estimation — indoor MMP is typically 3-5% lower. DFA a1 profile: three self-describing markers (each estimate + crossing block carries marker_dfa_a1) — easy_guard (a1 1.0, a conservative easy-state guard, NOT a threshold), lt1 (a1 0.75, HRVT1 / aerobic threshold), lt2 (a1 0.5, HRVT2 / anaerobic threshold). The literature threshold markers (0.75 / 0.5) are cycling-validated only - non-cycling sports get rollups but validated=False. Every estimate requires a SUSTAINED contiguous crossing: each session's easy_guard_crossing / lt1_crossing / lt2_crossing carries a reason (ok / no_samples_in_band / insufficient_total_dwell / no_contiguous_dwell); scattered in-band time does not produce an estimate. v3.122: dwell is not sufficient. Each crossing also carries estimate_eligible / estimate_reason / n_eligible_segments - a1 reflects the prior 200 beats while watts is instantaneous, so a crossing recorded across varying power blends work and recovery into a number that is not usable as a threshold estimate. avg_hr / avg_watts stay populated on a dwell-qualified but estimate-ineligible crossing as descriptive evidence (a dwell-failed crossing has null averages as before); read estimate_eligible, never infer from absence. Compact lt1_/lt2_ summary fields and all trailing rollups consume eligible crossings only. HR is pooled across sessions; watts are split by environment for cycling (watts_outdoor, watts_indoor with per-environment n_sessions) - only lt2 is ever measured against a configured threshold: lt2_estimate.watts_outdoor against current_status.thresholds.sports.cycling.ftp, lt2_estimate.watts_indoor against current_status.thresholds.sports.cycling.ftp_indoor, and pooled lt2_estimate.hr against current_status.thresholds.sports.cycling.lthr. Non-cycling sports keep pooled watts. easy_guard_estimate, lt1_estimate and lt2_estimate are each gated INDEPENDENTLY - null when that marker has fewer than 3 estimate-ELIGIBLE marker-sessions (v3.122 - not merely dwell-qualified; see easy_guard_eligible_sessions / lt1_eligible_sessions / lt2_eligible_sessions alongside the *_crossing_sessions counts, and note that any gap between them means at least one dwell-qualified marker-session was estimate-rejected). An estimate is null whenever minimum estimate-eligible session depth is not met. If at least one eligible session exists, trailing_by_sport.{sport}.easy_guard_reason / lt1_reason / lt2_reason is insufficient_sessions. If none exists, the staged reason identifies the dominant blocker: dwell failure, incomplete coverage, excessive artifacts, non-positive mean power, or non-stationary power. Do NOT read a null estimate as 'the athlete did not sustain that marker' - read the reason. IMPORTANT: easy_guard is a conservative easy-state compliance guard, NOT an LT1/aerobic-threshold estimate - never compare it to the athlete's configured thresholds and never treat it as a calibration or staleness signal. Only lt2 (0.5) has a configured counterpart and can therefore produce a threshold-comparison coaching observation. lt1 (0.75) is descriptive only: no configured LT1 threshold exists to measure it against, so it never produces a delta, though it may motivate a formal retest. lt1 (0.75) populates only on rides that sustain aerobic-threshold intensity, so it is often null on easy/deload riding - that is expected, not a data gap. Sport-level confidence is a coarse orientation string derived from the maximum eligible-session depth across the THRESHOLD markers lt1 and lt2, with easy_guard excluded - it is orientation only and MUST NOT gate any LT2 comparison, which gates on lt2's own eligible-session depth; per-marker estimate presence + reason are authoritative. DFA a1 is a Tier-2 interpretive signal - does NOT enter the readiness P0-P3 ladder, does NOT affect the Phase Progression Check, and never auto-updates the configured thresholds; it surfaces a threshold comparison only from lt2, never from lt1 or easy_guard. Quality gate: refuse to interpret any DFA output when latest_session.sufficient=false. Each lt2 comparison is independently complete only with all three of a non-null estimate value, its own matching depth of at least 4, and a non-null configured comparator: lt2_estimate.hr with lt2_estimate.n_sessions and current_status.thresholds.sports.cycling.lthr; lt2_estimate.watts_outdoor with lt2_estimate.n_sessions_outdoor and .ftp; lt2_estimate.watts_indoor with lt2_estimate.n_sessions_indoor and .ftp_indoor. A missing cycling entry and a null comparator fail completeness identically. Depth in one environment never licenses a comparison in the other. Surface a delta only where a complete comparison differs by more than 5%; otherwise report the empirical estimate descriptively. Report no notable delta only when at least one lt2 comparison is complete and every complete difference is 5% or less. Where no comparison is complete, omit the comparison entirely; never use no notable delta as a substitute for the absence of a valid comparison. easy_guard is NOT gated on confidence (it is excluded from it) - interpret easy_guard_estimate from its own reason / n_sessions / quality when present, but never as a calibration signal. See SECTION_11.md DFA a1 Protocol for full interpretation rules.",
                 "readiness_decision_note": "The 'readiness_decision' block contains a pre-computed go/modify/skip recommendation with priority level (P0=safety, P1=overload, P2=fatigue, P3=green), individual signal statuses, phase-adjusted thresholds, and structured modification guidance. Use this as the baseline for pre-workout recommendations. Override only under the override rules in SECTION_11.md (Feel/RPE Override): athlete-reported state escalates unconditionally, de-escalation is P2-only, P0/P1 are not overridable. signals.acwr is the START-OF-DAY value from derived_metrics.acwr_start_of_day - the same 7d/28d windows with today's activities excluded - so it does not move when a workout is completed today. derived_metrics.acwr stays live and today-inclusive: retrospective load context only (acwr_readiness_eligible false), never used to approve, modify or veto a later same-day session or tomorrow's. Tomorrow is decided from tomorrow morning's readiness output, whose start-of-day value will include today's training. ACWR alone no longer forces P1 - a Skip needs start-of-day ACWR >= 1.5 plus a corroborating Tier-1 signal, and uncorroborated ACWR counts as an ordinary P2 amber/red. signals.hrv may carry an optional reason: 'rmssd_missing_sdnn_available' means the latest wellness record has no usable rMSSD but does carry SDNN. SDNN is a different metric and is explanatory metadata only - never a readiness input, never treated as HRV. Report HRV as unavailable and name the cause.",
                 "health_context_note": "The 'health_context' block carries athlete-reported illness and injury markers. It is CONTEXT, NOT a readiness input - readiness_decision is physiological only and can legitimately read 'go' while clarification_required is true. Calendar markers are matched on the canonical Intervals.icu category (SICK / INJURED), never on the event title. end_date is already converted to the INCLUSIVE last CALENDAR-MARKED day (not the last day the athlete was unwell); Intervals stores an exclusive end. IMPORTANT: end_date_local is the end of the calendar MARKING, not evidence that the illness or injury ended - illness is normally marked for the current day because recovery cannot be predicted. There is deliberately no 'active' field, because a false value would read as 'recovered'. Read marker_active (a marker spans today), recent_marker (a marker ended within recent_window_days and none spans today - recovery status UNKNOWN), and clarification_required. When clarification_required is true, do not give an unqualified full-program recommendation: acknowledge a current marker and establish severity; after a recent marker, ask whether the athlete has recovered rather than assuming it; this escalates only and is never grounds to relax an existing Skip, and never by itself an automatic Skip. wellness_injury is the CURRENT value only (the full series is in wellness_data[].injury and history.json daily_90d[].injury) and contributes to clarification_required only when freshness is 'current' and value >= 3; a 'stale' value is visible context that triggers nothing. source_status 'partial' means the dedicated health fetch failed and the block was built from the narrower main event fetch - marker_active and recent_marker are OMITTED in that case because they were not established, an empty current/recent list is NOT evidence of no marker, and clarification_required stays true. A span beginning before lookback_days is not visible; absence is never proof of no illness.",
@@ -6741,6 +6937,7 @@ class IntervalsSync:
         if not intervals_data:
             return None
         activities = intervals_data.get("activities", [])
+        drift_schema_supported = intervals_data.get("schema_version") == 2
         # Keep only activities with a dfa block (i.e. AlphaHRV recorded), most recent first
         dfa_activities = [a for a in activities if a.get("dfa") is not None]
         if not dfa_activities:
@@ -6754,7 +6951,7 @@ class IntervalsSync:
         latest_session = None
         for a in dfa_activities:
             block = a["dfa"]
-            quality = block.get("quality", {})
+            quality = block.get("quality") or {}
             if quality.get("sufficient"):
                 tiz_split = {}
                 for key, label in [
@@ -6775,7 +6972,11 @@ class IntervalsSync:
                     "avg": block.get("avg"),
                     "tiz_split_pct": tiz_split,
                     "drift_delta": drift.get("delta"),
-                    "drift_interpretable": drift.get("interpretable"),
+                    "drift_interpretable": (
+                        drift_schema_supported and self._dfa_drift_eligible(block)
+                    ) if drift else None,
+                    "drift_quality": block.get("drift_quality"),
+                    "quality": self._dfa_quality_summary(block),
                     "quality_pct": quality.get("valid_pct"),
                     "sufficient": True,
                 }
@@ -6795,7 +6996,9 @@ class IntervalsSync:
                 "tiz_split_pct": None,
                 "drift_delta": None,
                 "drift_interpretable": None,
-                "quality_pct": a["dfa"].get("quality", {}).get("valid_pct"),
+                "drift_quality": a["dfa"].get("drift_quality"),
+                "quality": self._dfa_quality_summary(a["dfa"]),
+                "quality_pct": (a["dfa"].get("quality") or {}).get("valid_pct"),
                 "sufficient": False,
             }
 
@@ -6804,7 +7007,7 @@ class IntervalsSync:
         # Group dfa activities by sport family
         by_family = {}
         for a in dfa_activities:
-            if not a["dfa"].get("quality", {}).get("sufficient"):
+            if not (a["dfa"].get("quality") or {}).get("sufficient"):
                 continue
             family = self.SPORT_FAMILIES.get(a.get("type", ""), "other")
             by_family.setdefault(family, []).append(a)
@@ -6819,8 +7022,7 @@ class IntervalsSync:
             drift_values = [
                 a["dfa"]["drift"]["delta"]
                 for a in window
-                if a["dfa"].get("drift") and a["dfa"]["drift"].get("interpretable")
-                and a["dfa"]["drift"].get("delta") is not None
+                if drift_schema_supported and self._dfa_drift_eligible(a["dfa"])
             ]
             drift_mean = round(sum(drift_values) / len(drift_values), 3) if drift_values else None
 
@@ -6964,6 +7166,8 @@ class IntervalsSync:
                 "date_range": [window[-1].get("date"), window[0].get("date")],
                 "avg_dfa_a1": avg_dfa,
                 "drift_delta_mean": drift_mean,
+                "drift_method": self.DFA_DRIFT_METHOD,
+                "drift_sessions": len(drift_values),
                 "easy_guard_crossing_sessions": easy_guard_crossing_sessions,
                 "lt1_crossing_sessions": lt1_crossing_sessions,
                 "lt2_crossing_sessions": lt2_crossing_sessions,
@@ -10370,7 +10574,8 @@ class IntervalsSync:
                 if _dfa:
                     activity["has_dfa"] = True
                     if _dfa.get("quality", {}).get("sufficient"):
-                        activity["dfa_summary"] = self._build_dfa_summary(_dfa)
+                        activity["dfa_summary"] = self._build_dfa_summary(
+                            _dfa, schema_version=(self._intervals_data or {}).get("schema_version"))
 
             # Terrain summary (v3.107) — fetched on first encounter, copied
             # forward thereafter via previous_latest_lookup. Indoor activities
