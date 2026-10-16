@@ -117,7 +117,7 @@ focus areas. Reference load targets and phase progression.]
 | Field | Source | Notes |
 |-------|--------|-------|
 | **Compliance** | Planned vs completed activities | ✅ completed as planned, ⚠️ modified, ❌ missed |
-| **Quality Session Detail** | Hard/intensity sessions only | Matches post-workout report metrics for consistency |
+| **Quality Session Detail** | Hard/intensity sessions only | Matches post-workout report metrics for consistency. Decoupling is interpreted or labelled only when the session passes the per-session gate (≥ 90 min with VI ≤ 1.05 and > 0); otherwise show the value without drift interpretation |
 | **Grey Zone %** | Z3 time / total time | Per Seiler: minimize; target <5% of weekly volume |
 | **Quality Intensity %** | Z4+ time / total time | The work that drives adaptation |
 | **TID 7d vs 28d** | Seiler classification comparison | Consistent = stable, shifting = classification changed, acute_depolarization = PI dropped |
@@ -141,7 +141,7 @@ focus areas. Reference load targets and phase progression.]
 | ACWR | 0.80–1.30 (optimal) | 1.30–1.50 (elevated) | >1.50 (high risk) |
 | Ramp rate | <1.0 (conservative) | 1.0–1.5 (moderate) | >1.5 (aggressive) |
 | Grey Zone % | <5% (good) | 5–10% (watch) | >10% (too much Z3) |
-| Decoupling (per-session) | <5% (good) | 5–10% (elevated) | >10% (flag) |
+| Decoupling (per-session, gated sessions only) | <5% (good) | 5–10% (elevated) | >10% (flag) |
 | Durability (7d mean) | <3% (good) | 3–5% (moderate) | >5% (declining) |
 | Durability trend | improving/stable | declining | declining >2% vs 28d |
 | EF trend | improving/stable | declining | declining >0.05 vs 28d |

@@ -174,11 +174,11 @@ No citations, no source markers, no parenthetical references. Raw data and analy
 
 1. Data timestamp
 2. One-line summary
-3. Session block(s), one per activity, line-by-line: activity type and name, start time, duration (actual vs planned), distance, power (avg/NP), power zones (%), Grey Zone (Z3) %, Quality (Z4+) %, HR (avg/max), HR zones (%), cadence, decoupling (with label), EF (when power and HR available), Variability Index (with label), calories (kcal), carbs used (g), TSS (actual vs planned)
-4. Weekly totals: Polarization, Durability (7d/28d + trend), TID 28d (+ drift), TSB, CTL, ATL, Ramp rate, ACWR, Hours, TSS
+3. Session block(s), one per activity, line-by-line: activity type and name, start time, duration (actual vs planned), distance, power (avg/NP), power zones (%), Grey Zone (Z3) %, Quality (Z4+) %, HR (avg/max), HR zones (%), cadence, decoupling (with label only when its per-session validity gate in SECTION_11.md is met), EF (when power and HR available; interpret only when its per-session validity gate in SECTION_11.md is met), Variability Index (with label for steady-state sessions only; omit the label for interval sessions where high VI is expected), calories (kcal), carbs used (g), TSS (actual vs planned)
+4. Weekly totals: Phase, Polarization, Durability (7d/28d + trend), EF (7d/28d + trend), HRRc (7d/28d + trend; partial or omitted when data is insufficient, per the post-workout template), TID 28d (+ drift), TSB, CTL, ATL, Ramp rate, ACWR, Recovery Index, Hours, TSS
 5. Overall: coach note, 2–4 sentences: compliance, quality observations, load context, recovery note
 
-Omit fields only if data is unavailable for that activity type.
+Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete session field set and its activity-specific inclusion, omission and label rules, including IF, Session profile, HRRc, DFA a1, Feel, RPE, Effort response, Note and the conditional Outdoor context line.
 
 **Pre-workout reports** must include: readiness (HRV, RHR, Sleep vs baselines), load context (TSB, ACWR, Monotony if > 2.3), capability snapshot (durability 7d + trend, TID drift if not consistent), today's planned workout, and a Go / Modify / Skip recommendation.
 

@@ -145,8 +145,8 @@ TSS: 445
 
 Interpretation:
 Main ride overshot planned TSS (95 vs 65), expected given the rolling terrain, with VI and grey
-zone confirming the outdoor premium, but HR stayed fully in Z1-Z2 and negative decoupling
-(-4.12%) shows aerobic response was clean. Short 5m ride logged separately; no `description` or `chat_notes`
+zone confirming the outdoor premium, but HR stayed fully in Z1-Z2. Decoupling (-4.12%) is
+not drift evidence at VI 1.14. Short 5m ride logged separately; no `description` or `chat_notes`
 attached, reported as-is. SkiErg and walk executed as easy secondary sessions. Load tracking
 normally at ACWR 1.04.
 
@@ -204,8 +204,8 @@ TSS: 485
 
 Interpretation:
 Interval targets met: all three efforts within ±3W of prescribed power. Z3 at 3% is
-from warm-up/cool-down transitions, not drift. Decoupling 3.82% across interval session is
-acceptable. TSB at -11.40 reflects build week loading. Recovery spin tomorrow. 🔄
+from warm-up/cool-down transitions, not drift. Decoupling (3.82%) is not interpretable on an
+interval session at VI 1.15. TSB at -11.40 reflects build week loading. Recovery spin tomorrow. 🔄
 ```
 
 ---
@@ -485,8 +485,8 @@ Interpretation:
 Threshold work at IF 0.88 with RPE 5, below the 6–8 band for this intensity, and notable on a
 cold day where RPE typically runs higher rather than lower. Coming off a deload week with positive
 TSB (+3.2) and improving HRRc trend, this reads as fitness showing through rather than a
-measurement error. Decoupling 2.10% and EF 1.61 (7d mean improving vs
-28d) are consistent. Neither athlete nor AI should over-read a single positive session, but
+measurement error. Decoupling (2.10%) and session EF (1.61) are not interpretable at VI 1.13;
+the improving 7d EF mean comes from other steady sessions and is context only. Neither athlete nor AI should over-read a single positive session, but
 the pattern is worth naming: if the next two threshold touches hold at similar IF with RPE in
 the low-to-mid range, that's a fitness signal the block is working.
 

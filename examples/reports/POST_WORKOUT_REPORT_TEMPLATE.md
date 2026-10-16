@@ -85,8 +85,8 @@ Round zone percentages to the nearest **whole number** (1%). The JSON data sourc
 | Grey Zone / Quality | Always for cycling | Highlights polarization compliance |
 | Session profile | Activities with zone data | Per-session intensity classification based on **executed** zone distribution (e.g., Recovery, Endurance, Tempo, Sweetspot, Threshold, VO2max, Anaerobic, Neuromuscular, Mixed). When the planned workout name and the executed character disagree, classify by what was actually done (IF and zone-time distribution), not by the planned label. Sweetspot requires VI ≤ 1.05; sessions averaging IF 0.88–0.94 with VI > 1.05 classify by dominant power zone instead |
 | Cadence | Cycling, running | Omit for SkiErg, strength |
-| Decoupling | Sessions ≥ 1 hour | Key aerobic efficiency marker. Per-session scale (<5% good) per Friel/Coggan. Aggregate durability uses tighter scale (<3% good) |
-| EF | Activities with power + HR | Aerobic efficiency (NP ÷ HR); track trend over like-for-like sessions. Absolute value is individual-dependent |
+| Decoupling | Activities with power + HR | Key aerobic efficiency marker. Display the value whenever present; interpret or label it only when the session passes the per-session gate: ≥ 90 min (5400 s) with `variability_index` ≤ 1.05 and > 0, checked against `duration_formatted`, not rounded hours (SECTION_11.md §Evidence handling). A short or surgy session still carries a decoupling number; it is not evidence. Per-session scale (<5% good) per Friel/Coggan. Aggregate durability uses tighter scale (<3% good) |
+| EF | Activities with power + HR | Aerobic efficiency (NP ÷ HR). Display the value whenever present; interpret it only when the session passes the per-session gate: ≥ 20 min (1200 s) with `variability_index` ≤ 1.05 and > 0, checked against `duration_formatted`, not rounded hours (SECTION_11.md §Evidence handling). Track trend over like-for-like eligible sessions. Absolute value is individual-dependent |
 | HRRc | Activities where HR exceeded threshold for >1min | Heart rate recovery (largest 60s HR drop in bpm). Higher = faster parasympathetic recovery. Absent on easy rides, rides stopped before cooldown, or no HR data. Omit line when null |
 | Variability Index | Cycling with power | 1.00–1.05 = steady, >1.05 = variable. Assessment labels apply to steady-state only; omit label for interval sessions where high VI is expected |
 | DFA a1 | Activities with a `dfa` block in `intervals.json` | **Source:** session-level `dfa.avg` and each `tiz_*` band's `pct`, or their compact-summary equivalents. These describe retained samples; use `quality.coverage_by_third` to explain missing-data limits. Per-interval `avg_dfa_a1` was removed in v11.52; stale values must not be used or averaged. **Branching:** (a) `dfa` block absent → omit the line entirely, do not announce absence; (b) `dfa` present with `quality.sufficient: false` → one-line notice reporting the available quality counts and percentage and each failed gate per **DFA a1 Protocol §Quality Gates**; if the supplied quality data cannot resolve the reason, say so; no DFA reading; (c) `sufficient: true` → full line, using the drift rules below. **Validated sports only:** the protocol's interpretive rules apply to cycling. For other sports, surface values descriptively without threshold conclusions |
@@ -117,7 +117,7 @@ The 90-minute rule uses 5400 original DFA slots with verified 1 Hz timing, not r
 
 | Metric | Good | Watch | Flag |
 |--------|------|-------|------|
-| Decoupling (per-session) | < 5% | 5–10% | > 10% |
+| Decoupling (per-session, gated sessions only) | < 5% | 5–10% | > 10% |
 | Variability Index | ≤ 1.05 | 1.05–1.10 | > 1.10 |
 | ACWR (live retrospective) | 0.8–<1.3 | 1.3–<1.5 | ≥1.5 |
 | Grey Zone (Z3) | < 5% (base) | 5–10% | > 10% (base phase) |
