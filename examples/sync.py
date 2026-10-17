@@ -4,6 +4,13 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.141 - Completed-session structure from exact paired Intervals plans and
+  recording-time plan alignment and repeated sets: compact latest.json summaries survive for 28 days, while
+  detailed metrics and cache state share intervals.json's 14-day retention.
+  Plan match is separate from compliance. Thirds/WORK efforts are fallback only.
+  Independent of DFA; retained detail refreshes on source changes or within 24h.
+  Flat planned steps now receive summaries without changing repeat compression.
+
 Version 3.140 - DFA drift uses fixed recording thirds with timing, coverage and gap
   checks. Schema 2 carries drift eligibility and coverage through summaries and
   profiles; trailing drift uses eligible sessions only. Missing artifact readings
@@ -631,7 +638,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.140"
+    VERSION = "3.141"
     INTERVALS_FILE = "intervals.json"
     ROUTES_FILE = "routes.json"
     SAVED_WORKOUTS_FILE = "saved_workouts.json"
@@ -1502,6 +1509,8 @@ class IntervalsSync:
                 entry["terrain_error"] = act["terrain_error"]
             if "weather_summary" in act:
                 entry["weather_summary"] = act["weather_summary"]
+            if isinstance(act.get("structure_summary"), dict):
+                entry["structure_summary"] = act["structure_summary"]
             if entry:
                 lookup[str(act_id)] = entry
         return lookup
@@ -2529,7 +2538,8 @@ class IntervalsSync:
         else:
             scan_cutoff = (now - timedelta(hours=self.INTERVAL_SCAN_HOURS)).strftime("%Y-%m-%d")
 
-        cached_ids = {str(a.get("activity_id")) for a in cached.get("activities", [])}
+        cached_ids = {str(a.get("activity_id")) for a in cached.get("activities", [])
+                      if a.get("intervals") or a.get("dfa")}
         paired_ids = self._build_pairing_map(events, activities)
 
         # Candidate selection. Two independent arms:
@@ -2748,9 +2758,10 @@ class IntervalsSync:
             if "dfa" in upd:
                 entry["dfa"] = upd["dfa"]
 
-        # An entry with neither payload carries nothing a consumer can use; its
-        # fetch_state record is what keeps it from being re-queued.
-        all_entries = [e for e in by_id.values() if e.get("intervals") or e.get("dfa")]
+        # Structure is an independent payload; retain it without fabricating
+        # interval or DFA availability. Empty entries still rely on fetch_state.
+        all_entries = [e for e in by_id.values()
+                       if e.get("intervals") or e.get("dfa") or e.get("session_structure")]
 
         # Prune fetch_state on the same two axes as the entries.
         pruned_state = {}
@@ -2774,7 +2785,7 @@ class IntervalsSync:
         }
 
         # Return all activity IDs that have interval data
-        return {a["activity_id"] for a in all_entries}
+        return {a["activity_id"] for a in all_entries if a.get("intervals") or a.get("dfa")}
     
     # ── Route & Terrain Intelligence (v3.93) ─────────────────────────────
     
@@ -4821,6 +4832,9 @@ class IntervalsSync:
             activities_extended, present_activity_ids=present_ids, events=pairing_events)
         if interval_activity_ids:
             print(f"  📊 {len(interval_activity_ids)} activit{'y' if len(interval_activity_ids) == 1 else 'ies'} with interval data")
+
+        self._prepare_session_structures(
+            activities_extended, events, previous_latest_lookup)
         
         # Calculate derived metrics for Section 11 compliance
         print("Calculating derived metrics...")
@@ -10391,6 +10405,485 @@ class IntervalsSync:
             if self.debug:
                 print(f"  Could not create update issue: {e}")
     
+    # Structure shares interval retention, but not interval/DFA interpretation.
+    STRUCTURE_VERSION = 2
+    STRUCTURE_MAX_STEPS = 20
+    STRUCTURE_MAX_EFFORTS = 8
+
+    @staticmethod
+    def _structure_number(value):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and abs(value) <= 1e12)
+
+    @staticmethod
+    def _structure_date(value):
+        try:
+            result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return result if result.tzinfo is not None else None
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    @staticmethod
+    def _structure_fingerprint(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                         default=str).encode()).hexdigest()
+
+    def _structure_plan(self, act, event, reason=None):
+        """Normalize paired intent for computation; never emit raw definitions."""
+        plan = {"status": reason or ("unknown" if act.get("paired_event_id") is not None
+                                    else "no_plan"), "steps": []}
+        if reason or not isinstance(event, dict):
+            return plan
+        if (str(event.get("id")) != str(act.get("paired_event_id"))
+                or act.get("paired_event_id") is None
+                or (event.get("paired_activity_id") is not None
+                    and str(event["paired_activity_id"]) != str(act.get("id")))
+                or (event.get("athlete_id") is not None and act.get("athlete_id") is not None
+                    and str(event["athlete_id"]) != str(act["athlete_id"]))):
+            plan["status"] = "pairing_conflict"
+            return plan
+        plan["reference"] = {"event_id": str(event["id"])[:80],
+                             "updated": str(event.get("updated") or "")[:80] or None}
+        doc = event.get("workout_doc")
+        if not isinstance(doc, dict) or not isinstance(doc.get("steps"), list):
+            plan["status"] = "missing_steps"
+            return plan
+        steps = doc["steps"]
+        plan["status"] = "steps_present" if steps else "no_plan"
+        # Bound input work independently of the output cap, which counts sets.
+        for step in steps[:10000]:
+            entry = {"supported": False}
+            if isinstance(step, dict):
+                duration = step.get("duration")
+                prescribed = step.get("power")
+                target = prescribed
+                if (isinstance(prescribed, dict)
+                        and prescribed.get("units") not in self.SUMMARY_WATT_UNITS):
+                    target = step.get("_power")
+                allowed = {"duration", "power", "_power", "hr", "_hr", "cadence", "_cadence",
+                           "text", "description", "role", "ramp"}
+                if self._structure_number(duration) and 1 <= duration <= 604800:
+                    entry["duration_s"] = duration
+                if isinstance(target, dict):
+                    units = target.get("units")
+                    absolute = (units in self.SUMMARY_WATT_UNITS
+                                or (target is step.get("_power") and units is None))
+                    low = high = target.get("value")
+                    if (step.get("ramp") or (isinstance(prescribed, dict)
+                            and ("start" in prescribed or "end" in prescribed
+                                 or prescribed.get("ramp")))):
+                        absolute = False
+                    elif "min" in target or "max" in target:
+                        low, high = target.get("min"), target.get("max")
+                    if (absolute and self._structure_number(low) and self._structure_number(high)
+                            and 0 <= low <= high <= 3000):
+                        entry["target_w"] = low if low == high else [low, high]
+                if set(step) <= allowed and "duration_s" in entry and "target_w" in entry:
+                    entry.pop("supported")
+            plan["steps"].append(entry)
+        if any(s.get("supported") is False for s in plan["steps"]):
+            plan["status"] = "unsupported_steps"
+        elif steps:
+            total = sum(s["duration_s"] for s in plan["steps"])
+            if not self._structure_number(doc.get("duration")) or abs(total - doc["duration"]) > 1:
+                plan["status"] = "plan_total_mismatch"
+        plan["profile"] = plan["steps"]
+        plan["steps"] = self._structure_sets(plan["steps"])
+        omitted = max(0, len(plan["steps"]) - self.STRUCTURE_MAX_STEPS) + max(0, len(steps) - 10000)
+        if omitted:
+            plan.update(status="truncated", omitted_steps=omitted)
+            plan["steps"] = plan["steps"][:self.STRUCTURE_MAX_STEPS]
+        return plan
+
+    def _structure_sets(self, steps):
+        """Reuse the summary detector; compress exact short-recovery patterns only.
+
+        Long recoveries remain ordinary steps. Approximate summary compression is
+        insufficient for numeric comparison, so durations and targets must agree
+        exactly within each side of a set. No raw atoms are discarded on failure.
+        """
+        data = [(s.get("duration_s"), s.get("target_w"))
+                if s.get("supported") is not False and not isinstance(s.get("target_w"), list)
+                else (None, None) for s in steps]
+        result, i = [], 0
+        while i < len(steps):
+            block = self._try_alternating_block(data, i)
+            if block:
+                count, wd, wp, rd, rp, pairs, tail, trailing = block
+                # Keep a differing/long tail outside the set. A last work bout
+                # immediately before it still belongs to this set.
+                if tail is not None:
+                    # The summary detector may also see the next set's first
+                    # work bout as trailing. Stop before the long recovery.
+                    count, trailing = pairs, False
+                consumed = pairs * 2 + int(trailing) - int(tail is not None)
+                selected = data[i:i + consumed]
+                if (count >= 3 and rd < 60
+                        and all(v == data[i + j % 2] for j, v in enumerate(selected))):
+                    result.append({"duration_s": sum(d for d, _ in selected),
+                                   "target_w": steps[i]["target_w"],
+                                   "repeat": [count, wd, rd]})
+                    i += consumed
+                    continue
+            result.append(steps[i])
+            i += 1
+        return result
+
+    def _structure_streams(self, act, streams):
+        """Elapsed horizon, no gap filling, no extrapolated final sample."""
+        number = self._structure_number
+        horizon = act.get("elapsed_time")
+        times = streams.get("time") if isinstance(streams, dict) else None
+        reason = None
+        if (not isinstance(times, list) or len(times) < 2 or len(times) > 1000000
+                or any(not number(t) or t < 0 for t in times)
+                or any(b <= a for a, b in zip(times, times[1:]))):
+            times, reason = [], "missing_or_invalid_time"
+        if not number(horizon) or not 0 < horizon <= 604800:
+            horizon = times[-1] if times and 0 < times[-1] <= 604800 else 0
+            reason = reason or "activity_elapsed_unavailable"
+        if times and times[-1] > horizon + 1:
+            times, reason = [], "stream_exceeds_elapsed"
+        values = {}
+        for field in ("watts", "heartrate", "cadence"):
+            value = streams.get(field) if isinstance(streams, dict) else None
+            values[field] = value if isinstance(value, list) and len(value) == len(times) else []
+        return horizon, times, values, reason
+
+    def _structure_offset(self, steps, times, watts, shift, horizon):
+        """One bounded recording-time alignment, using the entire target profile."""
+        def error(offset):
+            index, end = 0, shift + offset + steps[0]["duration_s"]
+            squared, observed = 0.0, 0.0
+            for i, t in enumerate(times[:-1]):
+                a, b = max(t, shift + offset), min(t + 1, times[i + 1], horizon)
+                value = watts[i]
+                if not self._structure_number(value) or value < 0:
+                    continue
+                while a < b:
+                    while index < len(steps) and a >= end:
+                        index += 1
+                        if index < len(steps):
+                            end += steps[index]["duration_s"]
+                    if index == len(steps):
+                        break
+                    target = steps[index]["target_w"]
+                    if isinstance(target, list):
+                        target = sum(target) / 2
+                    dt = min(b, end) - a
+                    squared += (value - target) ** 2 * dt
+                    observed += dt
+                    a += dt
+            return squared / observed if observed else float("inf")
+        # min preserves the smallest integer offset on exact ties.
+        return min(range(9), key=error)
+
+    def _structure_window(self, start, end, times, values, precise=False, windows=None):
+        windows = windows if windows is not None else [(start, end)]
+        span = sum(b - a for a, b in windows)
+        sums, durations = [0.0] * 3, [0.0] * 3
+        zero = 0.0
+        first = 0
+        for i in range(len(times) - 1):
+            t = times[i]
+            if t >= end:
+                break
+            while first < len(windows) and windows[first][1] <= t:
+                first += 1
+            dt, j = 0, first
+            sample_end = min(t + 1, times[i + 1])
+            while j < len(windows) and windows[j][0] < sample_end:
+                a, b = windows[j]
+                dt += max(0, min(b, sample_end) - max(a, t))
+                j += 1
+            if not dt:
+                continue
+            for j, key in enumerate(("watts", "heartrate", "cadence")):
+                v = values[key][i] if values[key] else None
+                if self._structure_number(v) and (v > 0 if key == "heartrate" else v >= 0):
+                    sums[j] += v * dt
+                    durations[j] += dt
+                    if j == 0 and v == 0:
+                        zero += dt
+        means = [(s / d if precise else round(s / d, 1)) if d else None
+                 for s, d in zip(sums, durations)]
+        coverage = [(100 * d / span if precise else round(100 * d / span, 2)) if span > 0 else 0
+                    for d in durations]
+        return [start, end, means[0], round(sums[0] / 1000, 1) if durations[0] else None,
+                means[1], means[2], *coverage,
+                round(100 * zero / durations[0], 2) if durations[0] else None]
+
+    def _build_session_structure(self, act, event, streams, raw_intervals=None,
+                                 plan_reason=None):
+        if act.get("type") in ("Walk", "Hike"):
+            return None
+        plan = self._structure_plan(act, event)
+        horizon, times, values, timing_reason = self._structure_streams(act, streams)
+        window = lambda a, b: self._structure_window(a, b, times, values)
+        out = {"version": self.STRUCTURE_VERSION, "method": "fixed_elapsed_thirds",
+               "status": "unknown"}
+        if "reference" in plan:
+            out["plan"] = plan["reference"]
+        if plan["steps"]:
+            out["steps"] = plan["steps"]
+        if plan.get("omitted_steps"):
+            out["omitted_steps"] = plan["omitted_steps"]
+        issues = []
+        shift = act.get("workout_shift_secs")
+        if plan_reason:
+            issues.append(plan_reason)
+        elif plan["status"] == "no_plan":
+            out["status"] = "no_plan"
+        elif plan["status"] != "steps_present":
+            issues.append(plan["status"])
+        elif shift is not None and (not self._structure_number(shift) or abs(shift) > 604800):
+            issues.append("invalid_workout_shift")
+        elif timing_reason or not values["watts"]:
+            issues.append(timing_reason or "missing_power")
+        else:
+            # Time-stream gaps are unrecorded time. Compress only those gaps;
+            # null watts and real zero-power samples retain their recording time.
+            removed, recorded = 0, [times[0]]
+            for before, after in zip(times, times[1:]):
+                removed += max(0, after - before - 1)
+                recorded.append(after - removed)
+            plan_horizon = horizon - removed
+            plan_window = lambda a, b, ranges=None, precise=False: self._structure_window(
+                a, b, recorded, values, precise=precise, windows=ranges)
+            offset = self._structure_offset(plan["profile"], recorded, values["watts"],
+                                            shift or 0, plan_horizon)
+            if offset:
+                out["offset_s"] = offset
+            cursor = (shift or 0) + offset
+            total = sum(s["duration_s"] for s in plan["steps"])
+            # The offset models power-response lag, not extra prescribed riding.
+            # Judge ride duration on the original workout timer; clip lagged
+            # measurements at the recording end and expose their fraction.
+            delta = plan_horizon - ((shift or 0) + total)
+            results, agrees, disagrees, low_coverage = [], 0, 0, False
+            incomplete = False
+            for step in plan["steps"]:
+                end = cursor + step["duration_s"]
+                clip = lambda t: max(0, min(t, plan_horizon))
+                a, b = clip(min(cursor + 1, end)), clip(end)
+                ranges = [(a, b)]
+                planned_work = step["duration_s"] - 1
+                if "repeat" in step:
+                    reps, work, rest = step["repeat"]
+                    ranges = [(clip(cursor + n * (work + rest) + 1),
+                               clip(cursor + n * (work + rest) + work)) for n in range(reps)]
+                    planned_work = reps * (work - 1)
+                row = plan_window(a, b, ranges)
+                exact = plan_window(a, b, ranges, precise=True)
+                work_span = sum(y - x for x, y in ranges)
+                fraction = work_span / planned_work if planned_work else 0
+                adequate = work_span > 0 and exact[6] >= 95
+                low_coverage |= work_span > 0 and not adequate
+                incomplete |= clip(end - offset) - clip(cursor - offset) < step["duration_s"]
+                target = step["target_w"]
+                low, high = target if isinstance(target, list) else (target * .95, target * 1.05)
+                agreement = low <= exact[2] <= high if adequate else None
+                agrees += agreement is True
+                disagrees += agreement is False
+                result = {"target_w": target, "actual": row, "match": agreement}
+                if "repeat" in step:
+                    result.update(repeat=step["repeat"], work_s=work_span)
+                if not adequate:
+                    for index in (2, 3, 4, 5, 9):
+                        row[index] = None
+                if fraction < 1:
+                    result.update(duration_s=step["duration_s"], observed_window_fraction=round(fraction, 4))
+                results.append(result)
+                cursor = end
+            if abs(delta) > total * .5 or disagrees > (agrees + disagrees) / 2:
+                out["status"] = "not_followed"
+                issues.append("gross_duration_difference" if abs(delta) > total * .5 else "most_steps_disagree")
+            elif agrees == len(results) and 0 <= delta <= 30 and not incomplete:
+                out["status"] = "followed"
+            else:
+                out["status"] = "partly_followed"
+                issues.append("insufficient_power_coverage" if low_coverage or not agrees + disagrees
+                              else "shortened_or_extended" if incomplete or not 0 <= delta <= 30
+                              else "some_steps_disagree")
+            if out["status"] in ("followed", "partly_followed"):
+                out.update(method="paired_plan_windows", steps=results)
+                if shift:
+                    out["shift_s"] = shift
+                unassigned = []
+                if (shift or 0) + offset > 0:
+                    unassigned.append(plan_window(0, min((shift or 0) + offset, plan_horizon)))
+                if delta > 30:
+                    unassigned.append(plan_window(max(0, cursor), plan_horizon))
+                if unassigned:
+                    out["unassigned"] = unassigned
+        if out["method"] == "fixed_elapsed_thirds":
+            edges = [0, math.floor(horizon / 3), math.floor(2 * horizon / 3), horizon]
+            out["thirds"] = [window(a, b) for a, b in zip(edges, edges[1:])]
+            if timing_reason and timing_reason not in issues:
+                issues.append(timing_reason)
+            efforts, omitted = [], 0
+            if isinstance(raw_intervals, list):
+                for iv in raw_intervals:
+                    if not isinstance(iv, dict) or iv.get("type") != "WORK":
+                        continue
+                    a = iv.get("start_time", iv.get("start_secs"))
+                    b = iv.get("end_time", iv.get("end_secs"))
+                    if not (self._structure_number(a) and self._structure_number(b) and 0 <= a < b <= horizon + 1):
+                        if "efforts_partial" not in issues:
+                            issues.append("efforts_partial")
+                        continue
+                    if len(efforts) == self.STRUCTURE_MAX_EFFORTS:
+                        omitted += 1
+                        continue
+                    metrics = [iv.get(raw, iv.get(formatted)) for raw, formatted in
+                               (("average_watts", "avg_power"), ("average_heartrate", "avg_hr"),
+                                ("average_cadence", "avg_cadence"))]
+                    efforts.append([a, b] + [v if self._structure_number(v) and v >= 0 else None
+                                             for v in metrics])
+                if efforts:
+                    out["efforts"] = efforts
+                if omitted:
+                    out["omitted_efforts"] = omitted
+            else:
+                issues.append("efforts_unavailable")
+        if issues:
+            out["issues"] = issues
+        return out
+
+    @staticmethod
+    def _structure_summary(block):
+        """Small, self-contained comparison data that can outlive interval detail."""
+        summary = {"method": "plan_match_v2", "status": block["status"]}
+        if block.get("steps"):
+            rows = []
+            for step in block["steps"]:
+                actual = step.get("actual")
+                duration = actual[1] - actual[0] if actual else step.get("duration_s")
+                if "repeat" in step:
+                    duration = step.get("work_s", step["repeat"][0] * step["repeat"][1])
+                rows.append([duration, step.get("target_w"),
+                             actual[2] if actual else None, step.get("match")])
+                if "repeat" in step:
+                    rows[-1].append(step["repeat"])
+            summary["steps"] = rows
+        if block.get("issues"):
+            summary["issues"] = block["issues"][:]
+        if block.get("omitted_steps"):
+            summary["omitted_steps"] = block["omitted_steps"]
+        return summary
+
+    def _prepare_session_structures(self, activities, events, previous_lookup, now=None):
+        """Full blocks persist in intervals.json; expired summaries need no fetch."""
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now.astimezone() - timedelta(days=self.INTERVAL_RETENTION_DAYS)).strftime("%Y-%m-%d")
+        event_map = defaultdict(list)
+        for event in events or []:
+            if isinstance(event, dict) and event.get("id") is not None:
+                event_map[str(event["id"])].append(event)
+        entries = self._intervals_data.setdefault("activities", [])
+        interval_map = {str(e.get("activity_id")): e for e in entries}
+        result = {}
+        for act in activities:
+            if act.get("type") in ("Walk", "Hike"):
+                entry = interval_map.get(str(act.get("id")))
+                if entry:
+                    entry.pop("session_structure", None)
+                continue
+            date = act.get("start_date_local", "")[:10]
+            if not date or date < cutoff:
+                continue
+            aid = str(act.get("id"))
+            paired = act.get("paired_event_id")
+            matches = event_map.get(str(paired), []) if paired is not None else []
+            event = matches[0] if len(matches) == 1 else None
+            entry = interval_map.get(aid) or {}
+            old = entry.get("session_structure") or {}
+            cache = old.get("cache") or {}
+            activity_key = self._structure_fingerprint({k: act.get(k) for k in
+                ("id", "paired_event_id", "start_date", "elapsed_time", "moving_time", "icu_sync_date",
+                 "icu_intervals_edited", "icu_average_watts", "icu_joules", "workout_shift_secs",
+                 "icu_intervals", "recording_stops", "icu_recording_time", "type")})
+            event_key = self._structure_fingerprint(matches) if matches else None
+            due = self._structure_date(cache.get("next_refresh_at"))
+            if (old.get("version") == self.STRUCTURE_VERSION and cache.get("activity_key") == activity_key
+                    and cache.get("event_key") == event_key and due and now < due):
+                result[aid] = old
+                continue
+            reason, failures, retry_after = None, [], 0
+            if len(matches) > 1:
+                reason = "ambiguous_pairing"
+            elif paired is not None and event is None:
+                try:
+                    event = self._intervals_get(f"events/{paired}", {"resolve": "true"})
+                    if not isinstance(event, dict) or str(event.get("id")) != str(paired):
+                        reason = "paired_event_unavailable"
+                except (requests.exceptions.RequestException, ValueError) as exc:
+                    reason = "paired_event_unavailable"
+                    response = getattr(exc, "response", None)
+                    if response is not None and response.status_code == 429:
+                        retry_after = self._parse_retry_after(response.headers.get("Retry-After")) or 0
+                if reason:
+                    failures.append(reason)
+            plan_key = self._structure_fingerprint(event.get("workout_doc")) if isinstance(event, dict) else None
+            status, streams = self._fetch_activity_streams(aid, ["time", "watts", "heartrate", "cadence"])
+            retry_after = max(retry_after, getattr(self, "_last_retry_after_secs", None) or 0)
+            if status != "ok":
+                streams = {}
+                failures.append("streams_" + status)
+            raw = act.get("icu_intervals")
+            cached_efforts = False
+            if not isinstance(raw, list):
+                raw = entry.get("intervals")
+                cached_efforts = isinstance(raw, list)
+            block = self._build_session_structure(act, event, streams, raw, reason)
+            if block["method"] == "fixed_elapsed_thirds" and not isinstance(raw, list):
+                iv_status, payload = self._fetch_activity_intervals(aid)
+                retry_after = max(retry_after, getattr(self, "_last_retry_after_secs", None) or 0)
+                raw = payload if iv_status in ("ok", "no_data") else None
+                if raw is None:
+                    failures.append("efforts_" + iv_status)
+                block = self._build_session_structure(act, event, streams, raw, reason)
+            if cached_efforts and block.get("efforts"):
+                block.setdefault("issues", []).append("efforts_from_interval_cache")
+            if failures:
+                block = self._build_session_structure(act, event, streams, raw, failures[0])
+                block["issues"] = list(dict.fromkeys(block.get("issues", []) + failures))
+                if status != "ok" and old.get("thirds"):
+                    block["thirds"] = old["thirds"]
+                if ("paired_event_unavailable" in failures
+                        and (old.get("plan") or {}).get("event_id") == str(paired)):
+                    block["plan"] = dict(old["plan"])
+                    if old.get("steps"):
+                        block["steps"] = []
+                        for step in old["steps"]:
+                            retained = {k: step[k] for k in ("duration_s", "target_w", "supported", "repeat") if k in step}
+                            if "duration_s" not in retained and step.get("actual"):
+                                retained["duration_s"] = (step["actual"][1] - step["actual"][0]
+                                                          + (1 if old.get("version", 1) >= 2 else 0))
+                            block["steps"].append(retained)
+                    if old.get("omitted_steps"):
+                        block["omitted_steps"] = old["omitted_steps"]
+                if cached_efforts and block.get("efforts"):
+                    block["issues"].append("efforts_from_interval_cache")
+            attempts = min(3, int(cache.get("failures", 0)) + 1) if failures else 0
+            delay = max((3600, 21600, 86400)[attempts - 1], retry_after) if failures else 86400
+            block["cache"] = {"activity_key": activity_key, "event_key": event_key,
+                              "plan_key": plan_key or cache.get("plan_key"),
+                              "sampled_at": cache.get("sampled_at") if status != "ok" else now.isoformat(),
+                              "next_refresh_at": (now + timedelta(seconds=delay)).isoformat()}
+            if failures:
+                block["cache"].update(status="stale" if old else "unavailable", failures=attempts)
+            if not entry:
+                entry = {"activity_id": act.get("id"), "date": date,
+                         "start_datetime": act.get("start_date_local", ""),
+                         "type": act.get("type", "Unknown"), "name": act.get("name", ""),
+                         "interval_summary": act.get("interval_summary"), "intervals": []}
+                entries.append(entry)
+                interval_map[aid] = entry
+            entry["session_structure"] = block
+            result[aid] = block
+        return result
+
     def _format_activities(self, activities: List[Dict], interval_activity_ids: set = None,
                            temp_unit: str = "C", wind_unit: str = "MPS",
                            speed_unit: str = "KPH",
@@ -10561,6 +11054,15 @@ class IntervalsSync:
                 "has_intervals": False,
                 "has_dfa": False,
             }
+            structure = (intervals_by_id.get(str(act.get("id"))) or {}).get("session_structure")
+            activity["has_structure"] = bool(structure)
+            activity["structure_summary"] = (self._structure_summary(structure) if structure else
+                (previous_latest_lookup.get(str(act.get("id"))) or {}).get("structure_summary") or
+                {"method": "plan_match_v2", "status": "unknown", "issues": ["detail_unavailable"]})
+            if act.get("type") in ("Walk", "Hike"):
+                activity["has_structure"] = False
+                activity["structure_summary"] = {"method": "plan_match_v2", "status": "unknown",
+                                                 "issues": ["sport_out_of_scope"]}
 
             # has_intervals: requires at least one WORK segment. Intervals.icu emits a
             # whole-session RECOVERY placeholder on unstructured endurance rides, so a
@@ -10708,7 +11210,7 @@ class IntervalsSync:
         """
         Summarize a structured workout_doc into a human-readable one-liner.
         
-        Uses two deterministic patterns:
+        Legacy repeat matcher, before the flat-list fallback in _format_events:
           Pattern A: Explicit repeats (step has 'reps' + nested 'steps')
           Pattern B: Flat alternating work/rest pairs (min 3 reps, strict guards)
         
@@ -10745,11 +11247,28 @@ class IntervalsSync:
                 for p in parts
             )
             if not has_interval:
-                return None  # All flat steps — no wall-of-text problem, skip summary
+                return None  # _format_events next tries alternating, then flat lists.
             
             return self._merge_interval_blocks(parts)
         except Exception:
             return None
+
+    def _summarize_flat_workout_doc(self, workout_doc: Dict) -> str:
+        """Last-resort ordered flat summary; never introduce a hard-session marker.
+
+        Repeat and alternating renderers retain precedence and their existing
+        semantics. Unsupported atoms remain marked; no roles are inferred.
+        """
+        steps = workout_doc.get("steps") if isinstance(workout_doc, dict) else None
+        if not isinstance(steps, list) or not steps or any(self._is_repeat_like(s) for s in steps):
+            return None
+        rendered = [self._render_step(s) for s in steps[:self.STRUCTURE_MAX_STEPS]]
+        if not any(rendered):
+            return None
+        parts = [s or self.SUMMARY_STEP_NOT_SUMMARIZED for s in rendered]
+        if len(steps) > self.STRUCTURE_MAX_STEPS:
+            parts.append(self.SUMMARY_STEP_NOT_SUMMARIZED)
+        return " | ".join(parts)
     
     def _merge_interval_blocks(self, parts: List[str]) -> str:
         """
@@ -11427,7 +11946,7 @@ class IntervalsSync:
         
         day7_cutoff = (datetime.strptime(today, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
         
-        stats = {"attempted": 0, "success": 0, "patternA": 0, "patternB": 0,
+        stats = {"attempted": 0, "success": 0, "patternA": 0, "patternB": 0, "flat": 0,
                  "bail_no_workout_doc": 0, "bail_no_match": 0}
         
         result = []
@@ -11450,7 +11969,11 @@ class IntervalsSync:
                     if summary:
                         stats["patternB"] += 1
                     else:
-                        stats["bail_no_match"] += 1
+                        summary = self._summarize_flat_workout_doc(workout_doc)
+                        if summary:
+                            stats["flat"] += 1
+                        else:
+                            stats["bail_no_match"] += 1
                 if summary:
                     stats["success"] += 1
             elif ((evt.get("description") or "").strip()

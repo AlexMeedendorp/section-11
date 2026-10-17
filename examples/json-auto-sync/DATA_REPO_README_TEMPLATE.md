@@ -27,9 +27,9 @@ Built on the [Section 11 Protocol](https://github.com/CrankAddict/section-11).
 
 | File | Description | Link |
 |------|-------------|------|
-| `latest.json` | Current 7-day snapshot + derived metrics + completed-activity terrain & weather summaries | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/latest.json) |
+| `latest.json` | Current 7-day snapshot + derived metrics + 28-day structure summaries + terrain & weather summaries | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/latest.json) |
 | `history.json` | Longitudinal data (daily/weekly/monthly) | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/history.json) |
-| `intervals.json` | Per-interval data for structured sessions | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/intervals.json) |
+| `intervals.json` | Interval/DFA and completed-session structure detail (14 days) | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/intervals.json) |
 | `routes.json` | Route/terrain data for planned events with GPX/TCX attachments (`events` is empty when there are none) | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/routes.json) |
 | `saved_workouts.json` | Read-only mirror of your Intervals.icu saved workouts | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/saved_workouts.json) |
 

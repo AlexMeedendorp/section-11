@@ -36,7 +36,7 @@ effect may not be the one in your configuration. Check, do not assume.
 
 Load on demand only, through the same delivery paths:
 - history.json for trend, phase or longitudinal work: trend analysis, phase context, longitudinal comparison
-- intervals.json when analysing an activity with `has_intervals: true` or `has_dfa: true`: interval compliance, pacing, cardiac drift, recovery quality, DFA a1 session interpretation
+- intervals.json when analysing an activity with `has_intervals: true`, `has_dfa: true` or `has_structure: true`: interval compliance, pacing, cardiac drift, recovery quality, DFA a1 session interpretation and completed-session detail. Use latest.json's structure_summary for everyday comparisons and pre-workout context
 - routes.json when a planned event has `has_terrain: true`: route analysis, terrain-adjusted pacing, pre-ride briefing
 - saved_workouts.json when selecting, reusing, or discussing a saved workout, including my saved version of a familiar workout. It is the preferred read path even with API access, because it avoids repeated API retrieval; use the Intervals.icu API for edits, and as a read fallback when the mirror is missing, unavailable, stale, inconsistent, or lacks required data. Check `refresh.status` before use. Before prescribing a saved workout, verify that its structure implements an applicable Workout Reference Library template; a matching name or adaptation label alone is not a match. Inventory only, never a session-design authority, and never evidence of what was prescribed historically
 - WORKOUT_REFERENCE.md (Workout Reference Library) when prescribing a structured session, including a familiar workout I name or a saved workout proposed for reuse: identify the template it implements before prescribing, and if the library cannot be reached, say so rather than improvising (Section 11 B §8)
@@ -174,7 +174,7 @@ No citations, no source markers, no parenthetical references. Raw data and analy
 
 1. Data timestamp
 2. One-line summary
-3. Session block(s), one per activity, line-by-line: activity type and name, start time, duration (actual vs planned), distance, power (avg/NP), power zones (%), Grey Zone (Z3) %, Quality (Z4+) %, HR (avg/max), HR zones (%), cadence, decoupling (with label only when its per-session validity gate in SECTION_11.md is met), EF (when power and HR available; interpret only when its per-session validity gate in SECTION_11.md is met), Variability Index (with label for steady-state sessions only; omit the label for interval sessions where high VI is expected), calories (kcal), carbs used (g), TSS (actual vs planned)
+3. Session block(s), one per activity, line-by-line: activity type and name, start time, duration (actual vs planned), distance (including walks), recorded Ascent (walks/runs/rides indoors and outdoors; display.elevation, omit missing, retain zero; descriptive only, never compare barometric/GPS/virtual sources), Power (whole session: avg/NP), Executed structure (branch/status and supported step/set actuals or descriptive fallback; omit for Walk/Hike), power zones (%), Grey Zone (Z3) %, Quality (Z4+) %, HR (avg/max), HR zones (%), cadence, decoupling (with label only when its per-session validity gate in SECTION_11.md is met), EF (when power and HR available; interpret only when its per-session validity gate in SECTION_11.md is met), Variability Index (with label for steady-state sessions only; omit the label for interval sessions where high VI is expected), calories (kcal), carbs used (g), TSS (actual vs planned)
 4. Weekly totals: Phase, Polarization, Durability (7d/28d + trend), EF (7d/28d + trend), HRRc (7d/28d + trend; partial or omitted when data is insufficient, per the post-workout template), TID 28d (+ drift), TSB, CTL, ATL, Ramp rate, ACWR, Recovery Index, Hours, TSS
 5. Overall: coach note, 2–4 sentences: compliance, quality observations, load context, recovery note
 
@@ -183,6 +183,8 @@ Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete session fi
 **Pre-workout reports** must include: readiness (HRV, RHR, Sleep vs baselines), load context (TSB, ACWR, Monotony if > 2.3), capability snapshot (durability 7d + trend, TID drift if not consistent), today's planned workout, and a Go / Modify / Skip recommendation.
 
 ## RULES
+
+- Whole-session average power and NP never establish main-set power, in reports, comparison or prescription. Read `recent_activities[].structure_summary`: compare the same identified windows and keep targets separate from actuals. Check method/status and issues. Load `intervals.json` for detailed analysis when `has_structure: true`; its `session_structure` carries window metrics. An expired full block leaves a last-captured summary, not a fresh verification. Thirds/WORK efforts are descriptive; broad window agreement is not formal adherence. If the required structure or role is unavailable, say so and obtain it.
 
 - Follow the Section 11 validation checklist (Step 0: Data Source Fetch)
 - Every training metric cited (watts, duration, TSS, HR, zones) must come from a data read in the current response. No data read, no number. Conversation history and memory are not data sources

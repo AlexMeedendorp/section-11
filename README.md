@@ -557,9 +557,17 @@ The script generates `history.json` with tiered granularity: daily (90 days), we
 
 The script maintains `ftp_history.json` to track indoor and outdoor FTP changes over time, enabling Benchmark Index calculation. See [examples/json-auto-sync/SETUP.md](examples/json-auto-sync/SETUP.md#ftp-history-tracking) for details.
 
+### Completed Session Structure
+
+`latest.json` carries a compact `structure_summary` for each recent activity: plan-match status and ordered duration, target, actual mean power and match rows. Summaries survive for the existing 28-day activity window. `has_structure` points to detailed `session_structure` in `intervals.json` within its 14-day retention; after expiry the last summary is carried forward without stream refetches. Unknown and no-plan are distinct. Whole-session average power and NP remain aggregate context, never main-set power.
+
+The full block retains window power, observed kJ, HR, cadence, coverage and zero-power share, plus a minimal paired-event reference. Thirds and upstream WORK efforts appear only without usable step windows. Refresh bookkeeping stays with this block, so GitHub Actions needs no separate state file. Within retention, unchanged blocks refresh within 24 hours; cache hits add no requests. No per-step calls or FIT downloads. See [Completed Session Structure](SECTION_11.md#completed-session-structure) for plan-match rules, retention limits and the separate unchanged compliance contract.
+
+Flat planned steps now receive summaries. Post-workout reports include walk distance and recorded ascent for walks, runs and rides indoors and outdoors, in display units; ascent is descriptive and source-dependent.
+
 ### Interval-Level Data
 
-The script generates `intervals.json` with per-interval segment data (power, HR incl. min, cadence, zone, timing, W'bal start/end) for recent structured sessions, plus per-session DFA a1 rollups when AlphaHRV recorded. Activities in `latest.json` carry two independent flags: `has_intervals: true` (structured segments) and `has_dfa: true` (AlphaHRV session). Either flag indicates an entry in `intervals.json`. Incrementally cached with a 72h scan window and 14-day retention. Only activities in whitelisted sport families (cycling, run, ski, rowing, swim) with either detected interval structure or AlphaHRV data are included. Note that Intervals.icu emits a whole-session `RECOVERY` placeholder on many unstructured activities, which counts as "detected structure" for inclusion but sets neither flag; follow `has_intervals` / `has_dfa`, not the presence of an entry.
+The script generates `intervals.json` with per-interval segment data (power, HR incl. min, cadence, zone, timing, W'bal start/end) for recent structured sessions, plus per-session DFA a1 rollups when AlphaHRV recorded. For these payloads, activities in `latest.json` carry two independent flags: `has_intervals: true` (structured segments) and `has_dfa: true` (AlphaHRV session). Either flag indicates an entry in `intervals.json`. Incrementally cached with a 72h scan window and 14-day retention. Interval/DFA payloads cover whitelisted sport families (cycling, run, ski, rowing, swim). Structure-only entries may cover any activity type and use the independent `has_structure` flag. Note that Intervals.icu emits a whole-session `RECOVERY` placeholder on many unstructured activities, which counts as "detected structure" for inclusion but sets neither flag; follow `has_intervals` / `has_dfa` / `has_structure`, not the presence of an entry.
 
 ### Route & Terrain Data
 

@@ -160,10 +160,11 @@ alternating emitters assign no step role such as `rec`, however the targets
 compare; an expansion oracle turns each summary back into ordered duration and
 target steps and compares them with the synthetic `workout_doc`, so a dropped
 step, a lost target or a reordering fails; the flat detector no longer skips the
-step after a trailing rep. It also pins that the change is rendering only: which
-workouts get a summary, the `×` / `sets` markers, `workout_summary_stats`,
-`hard_sessions_planned` and the near/far tier fields equal constants captured from
-v3.133, and the fictional `latest.example.json` interval summaries equal what the
+step after a trailing rep. Explicit v3.141 cases add ordered flat summaries and
+their telemetry, while repeat availability, compression and hard-session markers
+stay pinned. `hard_sessions_planned` remains equal to constants from v3.133.
+New flat summaries remove the need for a far-tier description preview; missing
+documents still exercise that fallback. The fictional `latest.example.json` interval summaries equal what the
 producer emits. Content the renderer cannot show (a step without a duration, a
 repeat block it cannot compress, the unmatched final child of a nested repeat, a
 target it cannot print as W or bpm: a relative unit, range bounds, an empty or
@@ -251,11 +252,17 @@ work with low supra time, and value-dependent loss that passes the numerical
 screens despite bias. These are regression and limitation tests, not physiological
 validation or evidence that the thresholds generalize to all recordings.
 
+## Completed-session structure
+
+`test_session_structure.py` uses synthetic activity/event/stream data to test exact pairing, resolved power bands versus genuine ramps, recording pauses, per-step coverage, zero versus missing data, current-plan comparison, repeated short-recovery sets and the bounded lag alignment in SECTION_11. Controls cover the exact step-start exclusion, offset ties/bounds/additive shifts, shortened recordings versus clipped lagged measurements, unsupported atoms and output caps. It also tests persisted cache reuse, expiry, revisions, late/changed/deleted plans, stale failures, Retry-After and request counts. Placement tests persist only latest.json and intervals.json between runs, exercise the retention boundary and summary carry-forward through day 28 without refetch, preserve interval/DFA flags and retry state, verify dropped-field absence and exclude Walk/Hike structure while retaining other-sport fallback. A structure-only entry cannot suppress an initial interval/DFA fetch. The network guard has a direct negative control. No private athlete fixture or FIT file is committed.
+
+`test_workout_summary.py` keeps its independent expansion oracle and repeat regression constants, with explicit v3.141 flat-list availability changes. Formal adherence, independently verified outdoor boundaries and physiological validity are not validated by these tests.
+
 ## Not covered
 
 Everything else. No report generation, and no `sync.py`
 surface outside per-endpoint fetch state, HTTP policy, the `history.json` refresh
-gate, the DFA producer paths above, the `--init` and `--update` distribution rules and the `workout_summary` renderer with its report-template field contract. `push.py` write paths are
+gate, the completed-session structure paths above, the DFA producer paths above, the `--init` and `--update` distribution rules and the `workout_summary` renderer with its report-template field contract. `push.py` write paths are
 covered for their transport behaviour and outcome classification only, not for
 their validation rules or their calendar semantics. Treat this as focused regression guards, not as
 coverage of the repository.

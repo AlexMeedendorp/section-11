@@ -1,9 +1,48 @@
 # Post-Workout Report Examples
 
 > Anonymized examples showing standard post-workout report format.  
-> See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference.
+> See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference. Legacy examples do not supply recorded elevation, so Ascent is omitted. Missing matched-step data is stated explicitly; aggregate numbers are preserved. The fictional field excerpts below illustrate the new producer contract without inventing step actuals for those legacy reports.
 
 ---
+
+## New-field excerpts (fictional, not full reports)
+
+These independent synthetic records illustrate display values and branch/status wording. They do not revise the historical examples below. A production report includes the remaining applicable session fields and weekly totals. Ascent values are the recorded display values, not calculated from route density or compared across sources.
+
+```text
+Completed workout: VirtualRide Stepped endurance
+Duration: 45m (planned 45m)
+Distance: 22.00 km
+Ascent: 0 m
+Power (whole session): 152 W avg / 156 W NP
+Executed structure: paired_plan_windows, followed; measured 0:01–10:00 target 120 W, actual 119 W; 10:01–30:00 target 180 W, actual 179 W; 30:01–45:00 target 140 W, actual 139 W; all windows agree, 100% power coverage. Roles unspecified; formal adherence unavailable
+
+Completed workout: Ride Free road ride
+Duration: 1h
+Distance: 30.00 km
+Ascent: 180 m
+Power (whole session): 180 W avg / 205 W NP
+Executed structure: fixed_elapsed_thirds, no_plan; three 20m descriptive windows: 170 / 180 / 190 W, 100% power coverage; upstream detected WORK effort shown separately
+
+Completed workout: Walk Morning walk
+Duration: 30m
+Distance: 2.50 km
+Ascent: 45 m
+
+Completed workout: VirtualRun Indoor run
+Duration: 30m
+Distance: 3.10 mi
+Ascent: 0 ft
+Executed structure: fixed_elapsed_thirds, no_plan; power unavailable
+
+Completed workout: Run Outdoor run
+Duration: 40m
+Distance: 6.00 km
+Ascent: 70 m
+Executed structure: fixed_elapsed_thirds, no_plan; power unavailable
+```
+
+The same ascent rule applies to indoor walks and all ride/run types. When `display.elevation` is null, omit Ascent; a recorded zero remains visible. Walk/Hike omit Executed structure. Shortened or partly-followed windows must distinguish original planned amount from measured time, each agreement flag and any unobserved steps. A not-followed plan uses descriptive fallback and does not present projected step actuals as execution. A synthetic set descriptor `[8,30,10]` can be reported as “8 × 30 s, measured work 232 s, target 280 W, actual 279 W, match true”; it is not 232 seconds of continuous work.
 
 ## Example 1: Clean Endurance Day (Multi-Session)
 
@@ -16,7 +55,8 @@ Completed workout: VirtualRide Endurance - Wednesday
 Start time: 09:30:15
 Duration: 2h30m (planned 2h30m)
 Distance: 76.42 km
-Power: 155 W avg / 156 W NP
+Power (whole session): 155 W avg / 156 W NP
+Executed structure: unavailable in this legacy example; step-power adherence not established
 IF: 0.57
 Power zones: 12% Zone 1, 88% Zone 2
 Grey Zone (Z3): 0%
@@ -37,6 +77,7 @@ RPE: 3/10
 Completed workout: VirtualRowing Recovery Session
 Start time: 12:45:00
 Duration: 15m
+Executed structure: no matched plan windows supplied
 HR: 125 avg / 141 max
 HR zones: 68% Zone 1, 32% Zone 2
 Calories: 165 kcal
@@ -59,7 +100,7 @@ Hours: 12h24m
 TSS: 410
 
 Interpretation:
-Both sessions compliant with plan. Bike decoupling 2.14% over 2h30m shows solid aerobic control.
+Planned bike duration was completed; step-power adherence is not established here. Bike decoupling 2.14% over 2h30m shows solid aerobic control.
 Rowing stayed in Z1-Z2 as prescribed. Load tracking well. TSB manageable heading into Thursday.
 
 Tomorrow: Endurance 2h15m, 1h30m @173W + SkiErg 10m Z2 HR
@@ -78,7 +119,8 @@ Completed workout: Ride Training Session
 Start time: 09:42:18
 Duration: 5m
 Distance: 1.80 km
-Power: 72 W avg / 128 W NP
+Power (whole session): 72 W avg / 128 W NP
+Executed structure: unavailable in this legacy example
 IF: 0.49
 HR: 112 avg / 124 max
 TSS: 2
@@ -91,7 +133,8 @@ Completed workout: Ride Training Session
 Start time: 10:05:33
 Duration: 2h12m (planned 2h00m)
 Distance: 58.37 km
-Power: 142 W avg / 162 W NP
+Power (whole session): 142 W avg / 162 W NP
+Executed structure: unavailable in this legacy example; whole-session zones remain descriptive
 IF: 0.66
 Power zones: 30% Zone 1, 36% Zone 2, 23% Zone 3, 9% Zone 4, 2% Zone 5
 Grey Zone (Z3): 23%
@@ -113,6 +156,7 @@ Effort response: neutral
 Completed workout: VirtualSki SkiErg
 Start time: 13:28:00
 Duration: 12m (planned 10m)
+Executed structure: no matched plan windows supplied
 HR: 128 avg / 142 max
 HR zones: 65% Zone 1, 35% Zone 2
 Calories: 118 kcal
@@ -122,6 +166,7 @@ Completed workout: Walk Training Session
 Start time: 15:10:22
 Duration: 38m
 Distance: 3.40 km
+Executed structure: no matched plan windows supplied
 HR: 82 avg / 98 max
 HR zones: 100% Zone 1
 Calories: 156 kcal
@@ -160,13 +205,14 @@ Tomorrow: Threshold 1h15m, 3×10m @245W
 ```
 Data (last_updated UTC: 2026-01-17T18:05:33)
 
-Completed threshold intervals as scheduled. Power targets hit, HR response appropriate.
+Threshold session recorded at the planned total duration. Matched step-power data is unavailable.
 
 Completed workout: VirtualRide 3x12min Threshold - Friday
 Start time: 08:15:42
 Duration: 1h30m (planned 1h30m)
 Distance: 48.23 km
-Power: 178 W avg / 205 W NP
+Power (whole session): 178 W avg / 205 W NP
+Executed structure: unavailable in this legacy example; three planned efforts do not establish three executed steps
 IF: 0.80
 Power zones: 28% Zone 1, 31% Zone 2, 3% Zone 3, 33% Zone 4, 4% Zone 5, 1% Zone 6
 Grey Zone (Z3): 3%
@@ -203,8 +249,8 @@ Hours: 14h45m
 TSS: 485
 
 Interpretation:
-Interval targets met: all three efforts within ±3W of prescribed power. Z3 at 3% is
-from warm-up/cool-down transitions, not drift. Decoupling (3.82%) is not interpretable on an
+The whole-session power does not establish whether the three step targets were met. Z3 at 3% is
+an aggregate distribution; step roles cannot be reconstructed from it. Decoupling (3.82%) is not interpretable on an
 interval session at VI 1.15. TSB at -11.40 reflects build week loading. Recovery spin tomorrow. 🔄
 ```
 
@@ -221,7 +267,8 @@ Completed workout: VirtualRide Endurance - Monday (modified)
 Start time: 10:02:18
 Duration: 1h30m (planned 2h30m)
 Distance: 45.14 km
-Power: 148 W avg / 149 W NP
+Power (whole session): 148 W avg / 149 W NP
+Executed structure: ride shortened; matched step windows unavailable in this legacy example
 IF: 0.56
 Power zones: 19% Zone 1, 81% Zone 2
 Grey Zone (Z3): 0%
@@ -275,6 +322,7 @@ Completed workout: Walk Training Session
 Start time: 14:30:08
 Duration: 1h
 Distance: 5.10 km
+Executed structure: no matched plan windows supplied
 HR: 78 avg / 96 max
 HR zones: 100% Zone 1
 Calories: 210 kcal
@@ -317,7 +365,8 @@ Completed workout: Ride Long Endurance - Saturday
 Start time: 09:15:00
 Duration: 4h12m (planned 4h00m)
 Distance: 118.50 km
-Power: 168 W avg / 171 W NP
+Power (whole session): 168 W avg / 171 W NP
+Executed structure: continuous easy/endurance confirmed by the supplied scenario context; plan-window mapping unavailable
 IF: 0.71
 Power zones: 18% Zone 1, 78% Zone 2, 4% Zone 3
 Grey Zone (Z3): 4%
@@ -376,13 +425,14 @@ Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficie
 ```
 Data (last_updated UTC: 2026-02-10T11:45:00)
 
-Sweet spot intervals on plan; DFA a1 confirms internal intensity matched the prescription.
+Sweet spot session recorded; DFA a1 describes the internal response to the intended intensity.
 
 Completed workout: VirtualRide 4x10min Sweetspot - Tuesday
 Start time: 09:00:00
 Duration: 1h25m (planned 1h25m)
 Distance: 42.85 km
-Power: 195 W avg / 215 W NP
+Power (whole session): 195 W avg / 215 W NP
+Executed structure: matched work-step actuals unavailable in this legacy example
 IF: 0.79
 Power zones: 22% Zone 1, 28% Zone 2, 8% Zone 3, 38% Zone 4, 3% Zone 5, 1% Zone 6
 Grey Zone (Z3): 8%
@@ -420,7 +470,7 @@ Hours: 8h12m
 TSS: 295
 
 Interpretation:
-Clean sweet spot session. Power on target across all four intervals, DFA a1 sat predominantly
+Step-power adherence is not established by these aggregates. DFA a1 sat predominantly
 in the 0.5–0.75 tempo band (44%) where sweet spot work should land per the protocol
 threshold mapping; internal intensity matched prescription. Drift +0.04 is descriptive only
 because the recording is under 90 minutes; the 3% supra share does not trigger the supra
@@ -437,7 +487,7 @@ Tomorrow: Endurance 2h, Z2 steady
 ```
 Data (last_updated UTC: 2026-02-17T10:30:00)
 
-Post-deload threshold session executed to prescription; RPE came in notably low for the IF achieved. Fitness/freshness tell.
+Post-deload threshold session recorded; RPE came in notably low for the IF achieved. Fitness/freshness tell.
 
 Outdoor context: flat route (3 m/km), breezy cold conditions; thermal cost notable.
 
@@ -445,7 +495,8 @@ Completed workout: Ride 4x10min Threshold - Tuesday
 Start time: 08:30:00
 Duration: 1h30m (planned 1h30m)
 Distance: 47.20 km
-Power: 210 W avg / 238 W NP
+Power (whole session): 210 W avg / 238 W NP
+Executed structure: matched work-step actuals unavailable in this legacy example
 IF: 0.88
 Power zones: 16% Zone 1, 22% Zone 2, 5% Zone 3, 52% Zone 4, 4% Zone 5, 1% Zone 6
 Grey Zone (Z3): 5%

@@ -28,12 +28,14 @@ Session Breakdown:
 
 Quality Session Detail:
   Sweetspot 2x20:
-    Target: 248W | Actual: 251W avg / 254W NP
+    Target: 248W | Matched-step actual: unavailable in this example
+    Power (whole session): 251W avg / 254W NP
     Decoupling: 2.14%
     VI: 1.01 (good)
     HR: 158 avg / 167 max
   VO2max 5x4min:
-    Target: 310W | Actual: 306W avg / 315W NP
+    Target: 310W | Matched-step actual: unavailable in this example
+    Power (whole session): 306W avg / 315W NP
     Decoupling: 4.82%
     VI: 1.03 (good)
     HR: 168 avg / 178 max
@@ -85,15 +87,15 @@ Wellness Trends:
 Section 11 Flags: None
 
 Interpretation:
-Strong compliance week: all six sessions completed as planned. Both
-quality sessions hit targets: sweetspot power slightly above target with
-excellent pacing (VI 1.01), and VO2max intervals within 2% of target
-despite being end of a build week. Grey zone well controlled at 3%.
+All six scheduled sessions were recorded. The supplied whole-session metrics cannot establish
+step-power adherence for either quality session; obtain the paired plan and matched actuals
+before a progression decision. Low whole-session VI does not identify the work windows
+or prove their pacing. Grey zone was 3%.
 TSB drifting slightly negative but manageable heading into week 3.
 
 Next Week Preview:
-Week 3 is peak load before deload. Tuesday sweetspot extends to 2x25,
-Thursday VO2max adds a 6th interval. Sunday long ride targets 4h30m.
+Week 3 is peak load before deload. Proposed Tuesday sweetspot 2x25 and
+Thursday's sixth VO2max interval require the separate verified completion/adherence gate. Sunday long ride targets 4h30m.
 Monitor HRV early in the week; if it drops below 45ms, consider
 modifying Thursday's session.
 ```
@@ -123,7 +125,8 @@ Session Breakdown:
 
 Quality Session Detail:
   Tempo 3x15 (modified to 2x15):
-    Target: 235W | Actual: 228W avg / 232W NP
+    Target: 235W | Matched-step actual: unavailable in this example
+    Power (whole session): 228W avg / 232W NP
     Decoupling: 6.24%
     VI: 1.02 (good)
     HR: 155 avg / 164 max
@@ -202,6 +205,6 @@ for week 5.
 
 - **Example 1** shows a clean week: brief flags section, concise overall
 - **Example 2** shows how the template handles real-world disruptions: modifications, flags, and adaptive planning
-- **Quality Session Detail** only appears for intensity sessions; endurance/recovery rides are covered in the Session Breakdown. Cap at 2–3 per week; if 4+ hard days occurred, prioritize the most notable sessions
+- **Quality Session Detail** may also include structured endurance where the actual work matters. The historical aggregate values above are preserved, not relabelled as step actuals. Cap at 2–3 per week; if 4+ hard days occurred, prioritize the most notable sessions
 - **Wellness arrows with labels** make trends immediately actionable without requiring the athlete to interpret raw numbers
 - **Section 11 Flags** surfaced in the weekly report, not deferred to block report

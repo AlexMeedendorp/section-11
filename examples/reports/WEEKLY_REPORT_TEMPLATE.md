@@ -34,12 +34,16 @@ Session Breakdown:
 
 Quality Session Detail:
   [Session 1 name]:
-    Target: [XXX]W | Actual: [XXX]W avg / [XXX]W NP
+    Matched step/window: [identity and elapsed bounds; method/status, or unavailable]
+    Target: [XXX]W | Actual mean in that window: [XXX]W [only when supported]
+    Power (whole session): [XXX]W avg / [XXX]W NP
     Decoupling: [X.XX]%
     VI: [X.XX] ([assessment])
     HR: [XXX] avg / [XXX] max
   [Session 2 name]:
-    Target: [XXX]W | Actual: [XXX]W avg / [XXX]W NP
+    Matched step/window: [identity and elapsed bounds; method/status, or unavailable]
+    Target: [XXX]W | Actual mean in that window: [XXX]W [only when supported]
+    Power (whole session): [XXX]W avg / [XXX]W NP
     Decoupling: [X.XX]%
     VI: [X.XX] ([assessment])
     HR: [XXX] avg / [XXX] max
@@ -117,7 +121,7 @@ focus areas. Reference load targets and phase progression.]
 | Field | Source | Notes |
 |-------|--------|-------|
 | **Compliance** | Planned vs completed activities | ✅ completed as planned, ⚠️ modified, ❌ missed |
-| **Quality Session Detail** | Hard/intensity sessions only | Matches post-workout report metrics for consistency. Decoupling is interpreted or labelled only when the session passes the per-session gate (≥ 90 min with VI ≤ 1.05 and > 0); otherwise show the value without drift interpretation |
+| **Quality Session Detail** | Key intensity or structured endurance sessions relevant to the comparison | Read structure_summary in latest.json; load intervals.json's session_structure only when detailed analysis is needed and has_structure is true. Compare the same identified step/window; state unavailable mapping rather than substituting session average/NP. Follow the separate formal compliance gate. Whole-session fields remain load context. Decoupling is interpreted or labelled only when the session passes the per-session gate (≥ 90 min with VI ≤ 1.05 and > 0); otherwise show the value without drift interpretation |
 | **Grey Zone %** | Z3 time / total time | Per Seiler: minimize; target <5% of weekly volume |
 | **Quality Intensity %** | Z4+ time / total time | The work that drives adaptation |
 | **TID 7d vs 28d** | Seiler classification comparison | Consistent = stable, shifting = classification changed, acute_depolarization = PI dropped |
@@ -153,7 +157,7 @@ focus areas. Reference load targets and phase progression.]
 
 - **Session Breakdown** starts on Monday (or user's configured week start)
 - **Phase narrative** is constructed from `phase_detection` fields: `phase_detection.phase` + `phase_detection.phase_duration_weeks` + `phase_detection.confidence`. If `phase_detection.previous_phase` differs from current phase, add transition note. Optionally surface 1-2 key `reason_codes` in plain English (e.g., `BUILD_HISTORY_REDUCED_LOAD_REBOUND_CONFIRMED` → "load resumed after deload")
-- **Quality Session Detail** only includes hard/intensity sessions. Omit recovery/endurance rides unless metrics were notable. Cap at 2–3 key sessions per week; if 4+ hard days occurred, prioritize sessions with the most notable targets, flags, or breakthroughs
+- **Quality Session Detail** includes intensity sessions and structured endurance when its actual work matters to a comparison or prescription. Cap at 2–3 key sessions per week; if 4+ hard days occurred, prioritize sessions with the most notable targets, flags, or breakthroughs
 - **HRRc**: four display cases: (1) 28d ≥ 3 and 7d ≥ 1: full trend line `[XX] bpm 7d mean([X]) / [XX] bpm 28d mean([X]) ([trend])`; (2) 28d ≥ 3 and 7d = 0: `[XX] bpm 28d mean([X]) — 7d: no data`; (3) 28d < 3 and 7d ≥ 1: `[XX] bpm 7d mean([X]) — 28d: insufficient data`; (4) 28d < 3 and 7d = 0: omit entire section. Per-session HRRc can still appear in Quality Session Detail when present. HRRc is context-dependent: varies with exercise intensity, type, and when recording stopped. Trend direction over multiple sessions matters; single-session values are noisy
 - **Section 11 Flags** should surface immediately in weekly reports, not deferred to block reports
 - **Wellness arrows** use simple thresholds: >5% change from previous week = ↑ or ↓, otherwise →
