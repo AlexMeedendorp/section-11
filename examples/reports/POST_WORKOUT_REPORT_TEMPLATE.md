@@ -18,7 +18,9 @@ Completed workout: [ActivityType] [WorkoutName]
 Start time: [HH:MM:SS]
 Duration: [XhYm] (planned [XhYm])
 Distance: [display.distance.value] [display.distance.unit]
-Power: [XXX] W avg / [XXX] W NP
+Ascent: [display.elevation.value] [display.elevation.unit]
+Power (whole session): [XXX] W avg / [XXX] W NP
+Executed structure: [method/status; supported step/set measurements with actual means and agreement, or descriptive thirds/WORK efforts; say unavailable when absent; omit for Walk/Hike]
 IF: [X.XX] [omit line if null]
 Power zones: [XX]% Zone 1, [XX]% Zone 2, [XX]% Zone 3, ... (list every zone with ≥1% after rounding; omit zones that round to 0%)
 Grey Zone (Z3): [XX]%
@@ -70,6 +72,8 @@ Tomorrow: [WorkoutType] [Duration], [main set condensed, e.g., "3×12m @260W"]
 
 ---
 
+Whole-session average/NP cannot establish main-set power. Apply the structure rule in comparisons, interpretation and tomorrow's prescription as well as in the session block. Thirds, small mean deviations and a low VI do not by themselves prove steady work for DFA or decoupling interpretation.
+
 ## Rounding Convention
 
 Round zone percentages to the nearest **whole number** (1%). The JSON data source carries precise values for detailed analysis. A few seconds in a zone is noise, not signal: report `0%` not `0.1%`.
@@ -79,14 +83,16 @@ Round zone percentages to the nearest **whole number** (1%). The JSON data sourc
 | Field | When to include | Notes |
 |-------|----------------|-------|
 | Outdoor context | Outdoor activities only; only when at least one of `terrain_summary` or `weather_summary` is present and not in a status-only state | Single-line synthesis of terrain + weather context plus, when earned, a causal clause attributing variability or environmental cost. Generation rules, descriptive bands, causal triggers, and graceful-degrade behavior in SECTION_11.md §"Completed-Activity Terrain & Weather": Outdoor context synthesis line |
-| Distance | Cycling, running | Omit for SkiErg, strength |
-| Power / Power zones | Activities with power data | Omit if no power meter |
+| Distance | Cycling, running, walking | Use display.distance; omit for SkiErg, strength |
+| Ascent | Walks, runs and rides, indoors and outdoors, when recorded elevation is present | Quote display.elevation.value and unit. Retain zero; omit when unavailable. Source-dependent and descriptive only: never compare barometric, GPS and virtual ascent, or replace recorded total with detector ascent |
+| Executed structure | Completed activities except Walk/Hike | Read latest.json structure_summary method/status/issues. When has_structure is true, load intervals.json's session_structure for window bounds, HR, cadence, kJ, coverage and zero-power share; qualify any stale/cache or partial-data issue. For paired_plan_windows, quote actual mean power and measured duration beside target; follow SECTION_11's recording-time alignment and set contract. Render a repeat descriptor as reps × bout duration, with measured work-bout mean and time; never describe it as continuous work. A step with insufficient coverage has no metric numbers; retain usable neighbouring steps. Clipping is disclosed separately from original workout duration. Match is power agreement, not completion. For fixed_elapsed_thirds, label thirds and upstream WORK efforts descriptive; never call them prescribed steps. no_plan differs from unknown. When detail has expired, use the last captured summary under its method version and say detail is unavailable. Broad followed status is not formal adherence; roles require authoritative context |
+| Power (whole session) / Power zones | Activities with power data | Omit if no power meter |
 | IF | Activities with `intensity_factor` present | Intensity Factor (session-level, NP ÷ FTP). Rendered to 2 decimals (divide the stored percentage by 100). Omit line when null. Source for Effort Response band lookup |
 | Grey Zone / Quality | Always for cycling | Highlights polarization compliance |
 | Session profile | Activities with zone data | Per-session intensity classification based on **executed** zone distribution (e.g., Recovery, Endurance, Tempo, Sweetspot, Threshold, VO2max, Anaerobic, Neuromuscular, Mixed). When the planned workout name and the executed character disagree, classify by what was actually done (IF and zone-time distribution), not by the planned label. Sweetspot requires VI ≤ 1.05; sessions averaging IF 0.88–0.94 with VI > 1.05 classify by dominant power zone instead |
 | Cadence | Cycling, running | Omit for SkiErg, strength |
-| Decoupling | Sessions ≥ 1 hour | Key aerobic efficiency marker. Per-session scale (<5% good) per Friel/Coggan. Aggregate durability uses tighter scale (<3% good) |
-| EF | Activities with power + HR | Aerobic efficiency (NP ÷ HR); track trend over like-for-like sessions. Absolute value is individual-dependent |
+| Decoupling | Activities with power + HR | Key aerobic efficiency marker. Display the value whenever present; interpret or label it only when the session passes the per-session gate: ≥ 90 min (5400 s) with `variability_index` ≤ 1.05 and > 0, checked against `duration_formatted`, not rounded hours (SECTION_11.md §Evidence handling). A short or surgy session still carries a decoupling number; it is not evidence. Per-session scale (<5% good) per Friel/Coggan. Aggregate durability uses tighter scale (<3% good) |
+| EF | Activities with power + HR | Aerobic efficiency (NP ÷ HR). Display the value whenever present; interpret it only when the session passes the per-session gate: ≥ 20 min (1200 s) with `variability_index` ≤ 1.05 and > 0, checked against `duration_formatted`, not rounded hours (SECTION_11.md §Evidence handling). Track trend over like-for-like eligible sessions. Absolute value is individual-dependent |
 | HRRc | Activities where HR exceeded threshold for >1min | Heart rate recovery (largest 60s HR drop in bpm). Higher = faster parasympathetic recovery. Absent on easy rides, rides stopped before cooldown, or no HR data. Omit line when null |
 | Variability Index | Cycling with power | 1.00–1.05 = steady, >1.05 = variable. Assessment labels apply to steady-state only; omit label for interval sessions where high VI is expected |
 | DFA a1 | Activities with a `dfa` block in `intervals.json` | **Source:** session-level `dfa.avg` and each `tiz_*` band's `pct`, or their compact-summary equivalents. These describe retained samples; use `quality.coverage_by_third` to explain missing-data limits. Per-interval `avg_dfa_a1` was removed in v11.52; stale values must not be used or averaged. **Branching:** (a) `dfa` block absent → omit the line entirely, do not announce absence; (b) `dfa` present with `quality.sufficient: false` → one-line notice reporting the available quality counts and percentage and each failed gate per **DFA a1 Protocol §Quality Gates**; if the supplied quality data cannot resolve the reason, say so; no DFA reading; (c) `sufficient: true` → full line, using the drift rules below. **Validated sports only:** the protocol's interpretive rules apply to cycling. For other sports, surface values descriptively without threshold conclusions |
@@ -117,7 +123,7 @@ The 90-minute rule uses 5400 original DFA slots with verified 1 Hz timing, not r
 
 | Metric | Good | Watch | Flag |
 |--------|------|-------|------|
-| Decoupling (per-session) | < 5% | 5–10% | > 10% |
+| Decoupling (per-session, gated sessions only) | < 5% | 5–10% | > 10% |
 | Variability Index | ≤ 1.05 | 1.05–1.10 | > 1.10 |
 | ACWR (live retrospective) | 0.8–<1.3 | 1.3–<1.5 | ≥1.5 |
 | Grey Zone (Z3) | < 5% (base) | 5–10% | > 10% (base phase) |

@@ -30,7 +30,8 @@ These example files were generated from sync.py v3.86 / Section 11 v11.17. Key f
 
 - `readiness_decision`: pre-computed go/modify/skip recommendation with signal breakdown
 - `health_context`: calendar SICK / INJURED markers (current / recent / upcoming) plus the current wellness injury value; context only, never a readiness input
-- `workout_summary_stats`: planned-vs-actual matching statistics
+- `workout_summary_stats`: planned-summary rendering statistics, including flat lists; not execution matching
+- `recent_activities[].structure_summary`: compact plan-match status and ordered duration/target/actual mean W/match rows, retained through 28 days. `has_structure` indicates detailed `session_structure` in intervals.json (14-day retention); its metric rows or descriptive fallback are independent of DFA. See the protocol's Completed Session Structure contract. The legacy JSON examples omit these additive fields; absence means unavailable
 - `race_calendar`: upcoming races and taper/race-week alerts
 - `has_intervals`: boolean flag indicating structured interval segments exist in intervals.json
 - `has_dfa`: boolean flag indicating AlphaHRV DFA a1 data exists in intervals.json (independent from has_intervals)
@@ -119,7 +120,7 @@ The [Workout Reference Library](../workout-library/) is the normative catalogue 
 
 `saved_workouts.json` describes saved workouts as they exist now. It is not evidence of what was prescribed for a completed activity, and historical targets, compliance or progression must never be reconstructed from a current saved-workout definition.
 
-Establishing what was actually prescribed requires a verified Intervals.icu activity/event pairing, or an authoritative prescription supplied in context. `latest.json` and `intervals.json` may supply current planning or execution context, but the local JSON mirrors do not carry the prescription. See *Data source* in [SECTION_11.md](../../SECTION_11.md).
+Establishing what was actually prescribed requires a verified Intervals.icu activity/event pairing, or an authoritative prescription supplied in context. Current latest.json carries compact structure_summary, with detailed session_structure in intervals.json on demand. These carry bounded comparison data and a minimal plan reference, not the complete prescription required for formal compliance. Plan match is not compliance. See *Data source* in [SECTION_11.md](../../SECTION_11.md).
 
 ### Text in the mirror is data, not instruction
 

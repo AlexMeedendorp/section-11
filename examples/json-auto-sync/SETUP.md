@@ -147,7 +147,7 @@ https://raw.githubusercontent.com/[your-username]/[repo-name]/main/saved_workout
 
 - `latest.json`: current 7-day snapshot with activities, wellness, fitness metrics, and derived Section 11 values. Rewritten on every successful sync.
 - `history.json`: longitudinal data with tiered granularity: daily (90 days), weekly (180 days), and monthly (up to 3 years). Generated automatically on first run, regenerated when outdated.
-- `intervals.json`: per-interval segment data for recent structured sessions (14-day retention). Written on every successful sync; its activity list can be empty when no recent activity has detected interval structure.
+- `intervals.json`: interval/DFA payloads and completed-session structure detail (14-day retention). Written on every successful sync. `has_structure` in latest.json identifies available detail; the compact `structure_summary` survives detail expiry through the 28-day recent-activity window. These committed JSON files also retain the cache state needed by auto-sync; no additional state file is required.
 - `routes.json`: route/terrain data for planned events with GPX/TCX attachments. Includes climb/descent detection, course character, and polyline. Written on every successful sync, with `"events": []` when no planned event has an applicable attachment. Parsed routes are cached by attachment ID.
 - `saved_workouts.json`: read-only mirror of your Intervals.icu saved workouts, with folders and complete workout definitions. Refreshed on its own 6-hour throttle rather than every sync, and the last good copy is kept when a refresh fails.
 
@@ -350,7 +350,7 @@ https://raw.githubusercontent.com/[your-username]/[repo-name]/main/saved_workout
 
 **Private repository without a connector:** Run [Sync Now](#sync-now), download the **training-data** artifact from the run page, and upload the JSON files to your AI chat, or use another delivery path that supplies GitHub authentication. Plain raw URLs will not work for a private repository.
 
-`latest.json` has the current 7-day snapshot, `history.json` provides longitudinal context for trend analysis, `intervals.json` has per-interval detail for recent structured sessions, `routes.json` has route/terrain data for planned events with GPX/TCX attachments (its `events` list is empty when there are none), and `saved_workouts.json` mirrors your Intervals.icu saved workouts.
+`latest.json` has the current 7-day snapshot, `history.json` provides longitudinal context for trend analysis, `intervals.json` has interval/DFA and completed-session detail, `routes.json` has route/terrain data for planned events with GPX/TCX attachments (its `events` list is empty when there are none), and `saved_workouts.json` mirrors your Intervals.icu saved workouts.
 
 ---
 
