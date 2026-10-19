@@ -78,7 +78,7 @@ For each segment on the route, compile for the coaching layer:
 
 ## 2. yr.no (MET Norway)
 
-The Norwegian Meteorological Institute provides free, high-quality weather forecasts with global coverage. Primary source for wind direction, speed, temperature, and precipitation in pre-ride weather assessment.
+The Norwegian Meteorological Institute provides global forecasts. For sync.py's default-on route weather this is the explicitly labelled fallback to Open-Meteo, used only when no fresh primary point forecast is available. See README for off switches/privacy and SECTION_11 Weather Data Source for lead-time tiers and request limits.
 
 ### Authentication
 
@@ -92,7 +92,7 @@ GET https://api.met.no/weatherapi/locationforecast/2.0/complete
   &lon={longitude}
 ```
 
-Returns JSON forecast for the next ~9 days at the specified coordinates. The `complete` endpoint includes `probability_of_precipitation`; the lighter `compact` endpoint does not.
+Returns GeoJSON with `properties.meta` and `properties.timeseries`. The `complete` endpoint can include `probability_of_precipitation`; availability, gusts and hourly periods vary by region and horizon. Missing fields stay unknown. sync.py also sends integer `altitude` and coordinates rounded to four decimals.
 
 ### Key Fields
 
@@ -114,13 +114,14 @@ From `data.next_1_hours`:
 
 - Fetch for the ride area at the planned ride time. For long routes, consider fetching for multiple points along the course
 - Cache responses; MET Norway returns `Expires` and `Last-Modified` headers. Do not re-fetch until the cached response expires
-- Creative Commons 4.0 BY license. Attribution required: "Data from MET Norway"
+- Retain a validated `Last-Modified` value for `If-Modified-Since`; 304 reuses cached content. sync.py accepts at most two redirect hops on the same HTTPS host within Locationforecast 2.0, each counted in its eight-request budget
+- [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) attribution: "Data from [MET Norway](https://api.met.no/) (fallback); sampled and summarized by Section 11". Keep the licence link beside displayed data
 
 ---
 
 ## 3. Open-Meteo
 
-Open-Meteo provides free weather forecasts with no API key required. Aggregates multiple models (ECMWF, GFS, MET Norway, and others). A simpler alternative to yr.no when key-free setup matters more than regional model quality. For Scandinavia, yr.no's native MET Norway model is marginally better; elsewhere Open-Meteo's multi-model default is a reasonable choice.
+Open-Meteo is the primary provider for sync.py's default-on route weather. It selects available models for the location; `best_match` identifies that selection, not a known underlying model run. MET Norway is a labelled fallback. Provider choice is not a claim that one forecast is always more accurate.
 
 ### Authentication
 
@@ -132,11 +133,18 @@ No API key required. Free for non-commercial use, with a limit of 10,000 API cal
 GET https://api.open-meteo.com/v1/forecast
   ?latitude={lat}
   &longitude={lon}
-  &hourly=temperature_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation_probability,precipitation,cloud_cover,weather_code
-  &timezone=auto
+  &elevation={metres}
+  &hourly=temperature_2m,apparent_temperature,wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation_probability,precipitation
+  &timezone=GMT&timeformat=unixtime
+  &start_hour={YYYY-MM-DDTHH:00}&end_hour={YYYY-MM-DDTHH:00}
+  &wind_speed_unit=ms&temperature_unit=celsius&precipitation_unit=mm
 ```
 
-Returns JSON with hourly forecasts up to 16 days.
+sync.py requests only each event's required UTC hours, from departure rounded down to the hour through the ETA upper bound rounded up. Outlooks first round outward to their six-hour envelope. These inclusive endpoints supply the surrounding instants and preceding-hour precipitation periods; `forecast_days=8` is no longer sent. Comma-separated latitude/longitude/elevation lists initially batch the route in one call. Multiple locations return a list of hourly forecast objects. A timeout can split the batch into halves, recursively if needed, within the unchanged eight-call cap and 20-second admission cutoff. HTTP rejections and malformed data are not split. MET retains its existing endpoint and parameters.
+
+All forecast GETs use `stream=True`, a 2-second connect timeout and a 5-second read timeout. A 25-second route-weather pass deadline is checked after headers, between byte-sized decoded chunks and after the body; timed-out responses are closed. This limits slow trickles without a signal, subprocess or platform exclusion, but is not preemptive during DNS, a blocked read or decompression. Use the existing `--lockfile` for automated timers. Responses are capped at 2 MiB decoded. Cache/brief diagnostics retain timeout, connection, HTTP status, invalid-response and backoff causes without raw exception text or request URLs.
+
+It validates coordinate association, time arrays and explicit units; unknown extra fields are ignored. Covering cached time windows are reusable; disjoint windows at the same location remain separate. Beyond 72 hours, output is a trend outlook with no section predictions. MET outlooks retain native six/twelve-hour periods when hourly data is absent; never interpret those amounts as hourly rain.
 
 ### Key Fields
 
@@ -148,14 +156,15 @@ From the `hourly` array:
 - **temperature_2m**: °C. Cross-reference with Section 11 Environmental Conditions Protocol for heat stress tier
 - **precipitation_probability**: %
 - **precipitation**: mm
-- **cloud_cover**: %
-- **weather_code**: WMO weather interpretation codes
+- **apparent_temperature**: °C, optional feels-like
 
 ### Usage Notes
 
 - No `User-Agent` header required, but caching responses is recommended
 - `precipitation_probability` is provided directly as a percentage: no need to derive it from symbol codes
 - Combines multiple weather models; the default selection is the best available for the queried location
+- Amount/probability and maximum gust apply to the preceding hour; temperature and mean wind are instantaneous. Do not sum precipitation across repeated route samples
+- Display "Weather data by [Open-Meteo](https://open-meteo.com/); sampled and summarized by Section 11" with a [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) link. The free endpoint is non-commercial; sync.py does not implement a paid endpoint
 
 ---
 
