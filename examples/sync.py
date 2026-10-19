@@ -4,6 +4,9 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.145 - Compact first/latest pre-departure snapshots with 14-day retention.
+  GitHub/On-demand workflows retain the 180-day route ETA record between runs.
+  Pairs with protocol/skill v11.79; forecast and ETA calculations are unchanged.
 Version 3.144 - Default-on route forecasts with personal ETA windows, bounded provider
   reads, hourly caches, failure backoff and immutable pre-departure snapshots.
   Open-Meteo primary; MET Norway fallback. Pairs with protocol/skill v11.78.
@@ -666,8 +669,11 @@ class RouteWeather:
     READ_SECONDS = 5
     MAX_RESPONSE_BYTES = 2 * 1024 * 1024
     MAX_SECTIONS = 512
-    SNAPSHOT_DAYS = 30
-    MAX_SNAPSHOTS = 256
+    SNAPSHOT_DAYS = 14
+    SNAPSHOT_LEAD_HOURS = 24
+    MAX_SNAPSHOTS = 64
+    MAX_SNAPSHOT_SEGMENTS = 10
+    MAX_SNAPSHOT_BYTES = 16000
     ETA_HISTORY_FILE = "route_eta_history.json"
     ETA_HISTORY_DAYS = 180
     PHYSICS_FULL_WEIGHT_RIDES = 20
@@ -714,11 +720,7 @@ class RouteWeather:
         self.state["version"] = self.VERSION
         due = self.number(self.state.get("next_attempt_at"))
         self.can_fetch = due is None or self.epoch >= due
-        snapshots = old.get("brief_snapshots", [])
-        self.snapshots = [s for s in (snapshots if isinstance(snapshots, list) else [])
-                          if isinstance(s, dict) and self.parse_time(s.get("saved_at")) is not None
-                          and isinstance(s.get("brief"), dict)
-                          and 0 <= self.epoch - self.parse_time(s["saved_at"]) < self.SNAPSHOT_DAYS * 86400]
+        self.snapshots = self.restore_snapshots(old.get("brief_snapshots", []))
 
     @staticmethod
     def number(value):
@@ -740,6 +742,146 @@ class RouteWeather:
     def digest(value):
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                                          allow_nan=False).encode()).hexdigest()
+
+    @classmethod
+    def snapshot_segments(cls, sections):
+        """Bounded contiguous segment envelopes, never raw point/time series.
+
+        Rain amounts are native-period extrema, not sums. Wet windows enclose
+        known nonzero amounts and can include dry or unknown gaps.
+        """
+        if not isinstance(sections, list) or not sections:
+            return []
+        width = max(1, math.ceil(len(sections) / cls.MAX_SNAPSHOT_SEGMENTS))
+        result = []
+        def extent(values):
+            values = [v for v in values if cls.number(v) is not None]
+            return [min(values), max(values)] if values else None
+        def window(rows, first, last):
+            starts = [cls.parse_time(r.get(first)) for r in rows]
+            ends = [cls.parse_time(r.get(last)) for r in rows]
+            starts, ends = [v for v in starts if v is not None], [v for v in ends if v is not None]
+            return [cls.iso(min(starts)), cls.iso(max(ends))] if starts and ends else None
+        for offset in range(0, len(sections), width):
+            legs = sections[offset:offset + width]
+            weather = [leg["weather"] for leg in legs]
+            periods = [p for w in weather for p in w.get("precipitation_intervals", [])]
+            wet = [p for p in periods if (cls.number(p.get("amount_mm")) or 0) > 0]
+            segment = {"start_km": legs[0]["start_km"], "end_km": legs[-1]["end_km"],
+                       "arrival_window_utc": legs[0]["arrival_window_utc"],
+                       "end_window_utc": legs[-1]["end_window_utc"],
+                       "wind_classes": sorted({c for w in weather for c in w.get("wind_classes", ["unknown"])}),
+                       "gust_max_range_mps": extent(w.get("gust_max_mps") for w in weather),
+                       "coverage": {k: all(w.get("coverage", {}).get(k) is True for w in weather)
+                                    for k in ("temperature", "wind", "gust", "precipitation", "probability")},
+                       "precipitation": {"window_utc": window(periods, "from_utc", "to_utc"),
+                                         "wet_window_utc": window(wet, "from_utc", "to_utc"),
+                                         "amount_range_mm": extent(p.get("amount_mm") for p in periods),
+                                         "probability_range_pct": extent(p.get("probability_pct") for p in periods),
+                                         "period_hours": sorted({p["period_hours"] for p in periods
+                                                                 if cls.number(p.get("period_hours")) is not None})}}
+            for key in ("temperature_range_c", "wind_speed_range_mps"):
+                segment[key] = extent(v for w in weather for v in (w.get(key) or []))
+            result.append(segment)
+        return result
+
+    @classmethod
+    def compact_snapshot(cls, snapshot):
+        """Migrate known old briefs; malformed or oversized records are not saved."""
+        try:
+            brief = snapshot["brief"]
+            if (brief.get("status") not in ("ok", "partial")
+                    or not isinstance(brief.get("event_id"), (str, int))
+                    or isinstance(brief["event_id"], bool)
+                    or not isinstance(brief.get("route_ref"), dict)
+                    or not all(isinstance(brief.get(k, {}), dict)
+                               for k in ("departure", "eta", "summary", "provenance"))
+                    or not all(brief.get(k) for k in ("brief_id", "cache_key", "departure"))):
+                return None
+            # Already compact records are copied without changing the first record.
+            if snapshot.get("snapshot_version") == 1:
+                compact = snapshot
+            else:
+                def pick(value, keys):
+                    return {k: value[k] for k in keys if k in value}
+                saved = pick(brief, ("schema_version", "event_id", "route_ref", "brief_id", "cache_key",
+                                     "departure", "tier", "status", "fetched_at", "expires_at", "units"))
+                saved["provenance"] = pick(brief.get("provenance", {}),
+                    ("provider", "fallback", "attribution", "source_url", "licence", "licence_url", "transformations"))
+                saved["eta"] = pick(brief.get("eta", {}),
+                    ("method", "status", "duration_range_s", "moving_duration_range_s", "moving_duration_central_s"))
+                saved["summary"] = pick(brief.get("summary", {}),
+                    ("temperature_range_c", "gust_max_mps", "precipitation_probability_max_pct",
+                     "hourly_precipitation_max_mm", "period_precipitation_max_mm", "complete_distance_pct", "aggregation"))
+                saved["segments"] = cls.snapshot_segments(brief.get("sections", []))
+                if brief.get("outlook"):
+                    saved["outlook"] = pick(brief["outlook"], ("window_utc", "precipitation_period_hours",
+                        "wind_from_sectors", "wind_speed_range_mps", "interpretation"))
+                compact = {"snapshot_version": 1, "saved_at": snapshot["saved_at"],
+                           "departure_basis": "scheduled; actual departure not known",
+                           "aggregation": "Contiguous segment extrema; gust range is of section maxima. "
+                                          "Rain amounts are native-period extrema, not totals; wet windows "
+                                          "may contain dry or unknown gaps. Missing coverage is not dry weather.",
+                           "brief": saved}
+            encoded = json.dumps(compact, separators=(",", ":"), allow_nan=False)
+            return json.loads(encoded) if len(encoded.encode()) <= cls.MAX_SNAPSHOT_BYTES else None
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return None
+
+    def restore_snapshots(self, snapshots):
+        """One first and one latest per event, including after route/time edits.
+
+        Departures, not save dates or calendar presence, determine expiry. This
+        also preserves removed events until their scheduled departure + 14 days.
+        """
+        groups = {}
+        for value in snapshots if isinstance(snapshots, list) else []:
+            compact = self.compact_snapshot(value)
+            if compact is None:
+                continue
+            brief = compact["brief"]
+            departure = brief.get("departure")
+            start = self.parse_time(departure.get("at_utc")) if isinstance(departure, dict) else None
+            saved = self.parse_time(compact.get("saved_at"))
+            if (start is None or saved is None or saved > self.epoch
+                    or not 0 < start - saved <= self.SNAPSHOT_LEAD_HOURS * 3600
+                    or self.epoch >= start + self.SNAPSHOT_DAYS * 86400):
+                continue
+            groups.setdefault(str(brief["event_id"]), []).append(compact)
+        selected = []
+        for group in groups.values():
+            group.sort(key=lambda s: self.parse_time(s["saved_at"]))
+            first, latest = group[0], group[-1]
+            selected.append(first)
+            if latest != first:
+                selected.append(latest)
+        selected.sort(key=lambda s: self.parse_time(s["saved_at"]))
+        return selected[:self.MAX_SNAPSHOTS]
+
+    def save_snapshot(self, brief):
+        if brief.get("status") not in ("ok", "partial"):
+            return
+        start = self.parse_time((brief.get("departure") or {}).get("at_utc"))
+        reason = None
+        if start is None or not 0 < start - self.epoch <= self.SNAPSHOT_LEAD_HOURS * 3600:
+            reason = "outside_snapshot_window"
+        else:
+            ride = [i for i, s in enumerate(self.snapshots)
+                    if str(s["brief"]["event_id"]) == str(brief["event_id"])]
+            if ride and self.snapshots[ride[-1]]["brief"]["brief_id"] == brief["brief_id"]:
+                return
+            compact = self.compact_snapshot({"saved_at": self.iso(self.epoch), "brief": brief})
+            if compact is None:
+                reason = "snapshot_not_saved"
+            elif len(ride) == 2:
+                self.snapshots[ride[-1]] = compact
+            elif len(self.snapshots) < self.MAX_SNAPSHOTS:
+                self.snapshots.append(compact)
+            else:
+                reason = "capacity_reached"
+        if reason:
+            brief["snapshot_status"] = reason
+            brief["snapshot_context"] = "now"
 
     @staticmethod
     def enabled(config, environ=None):
@@ -2286,14 +2428,7 @@ class RouteWeather:
                          "route_ref": row["route_ref"], "status": "unavailable",
                          "reason_codes": ["weather_processing_failed"], "brief_id": None, "departure": departure}
             row["route_weather"] = brief
-            if brief["status"] in ("ok", "partial") and not any(
-                    s.get("brief", {}).get("brief_id") == brief["brief_id"] for s in self.snapshots):
-                if len(self.snapshots) < self.MAX_SNAPSHOTS:
-                    self.snapshots.append({"saved_at": self.iso(self.epoch),
-                                           "departure_basis": "scheduled; actual departure not known",
-                                           "brief": json.loads(json.dumps(brief))})
-                else:
-                    brief["snapshot_status"] = "capacity_reached"
+            self.save_snapshot(brief)
         if self.requests_made:
             delay = self.FAILURE_BACKOFF_SECONDS if self.failures else self.REFRESH_SECONDS + self.jitter
             self.state["next_attempt_at"] = self.epoch + delay
@@ -2314,7 +2449,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.144"
+    VERSION = "3.145"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"

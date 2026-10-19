@@ -1,10 +1,13 @@
 # Section 11 - AI Coach Protocol
 
-**Protocol Version:** 11.78  
+**Protocol Version:** 11.79  
 **Last Updated:** 2026-10-19
 **License:** [MIT](https://opensource.org/licenses/MIT)
 
 ### Changelog
+
+**v11.79 - Bounded forecast snapshots and retained ETA history (2026-10-19, sync.py v3.145):**
+Compact first/latest snapshots replace accumulating full briefs, with migration on the next sync and expiry 14 days after scheduled departure. The shared GitHub/On-demand workflow validates and commits the 180-day ETA record between runs. Forecast, ETA and terrain calculations are unchanged.
 
 **v11.78 - Forecast along the planned route (2026-10-19, sync.py v3.144):**
 Default-on Open-Meteo route forecasts with labelled MET Norway fallback, rolling 180-day personal ETA history, a five-day forecast/outlook window, bounded requests and immutable pre-departure snapshots. No change to terrain analysis.
@@ -2164,7 +2167,11 @@ Flat/rolling effort defaults to 65% FTP (mid-Z2 from 55/75% boundaries); uphill 
 
 **Precipitation and provenance:** Near-term section intervals retain valid times, probability and amount. Open-Meteo amount/probability and maximum gust apply to the preceding hour; MET next_1_hours applies to the following hour. Hourly detail never substitutes six-hour totals. Outlooks can use MET next_6_hours or next_12_hours when shorter periods are absent, retaining actual duration explicitly. Their `period_precipitation_max_mm` is a maximum native-period amount; near-term `hourly_precipitation_max_mm` is hourly. Neither is a ride total, and unequal period durations must not be compared as equal rain rates. Probability retains the provider's event definition. Provenance retains provider/model selection, fetched/validated/expiry times, valid-time bounds and MET update time. Missing underlying model-run time stays unknown. Missing gusts/probability are normal in some MET regions; optional feels-like remains null when absent.
 
-**Snapshots:** `brief_snapshots` saves each distinct usable (`ok`/`partial`) brief before its scheduled departure, preserving its original fields on later refresh, route edits or event removal. Retention is 30 days from saving, at most 256 snapshots; `snapshot_status: "capacity_reached"` means the current brief was not saved. Retained snapshots are immutable within that retention, not an indefinite archive. They record scheduled departure, not actual departure or proof the athlete read the brief. Post-ride comparison is not implemented.
+**Snapshots:** `brief_snapshots` keeps at most two usable (`ok`/`partial`) records per event ID: the first seen within 24 hours of scheduled departure (including a ride planned later), and the latest seen before departure. Refresh replaces only the latest; route or departure edits preserve the first record's original binding and do not create another pair. Each record expires 14 days after its own recorded scheduled departure, even if the event remains on the calendar. Removed events retain records only until that expiry. The overall cap is 64 records; a full store still permits replacing an existing latest slot. A single record serves as both first and latest until a distinct brief arrives.
+
+Snapshot schema 1 retains event/route/brief/cache identity, departure, tier, provider/fallback and attribution, fetch/expiry times, coverage, ETA method and duration windows. At most ten contiguous route segments retain arrival/end windows, relative wind classes, speed and temperature ranges, a range of section gust maxima, field coverage and precipitation timing/amount/probability envelopes. Amounts are native-period extrema, never totals; wet-time envelopes can include dry or unknown gaps. Null rain or incomplete coverage never means dry. No raw point series, geometry, display duplicates or full ETA diagnostics are copied. Each serialized compact-JSON record is capped at 16,000 bytes. Current detailed briefs remain unchanged in `events[].route_weather`.
+
+On the next sync, old full snapshots are compacted and reduced to the eligible first/latest pair; records outside the 24-hour save window, expired records and malformed/oversized records are dropped. A usable brief that cannot be saved has `snapshot_context: "now"` and a `snapshot_status` reason (`outside_snapshot_window`, `capacity_reached` or `snapshot_not_saved`); never imply it was retained. These are scheduled-departure records, not proof of actual departure or that the athlete read the forecast. Post-ride comparison is not implemented.
 
 **Attribution and use:** The free Open-Meteo endpoint is for non-commercial use under its [terms](https://open-meteo.com/en/terms); this implementation has no commercial subscription endpoint. Both providers require attribution under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Beside weather shown in a report include a linked “Weather data by [Open-Meteo](https://open-meteo.com/)” or “Data from [MET Norway](https://api.met.no/) (fallback)”, the licence link, and “sampled and summarized by Section 11”. This required attribution is an exception to citation-free report formatting. Respect [MET terms](https://api.met.no/doc/TermsOfService), including identifying User-Agent, coordinate precision and caching. Forecasts alone do not establish road surface, shelter, exposure or safety. Keep existing environmental guidance; do not turn missing weather into a Go decision.
 

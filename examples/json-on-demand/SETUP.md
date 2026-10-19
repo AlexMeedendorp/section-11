@@ -12,6 +12,8 @@ Trigger a fresh Intervals.icu sync from your phone or browser, then download the
 
 Uses the same GitHub Actions workflow as auto-sync, but without the cron schedule. You tap a link in your repo's README to trigger a sync, and download the resulting files as a ZIP artifact from the completed run.
 
+The shared workflow validates and commits `route_eta_history.json` to retain the 180-day personal ETA record between runs. This internal record stays in the repository and is not added to the download artifact. Updating to sync 3.145 also compacts old forecast snapshots in `routes.json` on the next triggered run; see the [GitHub setup update instructions](../json-auto-sync/SETUP.md#updating-an-existing-repository) for updating both the script and workflow.
+
 **Flow:** Tap Sync Now → Run workflow → Download artifact ZIP → Attach to AI chat.
 
 **GitHub connector users:** If your AI platform has a GitHub connector, you can skip the download, but refresh, sync, or re-import after the workflow commits, since not all connectors pick up changes automatically. See the [connector table](../../README.md#platform-setup).
