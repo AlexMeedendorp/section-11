@@ -37,6 +37,12 @@ setup.
 
 ## Running
 
+`test_terrain_segmentation.py` covers native terrain segmentation boundaries, persistent
+valleys, bounded exit extension, directional symmetry and admission/formatting
+with hand-derived profiles and the offline network guard. Run it alone with
+`python3 -m unittest discover dev/tests -p test_terrain_segmentation.py`, or as
+part of the complete suite below.
+
 From the repository root:
 
 ```

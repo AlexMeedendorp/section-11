@@ -1,10 +1,14 @@
 # Section 11 - AI Coach Protocol
 
-**Protocol Version:** 11.75  
-**Last Updated:** 2026-10-16
+**Protocol Version:** 11.76  
+**Last Updated:** 2026-10-17
 **License:** [MIT](https://opensource.org/licenses/MIT)
 
 ### Changelog
+
+**v11.76 - Native terrain segmentation (2026-10-17, sync.py v3.142):**
+- Climb and descent boundaries use native segmentation with valley splits: relative-dip parents, positive excess cores, persistent valley splits and bounded exit extension. The independent 50 m gain floor is removed; raw distance/gradient gates, rounded terrain-noise admission, categories and display are retained.
+- Starts, ends, lengths, gradients, admissions and assigned categories can change. Planned-route cache invalidates on script change; successful completed-activity terrain is copied forward without historical reanalysis.
 
 **v11.75 - Completed-session structure and report context (2026-10-16, sync.py v3.141):**
 - `latest.json` carries compact completed-step summaries through 28 days; `has_structure` locates detailed plan-window or fallback metrics in `intervals.json` within its 14-day retention. Plan match is separate from unchanged compliance rules. DFA is independent; cache bookkeeping stays with the full block.
@@ -1897,7 +1901,13 @@ Climb category presence upgrades classification: a route with a Cat 1 climb is `
 | Cat 1 | 650–1000m | Major climb |
 | HC | 1000m+ | Extreme climb |
 
-These are elevation-based conventions, not gradient-based. A 150m gain at 10% average is physiologically harder than 200m at 4%. The category captures scale, not intensity. The AI should communicate both category and gradient when briefing climbs. Climbs below 100m elevation gain with <3% average gradient are filtered out as terrain noise.
+These are elevation-based conventions, not gradient-based. A 150m gain at 10% average is physiologically harder than 200m at 4%. The category captures scale, not intensity. The AI should communicate both category and gradient when briefing climbs.
+
+**Segment detection and admission:** Segmentation uses native GPS-distance samples and the existing 50 m-smoothed elevation. Directional entry is at 1.5%; a parent ends when its reverse drop exceeds the greater of 2.5 m or 5% of its rise so far. Positive maximum-excess spans above the 1.5% reference line are extracted, including unused prefixes and suffixes; ties retain the earliest sample. A profile exactly at the reference has no positive excess.
+
+A centered 200 m native-sample gradient guides refinement. For spans with raw directional gain below 100 m, the earliest minimum gradient at least 200 m from both ends splits at a shared saddle only when strictly below one quarter of the weaker flanking peak and sustained for at least 50 m. Children are considered in turn; raw gain of at least 100 m protects against this second split stage only. Each end can extend through support strictly above one eighth of its core peak gradient, by at most 100 m and no farther than the first native sample at or after the fixed midpoint to the next core's start. Starts do not move; no interpolated points or minimum-length padding are added.
+
+Admission then requires raw distance at least 500 m and raw directional average at least 1.5%, followed by rounded absolute gain at least 100 m OR rounded absolute average at least 3%. There is no independent 50 m gain floor. All measurements use the original smoothed profile; descents use the same rule with elevation negated for detection. Categories, rounding and display remain unchanged. The major-gain guard does not reconnect parents already split by a reverse drop, and long flat connections can remain inside a large climb.
 
 **Climb detail fields:** Each climb entry includes `position_km` (distance from start), `distance_km`, `elevation_m`, `avg_gradient_pct`, `max_gradient_pct` (steepest 200m subsection), `category`, and `start_coords`/`end_coords`. Use `max_gradient_pct` to warn about steep sections within an otherwise moderate climb: "averages 5.8% but kicks to 11.2% in the final kilometer."
 

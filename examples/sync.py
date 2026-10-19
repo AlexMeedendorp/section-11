@@ -4,6 +4,11 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.142 - Native climb/descent segmentation with persistent valley splits
+  and bounded exit extension. Removes the independent 50 m gain floor;
+  retains admission, categories and display. Boundaries and admissions may change.
+  Planned routes refresh on script change; completed terrain is not backfilled.
+
 Version 3.141 - Completed-session structure from exact paired Intervals plans and
   recording-time plan alignment and repeated sets: compact latest.json summaries survive for 28 days, while
   detailed metrics and cache state share intervals.json's 14-day retention.
@@ -638,7 +643,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.141"
+    VERSION = "3.142"
     INTERVALS_FILE = "intervals.json"
     ROUTES_FILE = "routes.json"
     SAVED_WORKOUTS_FILE = "saved_workouts.json"
@@ -3909,9 +3914,9 @@ class IntervalsSync:
         elevation_per_km = round(total_elevation_m / total_distance_km, 1) if total_distance_km > 0 else 0.0
         
         # Detect climbs and descents
-        # Entry gradient is low (1.5%) to catch long gradual climbs like Brocken.
-        # Post-filter by elevation gain: segments with <100m gain AND <3% avg are
-        # filtered out to avoid detecting gentle inclines as "climbs."
+        # Native segment boundaries use the existing 50m-smoothed elevations.
+        # After raw distance/gradient admission, retain rounded gain >=100m OR
+        # rounded absolute average >=3%; this applies symmetrically to descents.
         raw_climbs = self._detect_segments(trackpoints, cum_dist, smoothed_ele, min_gradient=1.5, min_distance=500.0, ascending=True, athlete_units=athlete_units)
         climbs = [c for c in raw_climbs if c["elevation_m"] >= 100 or c["avg_gradient_pct"] >= 3.0]
         raw_descents = self._detect_segments(trackpoints, cum_dist, smoothed_ele, min_gradient=1.5, min_distance=500.0, ascending=False, athlete_units=athlete_units)
@@ -4089,147 +4094,143 @@ class IntervalsSync:
             trackpoints.append(tp)
         return trackpoints
     
+    @staticmethod
+    def _terrain_native_boundaries(cum_dist, smoothed_ele, ascending):
+        """Native relative-dip parents and all positive 1.5% excess cores."""
+        n = len(cum_dist)
+        if n < 2:
+            return []
+        sign = 1 if ascending else -1
+        y = [sign * value for value in smoothed_ele]
+        d = cum_dist
+        reference = 1.5 / 100
+        spans = []
+        i = 0
+        while i < n - 1:
+            length = d[i + 1] - d[i]
+            if length <= 0 or (y[i + 1] - y[i]) / length < reference:
+                i += 1
+                continue
+            peak = i
+            j = i + 1
+            while j < n:
+                if y[j] > y[peak]:
+                    peak = j
+                allowance = max(2.5, 0.05 * (y[peak] - y[i]))
+                if y[peak] - y[j] > allowance:
+                    break
+                j += 1
+            pending = [(i, peak)]
+            while pending:
+                lo, hi = pending.pop()
+                low = start = end = lo
+                best = 0.0
+                for k in range(lo + 1, hi + 1):
+                    value = y[k] - y[low] - reference * (d[k] - d[low])
+                    if value > best:
+                        start, end, best = low, k, value
+                    if y[k] - reference * d[k] < y[low] - reference * d[low]:
+                        low = k
+                if end > start:
+                    spans.append((start, end))
+                    if lo < start:
+                        pending.append((lo, start))
+                    if end < hi:
+                        pending.append((end, hi))
+            i = max(peak, i + 1)
+        return sorted(spans)
+
+    @staticmethod
+    def _terrain_rolling_gradient(d, y):
+        """Centered native secant within a fixed 200 m window."""
+        from bisect import bisect_left, bisect_right
+        window = 200
+        result = []
+        for i, x in enumerate(d):
+            lo = bisect_left(d, x - window / 2, 0, i + 1)
+            hi = max(i, bisect_right(d, x + window / 2, i) - 1)
+            result.append(100 * (y[hi] - y[lo]) / (d[hi] - d[lo])
+                          if d[hi] > d[lo] else 0)
+        return result
+
+    @staticmethod
+    def _terrain_valley_splits(spans, d, y, g):
+        """Split persistent valleys at a shared native saddle; protect 100 m gain."""
+        from bisect import bisect_left, bisect_right
+        window, fraction = 200, 0.25
+        out, pending = [], list(spans)
+        while pending:
+            a, b = pending.pop()
+            if y[b] - y[a] >= 100:
+                out.append((a, b))
+                continue
+            lo = bisect_left(d, d[a] + window, a, b + 1)
+            hi = bisect_right(d, d[b] - window, lo, b + 1) - 1
+            if hi < lo:
+                out.append((a, b))
+                continue
+            k = min(range(lo, hi + 1), key=lambda j: g[j])
+            threshold = fraction * min(max(g[a:k]), max(g[k + 1:b + 1]))
+            left = right = k
+            if g[k] < threshold:
+                while left > a and g[left - 1] < threshold:
+                    left -= 1
+                while right < b and g[right + 1] < threshold:
+                    right += 1
+            if g[k] >= threshold or d[right] - d[left] < window / 4:
+                out.append((a, b))
+                continue
+            pending.extend(((a, k), (k, b)))
+        return sorted(out)
+
+    @staticmethod
+    def _terrain_bounded_ends(spans, d, g):
+        """Extend supported ends by at most 100 m and a fixed neighbor midpoint."""
+        from bisect import bisect_left
+        window, fraction = 200, 0.25
+        out = []
+        for i, (a, b) in enumerate(spans):
+            hi = (bisect_left(d, (d[b] + d[spans[i + 1][0]]) / 2)
+                  if i + 1 < len(spans) else len(d) - 1)
+            end = b
+            threshold = fraction / 2 * max(g[a:b + 1])
+            while b < hi and g[b + 1] > threshold and d[b + 1] - d[end] <= window / 2:
+                b += 1
+            out.append((a, b))
+        return out
+
+    @staticmethod
+    def _terrain_boundaries(cum_dist, smoothed_ele, ascending):
+        """Fixed segmentation composition on original 50 m-smoothed native samples.
+
+        Six fixed constants: 1.5%, 2.5 m, 5%, 200 m, one quarter, 100 m.
+        Dwell, exit support and extension are derived from window/fraction.
+        Explicit stacks avoid recursion limits; worst-case searches are not linear.
+        """
+        if len(cum_dist) < 2:
+            return []
+        y = [value if ascending else -value for value in smoothed_ele]
+        g = IntervalsSync._terrain_rolling_gradient(cum_dist, y)
+        spans = IntervalsSync._terrain_native_boundaries(cum_dist, smoothed_ele, ascending)
+        spans = IntervalsSync._terrain_valley_splits(spans, cum_dist, y, g)
+        return IntervalsSync._terrain_bounded_ends(spans, cum_dist, g)
+
     def _detect_segments(self, trackpoints: List[Dict], cum_dist: List[float],
                          smoothed_ele: List[float], min_gradient: float,
                          min_distance: float, ascending: bool,
                          athlete_units: Optional[Dict[str, str]] = None) -> List[Dict]:
         """
-        Detect sustained climb or descent segments using chunk-based analysis.
-        
-        Divides route into ~200m chunks, classifies each by gradient, then finds
-        contiguous climbing/descending runs. Tolerates brief flats and small dips
-        within a climb (real climbs have false flats and switchbacks). A climb ends
-        when elevation drops >50m from the local high water mark, indicating a
-        genuine descent, not a brief dip.
-        
-        athlete_units (v3.109): when provided, each segment dict carries a `display`
-        block with position, distance, and elevation in the athlete's preferred units.
+        Detect native climb/descent spans with fixed native boundaries.
+        Admission and formatting measure the original smoothed profile.
+        athlete_units adds the existing preferred-unit display block.
         """
-        CHUNK_M = 200  # chunk size for gradient classification
-        DIP_TOLERANCE_M = 50  # max elevation loss before ending a climb
-        
-        n = len(trackpoints)
-        if n < 2 or cum_dist[-1] < CHUNK_M:
-            return []
-        
-        # Build chunks: each has start_idx, end_idx, gradient, distance, ele_change
-        chunks = []
-        ci = 0
-        while ci < n - 1:
-            cj = ci + 1
-            while cj < n and cum_dist[cj] - cum_dist[ci] < CHUNK_M:
-                cj += 1
-            if cj >= n:
-                cj = n - 1
-            if cj <= ci:
-                break
-            
-            chunk_dist = cum_dist[cj] - cum_dist[ci]
-            chunk_ele = smoothed_ele[cj] - smoothed_ele[ci]
-            chunk_grad = (chunk_ele / chunk_dist * 100) if chunk_dist > 10 else 0
-            
-            chunks.append({
-                "si": ci, "ei": cj,
-                "dist": chunk_dist, "ele": chunk_ele, "grad": chunk_grad
-            })
-            ci = cj
-        
-        if not chunks:
-            return []
-        
-        # Find climbing or descending segments using high-water-mark logic
         segments = []
-        i = 0
-        
-        while i < len(chunks):
-            c = chunks[i]
-            
-            # Look for start of a potential segment
-            if ascending and c["grad"] < 1.0:
-                i += 1
-                continue
-            elif not ascending and c["grad"] > -1.0:
-                i += 1
-                continue
-            
-            # Start tracking a segment
-            seg_start_idx = c["si"]
-            seg_start_ele = smoothed_ele[seg_start_idx]
-            
-            if ascending:
-                high_mark = seg_start_ele
-                high_mark_chunk = i
-            else:
-                low_mark = seg_start_ele
-                low_mark_chunk = i
-            
-            j = i
-            while j < len(chunks):
-                current_ele = smoothed_ele[chunks[j]["ei"]]
-                
-                if ascending:
-                    if current_ele > high_mark:
-                        high_mark = current_ele
-                        high_mark_chunk = j
-                    # End if we've dropped too far from high water mark
-                    if high_mark - current_ele > DIP_TOLERANCE_M:
-                        break
-                else:
-                    if current_ele < low_mark:
-                        low_mark = current_ele
-                        low_mark_chunk = j
-                    # End if we've risen too far from low water mark
-                    if current_ele - low_mark > DIP_TOLERANCE_M:
-                        break
-                j += 1
-            
-            # Determine segment boundaries
-            if ascending:
-                seg_end_idx = chunks[high_mark_chunk]["ei"]
-            else:
-                seg_end_idx = chunks[low_mark_chunk]["ei"]
-            
-            # Trim flat approach: advance start until the LOCAL gradient
-            # (over the next ~1km) shows sustained climbing. Prevents valley
-            # roads with slight uphill trend being included in mountain climbs.
-            LOCAL_TRIM_DIST = 2000  # look 2km ahead for local gradient check
-            LOCAL_TRIM_GRAD = 2.5   # minimum local gradient to start the climb
-            if ascending:
-                for t in range(i, min(high_mark_chunk, len(chunks))):
-                    t_start = chunks[t]["si"]
-                    # Find point ~1km ahead
-                    ahead_idx = t_start
-                    for ai in range(t_start + 1, min(chunks[high_mark_chunk]["ei"] + 1, len(cum_dist))):
-                        if cum_dist[ai] - cum_dist[t_start] >= LOCAL_TRIM_DIST:
-                            ahead_idx = ai
-                            break
-                    if ahead_idx > t_start:
-                        local_dist = cum_dist[ahead_idx] - cum_dist[t_start]
-                        local_ele = smoothed_ele[ahead_idx] - smoothed_ele[t_start]
-                        if local_dist > 0 and (local_ele / local_dist * 100) >= LOCAL_TRIM_GRAD:
-                            seg_start_idx = t_start
-                            break
-            elif not ascending:
-                end_chunk = low_mark_chunk
-                for t in range(i, min(end_chunk, len(chunks))):
-                    t_start = chunks[t]["si"]
-                    ahead_idx = t_start
-                    for ai in range(t_start + 1, min(chunks[end_chunk]["ei"] + 1, len(cum_dist))):
-                        if cum_dist[ai] - cum_dist[t_start] >= LOCAL_TRIM_DIST:
-                            ahead_idx = ai
-                            break
-                    if ahead_idx > t_start:
-                        local_dist = cum_dist[ahead_idx] - cum_dist[t_start]
-                        local_ele = smoothed_ele[ahead_idx] - smoothed_ele[t_start]
-                        if local_dist > 0 and (local_ele / local_dist * 100) <= -LOCAL_TRIM_GRAD:
-                            seg_start_idx = t_start
-                            break
-            
+        for seg_start_idx, seg_end_idx in self._terrain_boundaries(cum_dist, smoothed_ele, ascending):
             seg_dist = cum_dist[seg_end_idx] - cum_dist[seg_start_idx]
             seg_ele = smoothed_ele[seg_end_idx] - smoothed_ele[seg_start_idx]
             
             # Check minimum criteria
-            if seg_dist >= min_distance and abs(seg_ele) >= 50:
+            if seg_dist >= min_distance:
                 avg_gradient = (seg_ele / seg_dist) * 100 if seg_dist > 0 else 0
                 
                 if (ascending and avg_gradient >= min_gradient) or \
@@ -4286,12 +4287,6 @@ class IntervalsSync:
                     
                     segments.append(segment)
             
-            # Advance past this segment
-            if ascending:
-                i = high_mark_chunk + 1
-            else:
-                i = low_mark_chunk + 1
-        
         return segments
     
     def _fetch_today_wellness(self) -> Dict:
