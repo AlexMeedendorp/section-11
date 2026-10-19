@@ -4,6 +4,11 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.143 - Planned routes carry explicit validity, content-bound identity and
+  deterministic attachment selection. Reuse validated attachments without requests;
+  retry failures no more often than every 15 minutes. GPS-only routes retain geometry without
+  invented elevation. TCX dispatch, event IDs and explicit midnight are preserved.
+  Pairs with SECTION_11.md / SKILL.md v11.77.
 Version 3.142 - Native climb/descent segmentation with persistent valley splits
   and bounded exit extension. Removes the independent 50 m gain floor;
   retains admission, categories and display. Boundaries and admissions may change.
@@ -643,7 +648,9 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.142"
+    VERSION = "3.143"
+    ROUTE_TERRAIN_VERSION = "3.142"
+    ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
     ROUTES_FILE = "routes.json"
     SAVED_WORKOUTS_FILE = "saved_workouts.json"
@@ -3587,242 +3594,319 @@ class IntervalsSync:
             detail += ", endpoints disagree"
         return f"{status} - {detail}"
 
+    @staticmethod
+    def _event_start_fields(evt: Dict) -> Dict:
+        """Retain an explicit midnight; a date without a time supplies no time."""
+        raw = evt.get("start_date_local")
+        if isinstance(raw, str) and "T" in raw:
+            try:
+                parsed = datetime.fromisoformat(raw)
+                return {"start_time": parsed.strftime("%H:%M"),
+                        "start_time_status": "provided"}
+            except ValueError:
+                pass
+        return {"start_time_status": "missing"}
+
+    @staticmethod
+    def _select_route_attachment(attachments: List[Dict]) -> Optional[Dict]:
+        """GPX before TCX before FIT, then lexical ID, filename and URL."""
+        priority = {"gpx": 0, "tcx": 1, "fit": 2}
+        candidates = []
+        for att in attachments or []:
+            if not isinstance(att, dict):
+                continue
+            filename = str(att.get("filename") or "")
+            ext = filename.lower().rsplit(".", 1)[-1]
+            if ext in priority:
+                candidates.append((priority[ext], str(att.get("id") or ""),
+                                   filename, str(att.get("url") or ""), att))
+        return min(candidates, key=lambda item: item[:4])[-1] if candidates else None
+
+    def _planned_route_fields(self, evt: Dict) -> Dict:
+        """Compact state shared by planned_workouts and race_calendar."""
+        route = getattr(self, "_planned_routes", {}).get(evt.get("id"))
+        if route is None:
+            return {"has_terrain": False, "route_status": "absent"}
+        return {"has_terrain": route["route_status"] == "ok",
+                "route_status": route["route_status"],
+                "route_ref": route["route_ref"]}
+
     def _generate_terrain(self, events: List[Dict],
-                          athlete_units: Optional[Dict[str, str]] = None) -> Dict:
-        """
-        Parse GPX/TCX attachments on events into routes.json.
-        
-        Scans all events for attachments, downloads and parses route files,
-        produces terrain_summary with climb/descent detection. Caches by
-        attachment ID to avoid re-downloading unchanged files.
-        
-        Returns dict of event_id → terrain_summary for has_terrain flags.
-        
-        athlete_units (v3.109): plumbed through to _analyze_terrain so each
-        terrain_summary in routes.json carries display blocks. Copy-forward
-        cache hits also refresh display blocks (canonical metric fields are
-        preserved verbatim) so a unit-preference change picks up next sync.
-        """
+                          athlete_units: Optional[Dict[str, str]] = None) -> set:
+        """Reuse unchanged immutable attachments without HTTP; back off failed reads."""
         routes_path = self.data_dir / self.ROUTES_FILE
-        
-        # Load existing cache
-        cached = {"events": []}
+        cached = {}
         if routes_path.exists():
             try:
-                with open(routes_path, 'r') as f:
-                    cached = json.load(f)
-                # Invalidate cache if sync.py changed (schema may differ)
-                if cached.get("script_hash") != self.script_hash:
-                    if self.debug:
-                        print(f"    🔄 routes.json stale (sync.py changed), re-parsing all")
-                    cached = {"events": []}
-            except Exception as e:
-                if self.debug:
-                    print(f"    ⚠️  Could not read routes.json: {e}")
-                cached = {"events": []}
-        
-        # Build lookup of cached attachment_id → terrain entry
-        cached_by_attachment = {}
-        for entry in cached.get("events", []):
-            aid = entry.get("attachment_id")
-            if aid:
-                cached_by_attachment[aid] = entry
-        
-        # Scan events for attachments
+                with open(routes_path, "r") as f:
+                    data = json.load(f)
+                if data.get("script_hash") == self.script_hash:
+                    for entry in data.get("events", []):
+                        if isinstance(entry, dict):
+                            cached[(entry.get("event_id"), entry.get("attachment_id"))] = entry
+            except (OSError, ValueError, TypeError, AttributeError):
+                cached = {}
+
         new_entries = []
+        self._planned_routes = {}
         for evt in events:
-            attachments = evt.get("attachments")
-            if not attachments:
+            att = self._select_route_attachment(evt.get("attachments"))
+            if att is None:
                 continue
-            
-            evt_id = evt.get("id")
-            evt_name = evt.get("name", "Unnamed")
-            evt_date = (evt.get("start_date_local") or "")[:10]
-            evt_category = evt.get("category", "")
-            
-            # Start time: HH:MM when set (not midnight)
-            evt_start_time = None
-            raw_start = evt.get("start_date_local") or ""
-            if "T" in raw_start:
-                time_part = raw_start.split("T")[1][:5]
-                if time_part != "00:00":
-                    evt_start_time = time_part
-            
-            for att in attachments:
-                att_id = att.get("id")
-                filename = att.get("filename", "")
-                url = att.get("url", "")
-                
-                if not att_id or not url:
-                    continue
-                
-                # Skip non-route files by extension
-                ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-                if ext not in ("gpx", "tcx", "fit"):
-                    continue
-                
-                # Check cache — reuse if attachment ID unchanged
-                if att_id in cached_by_attachment:
-                    entry = cached_by_attachment[att_id].copy()
-                    # Update event metadata (name/date may change)
-                    entry["event_id"] = evt_id
-                    entry["event_name"] = evt_name
-                    entry["event_date"] = evt_date
-                    entry["category"] = evt_category
-                    if evt_start_time:
-                        entry["start_time"] = evt_start_time
-                    else:
-                        entry.pop("start_time", None)
-                    # Refresh display blocks against current prefs (v3.109).
-                    # Canonical metric fields are preserved; only display sub-objects
-                    # are recomputed so a pref change picks up without invalidating
-                    # the GPX-parse cache.
-                    cached_ts = entry.get("terrain_summary")
-                    if isinstance(cached_ts, dict):
-                        entry["terrain_summary"] = self._refresh_terrain_display(cached_ts, athlete_units)
-                    new_entries.append(entry)
-                    if self.debug:
-                        print(f"    ✓ Cached terrain: {evt_name} ({filename})")
-                    continue
-                
-                # Download and parse
-                if self.debug:
-                    print(f"    ↓ Downloading: {filename} for {evt_name}")
-                
-                terrain_summary = self._download_and_parse_route(url, filename, athlete_units=athlete_units)
-                
-                entry = {
-                    "event_id": evt_id,
-                    "event_name": evt_name,
-                    "event_date": evt_date,
-                    "category": evt_category,
+            evt_id, att_id = evt.get("id"), att.get("id")
+            filename = str(att.get("filename") or "")
+            # Detect filename replacement; potentially rotating URLs are not identity.
+            source_hash = hashlib.sha256(json.dumps(
+                [filename], separators=(",", ":")
+            ).encode("utf-8")).hexdigest()
+            now = datetime.now(timezone.utc)
+            result = self._cached_route_result(
+                cached.get((evt_id, att_id)), filename, source_hash, now, athlete_units)
+            if result is None:
+                if evt_id is None or att_id is None:
+                    result = {"route_status": "failed", "route_error": "missing_identity"}
+                else:
+                    result = self._download_and_parse_route(
+                        att.get("url"), filename, athlete_units=athlete_units)
+                result = self._validated_route_result(result)
+                result.update(last_attempt_at=now.isoformat(), checked_at=now.isoformat(),
+                              cache_hit=False)
+            # A legacy error dictionary or an incomplete parser result is never terrain.
+            result = self._validated_route_result(result)
+            revision = result.pop("revision", None)
+            entry = {
+                "event_id": evt_id,
+                "event_name": evt.get("name", "Unnamed"),
+                "event_date": (evt.get("start_date_local") or "")[:10],
+                "category": evt.get("category", ""),
+                "attachment_id": att_id,
+                "filename": filename,
+                "attachment_source_hash": source_hash,
+                "route_ref": {
+                    "route_id": (f"intervals:{evt_id}:attachment:{att_id}"
+                                 if evt_id is not None and att_id is not None else None),
+                    "revision": revision,
                     "attachment_id": att_id,
-                    "filename": filename,
-                    "terrain_summary": terrain_summary
-                }
-                if evt_start_time:
-                    entry["start_time"] = evt_start_time
-                new_entries.append(entry)
-        
-        # Build routes.json
+                    "terrain_version": self.ROUTE_TERRAIN_VERSION,
+                },
+                **result,
+                **self._event_start_fields(evt),
+            }
+            new_entries.append(entry)
+            if evt_id is not None:
+                self._planned_routes[evt_id] = entry
+
         self._routes_data = {
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "sync_version": self.VERSION,
             "script_hash": self.script_hash,
-            "events": new_entries
+            "events": new_entries,
         }
-        
-        # Return event_id → True for has_terrain flags
-        return {e["event_id"] for e in new_entries if e.get("terrain_summary")}
-    
+        return {e["event_id"] for e in new_entries if e["route_status"] == "ok"}
+
+    def _cached_route_result(self, cached: Optional[Dict], filename: str,
+                             source_hash: str, now: datetime,
+                             athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
+        """Reuse matching analysis or a not-yet-due failure before any HTTP call.
+
+        Intervals attachment IDs are assumed immutable. A changed ID or filename
+        is a new attachment version; a changed URL is not. The caller checked event/attachment
+        IDs and script hash; content revisions remain the hashes recorded at parse.
+        """
+        if not isinstance(cached, dict):
+            return None
+        ref = cached.get("route_ref")
+        if (not isinstance(ref, dict)
+                or ref.get("terrain_version") != self.ROUTE_TERRAIN_VERSION
+                or cached.get("filename") != filename
+                or cached.get("attachment_source_hash") != source_hash):
+            return None
+        previous = self._validated_route_result(cached)
+        status = previous["route_status"]
+        revision = ref.get("revision")
+        if status in ("ok", "no_elevation"):
+            if (not isinstance(revision, str) or len(revision) != 64
+                    or any(c not in "0123456789abcdef" for c in revision)
+                    or not previous.get("analyzed_at")):
+                return None
+        elif status == "unsupported_format" or previous.get("route_error") == "missing_identity":
+            pass  # Terminal for this unchanged attachment; no repeated request.
+        else:
+            try:
+                last_attempt = datetime.fromisoformat(previous["last_attempt_at"])
+                if last_attempt.tzinfo is None:
+                    last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+            except (KeyError, TypeError, ValueError):
+                return None
+            if (now - last_attempt).total_seconds() >= self.ROUTE_RETRY_BACKOFF_SECONDS:
+                return None
+        result = {key: previous[key] for key in (
+            "route_status", "route_error", "terrain_summary", "route_geometry",
+            "analyzed_at", "last_attempt_at", "checked_at") if key in previous}
+        if status == "ok":
+            result["terrain_summary"] = self._refresh_terrain_display(
+                result["terrain_summary"], athlete_units)
+        elif status == "no_elevation":
+            geometry = dict(result["route_geometry"])
+            geometry["display"] = {"total_distance": self._to_display(
+                geometry["total_distance_km"], "distance", athlete_units)}
+            result["route_geometry"] = geometry
+        return {**result, "revision": revision, "cache_hit": True}
+
+    @staticmethod
+    def _validated_route_result(result: Dict) -> Dict:
+        """Fail closed at the parser/cache boundary, independent of truthiness."""
+        if not isinstance(result, dict) or "error" in result:
+            return {"route_status": "failed", "route_error": "invalid_parse_result"}
+        status = result.get("route_status")
+        if status == "ok":
+            terrain = result.get("terrain_summary")
+            if (not isinstance(terrain, dict) or "error" in terrain
+                    or terrain.get("course_character") not in ("flat", "rolling", "hilly", "mountain")
+                    or not isinstance(terrain.get("polyline"), list)
+                    or len(terrain["polyline"]) < 2
+                    or not isinstance(terrain.get("total_elevation_m"), (int, float))
+                    or not math.isfinite(terrain["total_elevation_m"])):
+                return {"route_status": "failed", "route_error": "invalid_terrain_result"}
+        elif status == "no_elevation":
+            geometry = result.get("route_geometry")
+            if (not isinstance(geometry, dict)
+                    or not isinstance(geometry.get("polyline"), list)
+                    or len(geometry["polyline"]) < 2):
+                return {"route_status": "failed", "route_error": "invalid_geometry_result"}
+        elif status not in ("failed", "unsupported_format", "no_gps"):
+            return {"route_status": "failed", "route_error": "invalid_route_status"}
+        out = dict(result)
+        if status != "ok":
+            out.pop("terrain_summary", None)
+        if status != "no_elevation":
+            out.pop("route_geometry", None)
+        return out
+
     def _download_and_parse_route(self, url: str, filename: str,
-                                  athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Download a route file attachment and parse it into a terrain_summary."""
+                                  athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Download and analyze a new or retry-due attachment, recording its hash."""
+        if filename.lower().endswith(".fit"):
+            return {"route_status": "unsupported_format", "route_error": "FIT is not supported"}
+        if not url:
+            return {"route_status": "failed", "route_error": "missing_url"}
         try:
             response = requests.get(url, timeout=30)
             if response.status_code != 200:
-                return {"error": f"download failed (HTTP {response.status_code})"}
+                return {"route_status": "failed",
+                        "route_error": f"download failed (HTTP {response.status_code})"}
             content = response.content
-        except Exception as e:
-            return {"error": f"download failed: {str(e)[:100]}"}
-        
-        if not content or len(content) < 50:
-            return {"error": "empty or invalid file"}
-        
-        return self._parse_route_file(content, filename, athlete_units=athlete_units)
-    
+        except requests.exceptions.RequestException:
+            return {"route_status": "failed", "route_error": "download failed"}
+        if not content:
+            return {"route_status": "failed", "route_error": "empty_file"}
+
+        revision = hashlib.sha256(content).hexdigest()
+        result = self._validated_route_result(
+            self._parse_route_file(content, filename, athlete_units=athlete_units))
+        result.update(revision=revision, cache_hit=False)
+        if result["route_status"] in ("ok", "no_elevation"):
+            result["analyzed_at"] = datetime.now(timezone.utc).isoformat()
+        return result
+
     def _parse_route_file(self, content: bytes, filename: str,
-                          athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Detect route file format and dispatch to parser."""
-        text_start = content[:200].decode("utf-8", errors="ignore").strip()
-        
-        if text_start.startswith("<?xml") or text_start.startswith("<gpx") or "<gpx" in text_start[:500]:
-            return self._parse_gpx(content, athlete_units=athlete_units)
-        elif "<TrainingCenterDatabase" in text_start or "TrainingCenterDatabase" in content[:500].decode("utf-8", errors="ignore"):
-            return self._parse_tcx(content, athlete_units=athlete_units)
-        elif content[:2] == b'.F' or content[:4] == b'\x0e\x10\xd9\x07':
-            # FIT binary magic bytes
-            return {"error": "FIT format not yet supported"}
-        else:
-            # Fall back to extension
-            ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-            if ext == "gpx":
-                return self._parse_gpx(content, athlete_units=athlete_units)
-            elif ext == "tcx":
-                return self._parse_tcx(content, athlete_units=athlete_units)
-            elif ext == "fit":
-                return {"error": "FIT format not yet supported"}
-            return {"error": f"unrecognized route file format"}
-    
-    def _parse_gpx(self, content: bytes,
-                   athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Parse GPX file into trackpoints, then analyze terrain."""
+                          athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Dispatch on the XML root, never on the shared XML declaration."""
+        if filename.lower().endswith(".fit") or content[8:12] == b".FIT":
+            return {"route_status": "unsupported_format", "route_error": "FIT is not supported"}
         try:
             root = ET.fromstring(content)
-        except ET.ParseError as e:
-            return {"error": f"GPX parse error: {str(e)[:100]}"}
-        
-        # Handle namespace
-        ns = ""
-        tag = root.tag
-        if "}" in tag:
-            ns = tag[:tag.index("}") + 1]
-        
+        except (ET.ParseError, LookupError, ValueError):
+            return {"route_status": "failed", "route_error": "invalid_xml"}
+        tag = root.tag.rsplit("}", 1)[-1]
+        if tag == "gpx":
+            return self._parse_gpx(content, athlete_units=athlete_units)
+        if tag == "TrainingCenterDatabase":
+            return self._parse_tcx(content, athlete_units=athlete_units)
+        return {"route_status": "unsupported_format", "route_error": "unrecognized XML root"}
+
+    @staticmethod
+    def _route_point(lat, lon, ele=None) -> Optional[Dict]:
+        """Keep valid GPS when altitude is missing; reject non-finite coordinates."""
+        try:
+            lat, lon = float(lat), float(lon)
+        except (ValueError, TypeError):
+            return None
+        if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+            return None
+        point = {"lat": lat, "lon": lon}
+        try:
+            altitude = float(ele)
+            if math.isfinite(altitude):
+                point["ele"] = altitude
+        except (ValueError, TypeError):
+            pass
+        return point
+
+    def _route_from_trackpoints(self, trackpoints: List[Dict],
+                                athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        if len(trackpoints) < 2:
+            return {"route_status": "no_gps", "route_error": "insufficient_trackpoints"}
+        # Incomplete altitude coverage must not enter the detector as synthetic zero.
+        if not all("ele" in point for point in trackpoints):
+            distance = 0.0
+            next_threshold = 0.0
+            polyline = []
+            for i, point in enumerate(trackpoints):
+                if i:
+                    prev = trackpoints[i - 1]
+                    distance += self._haversine(prev["lat"], prev["lon"], point["lat"], point["lon"])
+                if distance >= next_threshold or i == len(trackpoints) - 1:
+                    polyline.append([round(distance / 1000, 1),
+                                     round(point["lat"], 5), round(point["lon"], 5)])
+                    next_threshold = distance + 500.0
+            km = round(distance / 1000, 1)
+            return {"route_status": "no_elevation", "route_geometry": {
+                "total_distance_km": km,
+                "start_coords": [round(trackpoints[0]["lat"], 5), round(trackpoints[0]["lon"], 5)],
+                "polyline": polyline,
+                "display": {"total_distance": self._to_display(km, "distance", athlete_units)},
+            }}
+        summary = self._analyze_terrain(trackpoints, athlete_units=athlete_units)
+        if not isinstance(summary, dict) or "error" in summary:
+            return {"route_status": "failed", "route_error": "terrain_analysis_unavailable"}
+        return {"route_status": "ok", "terrain_summary": summary}
+
+    def _parse_gpx(self, content: bytes,
+                   athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Parse GPX trackpoints without inventing missing altitude."""
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError:
+            return {"route_status": "failed", "route_error": "invalid_gpx"}
+        ns = root.tag[:root.tag.index("}") + 1] if "}" in root.tag else ""
         trackpoints = []
         for trkpt in root.iter(f"{ns}trkpt"):
-            lat = trkpt.get("lat")
-            lon = trkpt.get("lon")
-            ele_elem = trkpt.find(f"{ns}ele")
-            if lat and lon:
-                tp = {"lat": float(lat), "lon": float(lon)}
-                if ele_elem is not None and ele_elem.text:
-                    try:
-                        tp["ele"] = float(ele_elem.text)
-                    except ValueError:
-                        pass
-                trackpoints.append(tp)
-        
-        if len(trackpoints) < 2:
-            return {"error": "insufficient trackpoints"}
-        
-        return self._analyze_terrain(trackpoints, athlete_units=athlete_units)
-    
+            point = self._route_point(trkpt.get("lat"), trkpt.get("lon"),
+                                      trkpt.findtext(f"{ns}ele"))
+            if point is not None:
+                trackpoints.append(point)
+        return self._route_from_trackpoints(trackpoints, athlete_units)
+
     def _parse_tcx(self, content: bytes,
-                   athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Parse TCX file into trackpoints, then analyze terrain."""
+                   athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Parse TCX positions, retaining GPS if altitude is absent or malformed."""
         try:
             root = ET.fromstring(content)
-        except ET.ParseError as e:
-            return {"error": f"TCX parse error: {str(e)[:100]}"}
-        
-        # Handle namespace
-        ns = ""
-        tag = root.tag
-        if "}" in tag:
-            ns = tag[:tag.index("}") + 1]
-        
+        except ET.ParseError:
+            return {"route_status": "failed", "route_error": "invalid_tcx"}
+        ns = root.tag[:root.tag.index("}") + 1] if "}" in root.tag else ""
         trackpoints = []
         for tp_elem in root.iter(f"{ns}Trackpoint"):
             pos = tp_elem.find(f"{ns}Position")
             if pos is None:
                 continue
-            lat_elem = pos.find(f"{ns}LatitudeDegrees")
-            lon_elem = pos.find(f"{ns}LongitudeDegrees")
-            alt_elem = tp_elem.find(f"{ns}AltitudeMeters")
-            
-            if lat_elem is not None and lon_elem is not None:
-                try:
-                    tp = {"lat": float(lat_elem.text), "lon": float(lon_elem.text)}
-                    if alt_elem is not None and alt_elem.text:
-                        tp["ele"] = float(alt_elem.text)
-                    trackpoints.append(tp)
-                except (ValueError, TypeError):
-                    continue
-        
-        if len(trackpoints) < 2:
-            return {"error": "insufficient trackpoints"}
-        
-        return self._analyze_terrain(trackpoints, athlete_units=athlete_units)
+            point = self._route_point(pos.findtext(f"{ns}LatitudeDegrees"),
+                                      pos.findtext(f"{ns}LongitudeDegrees"),
+                                      tp_elem.findtext(f"{ns}AltitudeMeters"))
+            if point is not None:
+                trackpoints.append(point)
+        return self._route_from_trackpoints(trackpoints, athlete_units)
     
     @staticmethod
     def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -11998,7 +12082,7 @@ class IntervalsSync:
             clean_desc = "\n".join(clean_desc_lines).strip()
 
             entry = {
-                "id": evt.get("id", f"unknown_{i+1}"),
+                "id": evt.get("id"),
                 "date": evt_date,
                 "name": evt.get("name", ""),
                 "type": evt.get("category", ""),
@@ -12007,18 +12091,13 @@ class IntervalsSync:
                 "duration_hours": round((evt.get("moving_time") or 0) / 3600, 2),
                 "duration_formatted": self._format_duration(int(evt.get("moving_time") or 0)),
                 "workout_summary": summary,
-                "has_terrain": evt.get("id", f"unknown_{i+1}") in getattr(self, '_terrain_event_ids', set())
+                **self._planned_route_fields(evt)
             }
 
             if coach_notes:
                 entry["coach_notes"] = coach_notes
             
-            # Start time: extract HH:MM when a real time is set (not midnight)
-            raw_start = evt.get("start_date_local") or ""
-            if "T" in raw_start:
-                time_part = raw_start.split("T")[1][:5]
-                if time_part != "00:00":
-                    entry["start_time"] = time_part
+            entry.update(self._event_start_fields(evt))
             
             # Indoor flag: only include when True
             if evt.get("indoor"):
@@ -12275,6 +12354,7 @@ class IntervalsSync:
                             # Convert meters → km for the display helper (canonical kind="distance" expects km)
                             distance_km_for_display = (distance_meters / 1000) if distance_meters else None
                             race_entry = {
+                                "id": evt.get("id"),
                                 "name": evt.get("name", "Unnamed Race"),
                                 "date": start,
                                 "category": cat,
@@ -12287,15 +12367,10 @@ class IntervalsSync:
                                         distance_km_for_display, "distance", athlete_units
                                     ),
                                 },
-                                "has_terrain": evt.get("id") in getattr(self, '_terrain_event_ids', set()),
+                                **self._planned_route_fields(evt),
                                 "_raw": evt  # Keep raw for race-week building
                             }
-                            # Start time: extract HH:MM when a real time is set
-                            raw_start = evt.get("start_date_local") or ""
-                            if "T" in raw_start:
-                                time_part = raw_start.split("T")[1][:5]
-                                if time_part != "00:00":
-                                    race_entry["start_time"] = time_part
+                            race_entry.update(self._event_start_fields(evt))
                             # Indoor flag: only include when True
                             if evt.get("indoor"):
                                 race_entry["indoor"] = True

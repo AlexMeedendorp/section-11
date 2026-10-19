@@ -75,7 +75,7 @@ is P2-only, P0 and P1 are not overridable. State the rationale.]
 | Polarization | Weekly Seiler TID rendered in power-zone labels. Source: `seiler_tid_7d.z1_pct/z2_pct/z3_pct`. Render as `Z1+Z2` (Seiler Easy / below LT1), `Z3` (Seiler Grey Zone / LT1–LT2), `Z4+` (Seiler Hard / above LT2). Do not output raw `Z1/Z2/Z3` labels; they collide with the per-session Power zones line above |
 | Load/Recovery context | Include tolerance note only when within 0.2 of threshold |
 | Next session | Include only on rest days |
-| Terrain Context | Include when `has_terrain: true` on a planned event and `routes.json` has the corresponding terrain data. Omit entirely otherwise. Full pre-ride briefing available on request |
+| Terrain Context | Include only with `has_terrain: true`, `route_status: "ok"` and matching event ID and complete `route_ref` in `routes.json`. Omit otherwise. `no_elevation` preserves distance/location in `route_geometry`, but never infer flatness, zero ascent, climbs or terrain-adjusted pacing. State other route limitations when route advice is requested. Full pre-ride briefing available on request |
 | Modify/Skip rationale | Required when recommendation is not "Go" |
 | Same-day continuation | Include only when a session has already been completed today and a further session is in question. When triggered, output the **Same-Day Continuation Block** in place of the standard report body, not alongside it. Omit entirely on a first session of the day |
 
