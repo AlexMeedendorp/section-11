@@ -6,7 +6,7 @@ Read and write tools for runtimes that can execute code or trigger GitHub Action
 |------|---------|
 | `push.py` | **Write** to Intervals.icu: manage planned workouts (push, list, move, delete), update sport-specific thresholds, annotate activities |
 | `pull.py` | **Read** raw Intervals.icu data on demand: per-second activity streams (latlng, altitude, watts, HR, …) and athlete unit preferences. Used when `terrain_summary`/`weather_summary` in `latest.json` aren't enough and the AI needs the underlying GPS/sensor track |
-| `EXTERNAL_APIS.md` | Endpoint reference for the external APIs used by the agentic platform: Strava, MET Norway (yr.no), Open-Meteo, Intervals.icu streams + weather |
+| `EXTERNAL_APIS.md` | Endpoint reference for Strava, MET Norway (yr.no), Open-Meteo and Intervals.icu streams + weather; planned-route forecasts come from sync.py's brief and maps |
 | [fit-file-and-merger/](fit-file-and-merger/) | Documentation for a multi-source FIT workflow: rewrite a virtual-ride FIT to a trainer identity, merge head-unit donor streams into it, upload to Garmin, re-check the stored result, then remove source duplicates. Cleanup gates and post-delete confirmation differ per platform, and current gaps are documented alongside them. Cycling-tested. Documentation only, no scripts published |
 
 `push.py` requires safety preview/confirm. `pull.py` is read-only and has no confirm gate.
@@ -51,6 +51,10 @@ For anyone already running auto-sync. Uses the same `ATHLETE_ID` and `INTERVALS_
 2. Copy `push-workout.yml` to `.github/workflows/push-workout.yml`
 3. Done. Your agent triggers the workflow via GitHub API dispatch.
 
+Use the v0.8 workflow with push.py v0.8. Its optional `time` input is strict local HH:MM for `command: move`. Keep `date` equal to the event's current date to change only the time; leave `time` empty to preserve the existing time. The workflow validates a nonempty time before calling push.py and rejects that input for other commands. For `command: push`, put `"time": "09:30"` inside each workout in the `workouts` JSON instead; omission still writes unset midnight.
+
+For example, dispatch inputs `{"command":"move","event_id":"42","date":"2026-10-20","time":"09:30","confirm":"false"}` preview that update. Read the result and obtain user confirmation before dispatching the same change with `confirm: "true"`. Replace the illustrative event/date with the verified planned event. Existing pre-read, one-attempt writes and outcome verification remain in push.py; an unknown result is not permission to dispatch again.
+
 **How the agent triggers it (Python):**
 
 ```python
@@ -60,6 +64,7 @@ workouts = [
     {
         "name": "Sweet Spot 3x15",
         "date": "2026-03-10",
+        "time": "09:30",
         "type": "Ride",
         "description": "- 15m 55%\n\n3x\n- 15m 88-92%\n- 5m 55%\n\n- 10m 50%",
         "duration_minutes": 85,
@@ -182,7 +187,19 @@ python push.py move --event-id 33375903 --date 2026-03-06          # preview
 python push.py move --event-id 33375903 --date 2026-03-06 --confirm # execute
 ```
 
-Preview shows old date → new date.
+push.py v0.8 preserves the existing local time of day, including seconds, when `--time` is omitted. Preview shows both old/new date and time. To set only the time, keep the existing date:
+
+```bash
+python push.py move --event-id 33375903 --date 2026-10-20 --time 09:30
+# After the user approves that preview:
+python push.py move --event-id 33375903 --date 2026-10-20 --time 09:30 --confirm
+```
+
+`push` accepts optional per-workout JSON `"time": "09:30"`, or `--time 09:30` for a single CLI workout. Use strict local HH:MM (00:00 through 23:59); omitted time still writes T00:00:00. A JSON batch uses each workout's own time, not a batch-wide `--time`. Malformed existing timestamps stop a move without a write unless an explicit valid time resolves them. Date-only/missing existing times remain unset midnight.
+
+Route weather treats exact midnight/date-only as unset and labels its configured 10:00 default as ASSUMED. Ask the athlete for their actual start or ask them to set it in Intervals.icu. With verified capability, preview the time update and wait for their confirmation before applying it; sync.py stays read-only and the next sync refreshes the binding. A genuine midnight ride is indistinguishable: use 00:01/23:59 or the configurable weather default. Changing the default to 00:00 still labels it assumed. Existing pre-write reads, one-attempt PUT and exact readback verification are unchanged.
+
+After a provided or assumed start passes, sync can supply a rolling departure rounded to the next quarter hour while the ride is unfinished on that local date. It remains ASSUMED, with `assumed_reason: "start_passed"` and the original `planned_local`. Use that bound brief and ask "When are you leaving?"; never retime a cached forecast yourself. Completion and local-day expiry are handled by sync as `completed` and `missed`, as specified in SECTION_11.
 
 #### delete: Remove a workout
 
@@ -280,7 +297,7 @@ says so.
 
 | Command | Safe to re-run as-is? | Notes |
 |---|---|---|
-| `move` | Yes | The same PUT sets the same date. Re-running converges |
+| `move` | Check current time first | An explicit --time repeats the same date/time. Without it, a new run preserves the time found by its fresh pre-read, which may reflect a concurrent edit. A fresh deliberate run still needs the applicable user authorization |
 | `set-threshold` | Yes | The same values are re-sent. Re-running converges |
 | `annotate --event-id` | Yes | If the note is already the first line, push.py issues no request and returns `applied` with `unchanged: true` |
 | `annotate --activity-id` (description) | Yes | Same duplicate suppression as above |
@@ -308,6 +325,7 @@ re-run provably safe.
 |-------|----------|------|-------------|
 | `name` | Yes | string | Workout name |
 | `date` | Yes | string | YYYY-MM-DD, must be today or future |
+| `time` | No | string | Local HH:MM; omitted writes unset T00:00:00. Included in preview |
 | `type` | No | string | Activity type (default: Ride) |
 | `description` | No | string | Intervals.icu workout syntax (see below) |
 | `duration_minutes` | No | number | Planned duration (max 720) |
@@ -459,11 +477,19 @@ Returns the athlete's wind/temp/rain/distance/weight unit settings from Interval
 Operational reference for the external APIs used by the agentic platform:
 
 - **Strava**: segment data, athlete effort history, starred segments (pre-ride enrichment)
-- **MET Norway (yr.no)**: multi-day weather forecasts (pre-ride briefings)
-- **Open-Meteo**: high-resolution weather forecasts (pre-ride briefings)
+- **MET Norway (yr.no)**: sync.py's route-weather fallback; direct calls only outside sync coverage
+- **Open-Meteo**: sync.py's primary route-weather provider; direct calls only outside sync coverage
 - **Intervals.icu**: activity streams (per-second GPS/sensor data) and pre-computed weather summaries on the activity list endpoint
 
-Section 11 protocol defines the reasoning rules for what to do with this data. `EXTERNAL_APIS.md` covers how to get it: endpoints, auth, response shapes, gotchas. Read it when implementing a new agentic flow that touches any of these APIs.
+For planned rides with routes, read `latest.json.data_overview`, the matching route-weather brief and its maps. Do not fetch another forecast for the same route/time. Direct Open-Meteo/MET calls are only for locations or times sync does not cover: no route, beyond 120 h, or an ad-hoc place. Label such forecasts as separate point/location forecasts.
+
+For an on-request report with no planned ride having a usable route within 120 h, follow the [weather report template](../reports/WEATHER_REPORT_TEMPLATE.md): explain the missing routes, list the rides and suggest attaching a GPX/TCX in Intervals.icu. A separate **Weather at home** block with labelled Place/source and Time lines requires actual, permitted weather-fetch capability and the shared [Point-weather location](../../SECTION_11.md#point-weather-location) rule: explicit current-chat statement `(you said)` first, then `athlete_profile.location` in current `latest.json` `(from Intervals.icu)` as the default, then the current official dossier's Home region `(from dossier)` only when the profile location is null/empty. The chat override lasts only for that conversation, never from memory or earlier chats. Heartbeat configuration is not a weather-location source. Route data for the session takes precedence; if travel is indicated but unresolved, omit weather or ask.
+
+Geocode city-level text using [EXTERNAL_APIS.md](EXTERNAL_APIS.md#geocoding-for-point-weather); ambiguity or failure means unavailable with the reason, never guessed coordinates or a fallback to a lower-priority location. Show the selected place/source. GeoNames attribution remains in API documentation and other geocoding displays, not a separate report line. Fetch weather from Open-Meteo first and MET Norway fallback. Report text ends with one linked line, "Weather data by Open-Meteo, CC BY 4.0.", without a transformation note; map footers stay unchanged. Give labelled facts per planned ride day at its planned time where known; label a daily window if the time is unknown. No wind classes, sections, bands, maps, ETA or route claims, and never substitute this block inside a ride block. Without fetch capability, say "A home forecast isn't available in this setup." If all location sources are empty, say "A home forecast isn't available: no home location. Add your city/country to your Intervals.icu athlete profile, or a Home region in your dossier." A failed weather fetch gets its actual reason and no values. Never use completed-activity `weather_summary` or old snapshots as a forecast. No planned rides at all gets the template's single no-rides line, with the home block optional under the same gates. A stale brief or missing map is not missing route coverage; the normal handling applies. Disabled weather is not permission for an alternate fetch.
+
+Use the actual provider name for fallback: "Weather data by MET Norway, CC BY 4.0." If separate blocks use both providers, name both on the single final attribution line.
+
+Section 11 protocol defines the reasoning rules for what to do with this data. `EXTERNAL_APIS.md` covers endpoints, auth, response shapes and gotchas for those permitted uses.
 
 ---
 
@@ -474,5 +500,5 @@ Section 11 protocol defines the reasoning rules for what to do with this data. `
 | `push.py` | Data repo root (next to sync.py) | Validates and manages workouts + thresholds |
 | `pull.py` | Repo tool (`section-11/examples/agentic/pull.py`): run from your data repo root, or copy alongside sync.py for convenience | Read-only fetcher for activity streams + athlete units |
 | `push-workout.yml` | `.github/workflows/push-workout.yml` | GitHub Actions workflow for dispatch |
-| `EXTERNAL_APIS.md` | Reference only (stays in section-11) | External API reference (Strava, yr.no, Open-Meteo, Intervals streams/weather) |
+| `EXTERNAL_APIS.md` | Reference only (stays in section-11) | External endpoints; read sync's brief/maps for covered planned-route weather, call providers only outside that coverage |
 | `README.md` | Reference only (stays in section-11) | This file |

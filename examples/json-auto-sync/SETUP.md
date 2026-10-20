@@ -97,6 +97,17 @@ Only override what you need. Unspecified sports default to power-preferred with 
 
 **Note:** `GITHUB_TOKEN` is provided automatically by GitHub Actions.
 
+### Optional route-weather variables
+
+In your data repository, open **Settings > Secrets and variables > Actions > Variables**, then **New repository variable**. The supplied workflow passes these optional values to sync.py:
+
+| Repository variable | Value and default |
+|---|---|
+| `SECTION11_ROUTE_WEATHER` | `0` disables route weather; absent/empty keeps it on |
+| `SECTION11_ROUTE_WEATHER_DEFAULT_START` | Local HH:MM such as `09:30`; absent/empty uses `10:00` |
+
+These are preferences, not credentials. No variables are required for the defaults. An invalid nonempty start leaves assumed-departure weather unavailable; it does not guess another time. Changes take effect on the next scheduled run or Sync Now. Local/Manual users can instead set the existing config or process environment. See [departure handling](../../README.md#route-weather-departure).
+
 ---
 
 ## Step 4: Enable Workflow Permissions
@@ -259,6 +270,8 @@ minutes left = allowance − monthly estimate
 
 ## How the Workflow Works
 
+Date-only/exact-midnight workouts use labelled 10:00 local by default. Choose another default through the [optional repository variables](#optional-route-weather-variables); strict local HH:MM is required. No setting is needed for the default. The AI asks for the real time or asks you to set it on the workout. New points/hours for the changed departure can fetch on the next sync without waiting for the normal refresh gate, subject to request limits and failure/provider backoff. See [departure handling](../../README.md#route-weather-departure). `data_overview` is directly after READ_THIS_FIRST, or first when absent; outlook directions are compact labels.
+
 The workflow file is the authority for this behavior. In outline:
 
 - **Actions:** GitHub's checkout, setup-python and upload-artifact actions are pinned to full commit SHAs of their current Node 24 releases, with the release version in a comment
@@ -267,7 +280,7 @@ The workflow file is the authority for this behavior. In outline:
 - **Time limit:** a run is stopped after 15 minutes. A normal sync finishes in well under a minute, but a first sync that builds `history.json` can take longer; if a first run is stopped at the limit, raise `timeout-minutes` in the workflow
 - **Default branch only:** a manual run started from another branch stops before any secret is used or anything is synced
 - **Credential masking:** `sync.py` prints the first five characters of your athlete ID and API key; the workflow registers both with GitHub's log masking before `sync.py` runs
-- **Output checks:** the run fails if `latest.json` is missing, is not valid JSON, or was not rewritten by this sync, or if any other generated file is not valid JSON
+- **Output checks:** `latest.json` must be an ordinary, valid JSON file rewritten by this sync. The declared set is checked for safe paths, allowed types, size, JSON validity and PNG signature/IHDR. A missing or invalid declaration uses the validated legacy JSON list without managed-file deletions; invalid fallback data stops publication
 - **Artifact first:** a manual run uploads the training-data artifact before anything is committed, so a later publishing problem does not remove your download
 - **One commit:** the generated files, the daily archive file and the README timestamp are committed together and pushed once, on top of the latest state of your default branch. Your own changes to other files, including the README, are kept
 - **Generated files changed during the run:** if a generated file changed in the repository after the run started, for example because you deleted `history.json`, the run fails without publishing and the next run syncs again
@@ -481,7 +494,11 @@ For local setups (non-GitHub), see [json-local-sync](../json-local-sync/SETUP.md
 
 Use this sequence when the workflow template changes, including the change from the earlier 15-minute workflow to the current one.
 
-For the 11.79 / sync 3.145 hotfix, update both `sync.py` and this workflow. Updating the script alone does not add `route_eta_history.json` to the workflow's validation and publication lists. Existing large forecast snapshots in `routes.json` are compacted on the next sync, keeping at most the first and latest usable brief per ride within 24 hours before departure and expiring 14 days after departure. Forecast and ETA calculations are unchanged.
+For 11.80 / sync 3.146, replace both `sync.py` and this workflow once. The workflow reads `latest.json.data_overview.managed_files`, produced from the same companion registry as the overview. Future JSON/PNG companion names and folders can then arrive through script updates without another workflow replacement. A new file type or rule change still requires a workflow update. Existing compact first/latest snapshots and departure-based expiry remain intact.
+
+All companions are relative to the folder holding latest.json. The shared workflow persists `maps/weather/` and `route_eta_history.json` in the data repository between runs. The AI starts with `data_overview`, resolves paths against the latest file's source and reads and shows matching PNG pages in their listed order, only after actually reading each image. The existing download artifact list remains unchanged, with no maps or ETA-history file; artifact-only users get the text weather brief, without extra steps.
+
+Publication rules allow up to 128 ordinary JSON/PNG files, 64 MiB each, with relative paths up to 240 characters, no hidden components, traversal or symlinks. JSON must parse; PNG signature and IHDR fields/CRC must validate. Paths that dropped from a valid prior declaration are the only deletion candidates; unrelated repository files remain. A missing/invalid current declaration uses the existing fixed seven-JSON list and disables declaration-based deletion. Invalid fallback data stops publication. Default-branch, conflict, retry/readback and daily archive protections still apply. Renderer pages are separately capped below 500,000 bytes each, four pages per ride and six rides: below 2,000,000 bytes per ride and 12,000,000 bytes for 24 pages. All pages appear in the existing sync-declared list; this redesign needs no additional workflow change.
 
 > **Manual-only setup?** If you removed the `schedule` block so the workflow runs only when you trigger it, keep that choice: after replacing the workflow in step 3, remove `schedule:` again and keep `workflow_dispatch:`. See [On-Demand Sync](../json-on-demand/SETUP.md#updating-an-existing-repository).
 

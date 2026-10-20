@@ -443,16 +443,16 @@ class RouteWeatherTests(unittest.TestCase):
         Weather(self.s, self.now + timedelta(days=1)).generate([], [], {}, self.athlete)
         self.assertEqual(self.s._routes_data["brief_snapshots"][0]["brief"]["brief_id"], first["brief_id"])
 
-    def test_departure_passed_never_fetches_or_creates_snapshot(self):
-        self.events[0]["start_date_local"] = "2026-10-19T09:00:00+00:00"
+    def test_missed_local_date_never_fetches_or_creates_snapshot(self):
+        self.events[0]["start_date_local"] = "2026-10-18T09:00:00+00:00"
         brief, _ = self.run_weather()
-        self.assertEqual(brief["reason_codes"], ["departure_passed"])
+        self.assertEqual(brief["reason_codes"], ["missed"])
         self.assertEqual(self.s._routes_data["brief_snapshots"], [])
 
     def test_horizon_missing_time_and_missing_zone_are_network_free(self):
         for start, athlete, reason in (
             ("2026-10-24T10:00:01Z", {}, "outside_120_hour_horizon"),
-            ("2026-10-19", {}, "missing_start_time"),
+            ("2026-10-19", {}, "missing_timezone"),
             ("2026-10-19T12:00:00", {}, "missing_timezone"),
             ("2026-10-19T12:00:00", {"timezone": "invalid"}, "invalid_timezone")):
             with self.subTest(reason=reason):
@@ -460,12 +460,13 @@ class RouteWeatherTests(unittest.TestCase):
                 self.athlete = athlete
                 self.assertEqual(self.run_weather()[0]["reason_codes"], [reason])
 
-    def test_dst_ambiguous_and_missing_hour_rejected_midnight_retained(self):
+    def test_dst_ambiguous_and_missing_hour_rejected_midnight_assumed(self):
         for raw in ("2026-10-25T02:30:00", "2026-03-29T02:30:00"):
             with self.assertRaisesRegex(ValueError, "ambiguous_or_nonexistent"):
                 Weather.departure({"start_date_local": raw}, {"timezone": "Europe/Berlin"})
         result = Weather.departure({"start_date_local": "2026-10-20T00:00:00"}, {"timezone": "UTC"})
-        self.assertEqual(result["at_utc"], "2026-10-20T00:00:00+00:00")
+        self.assertEqual(result["at_utc"], "2026-10-20T10:00:00+00:00")
+        self.assertEqual(result["source"], "assumed")
 
     def test_disabled_and_indoor_are_network_free(self):
         self.s.route_weather_enabled = False
@@ -935,15 +936,12 @@ class RouteWeatherTests(unittest.TestCase):
         self.assertEqual(second["eta"]["status"], "pace_with_climbing_allowance")
         self.assertEqual(self.s._routes_data["route_weather_requests_this_sync"], 0)
 
-    def test_changed_coordinates_respect_global_refresh_gate(self):
+    def test_changed_coordinates_fetch_through_normal_refresh_gate(self):
         self.run_weather(success)
         self.persist()
         for point in self.row["terrain_summary"]["polyline"]:
             point[2] += 1
         self.now += timedelta(seconds=60)
-        brief, _ = self.run_weather()
-        self.assertEqual(brief["status"], "unavailable")
-        self.now += timedelta(seconds=3900)
         brief, get = self.run_weather(success)
         self.assertEqual(brief["status"], "ok")
         self.assertEqual(get.call_count, 1)
@@ -1039,5 +1037,6 @@ class RouteWeatherTests(unittest.TestCase):
         self.athlete.update(fahrenheit=True, wind_speed="MPH", rain="IN", measurement_preference="feet")
         second, _ = self.run_weather()
         self.assertEqual(first["summary"]["temperature_range_c"], second["summary"]["temperature_range_c"])
-        self.assertEqual(second["summary"]["display"]["temperature_range"], {"value": [32, 32], "unit": "F"})
+        self.assertEqual(second["summary"]["display"]["temperature_range"],
+                         {"value": [32, 32], "unit": "F", "label": "32.0 °F"})
         self.assertEqual(second["summary"]["display"]["gust_max"]["unit"], "mph")

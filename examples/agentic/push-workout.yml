@@ -1,4 +1,4 @@
-# push.py v0.7 workflow — supports push, list, move, delete, set-threshold, annotate
+# push.py v0.8 workflow: supports push, list, move, delete, set-threshold, annotate
 name: Push Workout to Intervals.icu
 
 on:
@@ -26,6 +26,10 @@ on:
         type: string
       date:
         description: 'Target date YYYY-MM-DD — for move'
+        required: false
+        type: string
+      time:
+        description: 'Optional HH:MM local for move; same date changes only time. Push uses time in workouts JSON'
         required: false
         type: string
       oldest:
@@ -125,9 +129,22 @@ jobs:
         env:
           ATHLETE_ID: ${{ secrets.ATHLETE_ID }}
           INTERVALS_KEY: ${{ secrets.INTERVALS_KEY }}
+          MOVE_TIME: ${{ github.event.inputs.time }}
         run: |
           CMD="${{ github.event.inputs.command }}"
           CONFIRM="${{ github.event.inputs.confirm }}"
+
+          # Validate the environment value before it can enter the command.
+          if [ -n "$MOVE_TIME" ]; then
+            if [[ ! "$MOVE_TIME" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+              echo '{"success": false, "error": "time must be HH:MM local"}'
+              exit 1
+            fi
+            if [ "$CMD" != "move" ]; then
+              echo '{"success": false, "error": "time input is for move; push uses per-workout JSON time"}'
+              exit 1
+            fi
+          fi
 
           case "$CMD" in
             push)
@@ -157,6 +174,9 @@ jobs:
                 exit 1
               fi
               ARGS="move --event-id ${{ github.event.inputs.event_id }} --date ${{ github.event.inputs.date }}"
+              if [ -n "$MOVE_TIME" ]; then
+                ARGS="$ARGS --time $MOVE_TIME"
+              fi
               ;;
             delete)
               if [ -z "${{ github.event.inputs.event_id }}" ]; then

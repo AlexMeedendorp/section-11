@@ -34,7 +34,12 @@ before it is used or assumed.
 configured working directory (messaging and gateway modes in particular), so the directory in
 effect may not be the one in your configuration. Check, do not assume.
 
+Read latest.json's data_overview first to discover companions and route/weather/map status. Resolve relative locations against the source folder or URL base of that latest file; match filenames for folderless Manual uploads. Presence does not prove AI access. Follow Section 11's local-time, compass and brief-binding rules. Read and show matching route_weather_map.pages PNGs in their listed order, one page at a time. Show only pages actually read by the AI; identify any missing page and retain the text brief, with no map download or extra Manual step.
+
+If route-weather departure.source is assumed, retain the ASSUMED label and ask for the actual start time or ask me to set it in Intervals.icu. With verified execution/write access, preview a push.py v0.8 same-date move --time HH:MM and wait for my confirmation before --confirm. Re-read the next sync's new brief; sync.py never updates the workout. Use the compact outlook display_wind_from label.
+
 Load on demand only, through the same delivery paths:
+
 - history.json for trend, phase or longitudinal work: trend analysis, phase context, longitudinal comparison
 - intervals.json when analysing an activity with `has_intervals: true`, `has_dfa: true` or `has_structure: true`: interval compliance, pacing, cardiac drift, recovery quality, DFA a1 session interpretation and completed-session detail. Use latest.json's structure_summary for everyday comparisons and pre-workout context
 - routes.json when a planned event has `has_terrain: true`: route analysis, terrain-adjusted pacing, pre-ride briefing
@@ -170,7 +175,9 @@ what you are here to do.
 ## OUTPUT FORMAT
 
 No citations, no source markers, no parenthetical references. Raw data and analysis only.
-Exception: displayed forecast data must retain the provider's linked attribution, licence and transformation note specified in SECTION_11's Weather Data Source.
+Exception: displayed forecast data must retain one final linked attribution line, "Weather data by Open-Meteo, CC BY 4.0.", whether or not maps are shown. Report text has no transformation note; PNG footers stay unchanged. Point weather uses Weather at home and a Place line with its source label (you said / from Intervals.icu / from dossier) under the shared Point-weather location rule. GeoNames attribution remains in API documentation and other geocoding displays; pre-workout and weather reports omit a separate GeoNames line.
+
+Use the actual provider name for fallback: "Weather data by MET Norway, CC BY 4.0." If separate blocks use both providers, name both on the single final line.
 
 **Post-workout reports** use a structured line-by-line format per session, not bullets:
 
@@ -182,7 +189,7 @@ Exception: displayed forecast data must retain the provider's linked attribution
 
 Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete session field set and its activity-specific inclusion, omission and label rules, including IF, Session profile, HRRc, DFA a1, Feel, RPE, Effort response, Note and the conditional Outdoor context line.
 
-**Pre-workout reports** must include: readiness (HRV, RHR, Sleep vs baselines), load context (TSB, ACWR, Monotony if > 2.3), capability snapshot (durability 7d + trend, TID drift if not consistent), today's planned workout, and a Go / Modify / Skip recommendation.
+**Pre-workout reports** follow PRE_WORKOUT_REPORT_TEMPLATE.md: preserve every status field and conditional in four blank-separated groups without subgroup headings, then one Today block per session in calendar order. Weather belongs directly under outdoor rides and runs only. Use separate labelled facts, no middle-dot separators or hyphen continuation lines, and put an assumed-start question on its own line. Weather times use HH:MM unless a differing zone or UTC fallback needs a label; Data updated keeps its zone. Put interpretation directly after Go / Modify / Skip Recommendation without an Interpretation heading.
 
 ## RULES
 
@@ -207,7 +214,7 @@ Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete session fi
 
 ## Notes
 
-**Privacy.** Keep the dossier private: a local file, a private repository, or a private document store. A public data mirror carries JSON only, never the dossier. On a provider-hosted runtime, see the shared-runtime section above before placing it there. The README's Privacy & Security section carries the full statement.
+**Privacy.** Keep the dossier private: a local file, a private repository, or a private document store. A public data mirror exposes its generated JSON and route-weather PNGs, never the dossier; maps reveal route geometry and departure times. On a provider-hosted runtime, see the shared-runtime section above before placing it there. The README's Privacy & Security section carries the full statement.
 
 **Context files.** Where a runtime auto-loads a project instruction file, keep it short and point at the real locations rather than pasting the protocol into it. `SECTION_11.md` is far too large to load as context on every turn; the agent should read it as a file.
 

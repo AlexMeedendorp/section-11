@@ -30,8 +30,12 @@ Built on the [Section 11 Protocol](https://github.com/CrankAddict/section-11).
 | `latest.json` | Current 7-day snapshot + derived metrics + 28-day structure summaries + terrain & weather summaries | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/latest.json) |
 | `history.json` | Longitudinal data (daily/weekly/monthly) | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/history.json) |
 | `intervals.json` | Interval/DFA and completed-session structure detail (14 days) | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/intervals.json) |
-| `routes.json` | Route/terrain data for planned events with GPX/TCX attachments (`events` is empty when there are none) | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/routes.json) |
+| `routes.json` | Route/terrain data, route weather, forecast bands and map metadata for planned events with GPX/TCX attachments (`events` is empty when there are none) | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/routes.json) |
+| `maps/weather/` | Private route weather PNG pages, bound to the matching brief in routes.json | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/tree/main/maps/weather) |
+| `route_eta_history.json` | Rolling 180-day riding-time calibration | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/route_eta_history.json) |
 | `saved_workouts.json` | Read-only mirror of your Intervals.icu saved workouts | [View](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/blob/main/saved_workouts.json) |
+
+`latest.json.data_overview` lists these companions and their availability. It includes routed rides of any route status from the 90-day event fetch, but unrouted rides only within 120 h. Later routed rides retain route/climb details with weather status and map reason `beyond_horizon`. `rides_without_route_beyond_horizon` counts later unrouted rides excluded from the list; `rides_total` counts eligible rides before the 64-ride cap, and `rides_omitted` counts only cap overflow.
 
 ## Auto-Sync
 

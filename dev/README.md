@@ -37,6 +37,22 @@ setup.
 
 ## Running
 
+`test_weather_demand_workflows.py` covers new point/hour demand through a closed refresh gate, unchanged-demand throttling, failure/Retry-After migration, point batching, bounded timeout splitting and cached repeats. It also checks optional repository-variable wiring and the push workflow's time argument construction, including malformed inputs. The bounded shell check runs only the extracted argument builder with synthetic inputs, never push.py or a dispatched workflow.
+
+`test_data_overview.py` exercises companion discovery, relative paths, output placement, local-time/DST labels, 16-point wind directions and compact snapshots after display additions. It extracts the exact self-contained Python publication rules from `auto-sync.yml` for offline validation, fallback, deletion and reset/retry restoration tests. No GitHub or Git operation is needed. The workflow embeds the tested rules so users replace only sync.py and the workflow for 11.80, with no third bootstrap file.
+
+`test_weather_map_design.py` covers name fitting/wrapping/ellipsis, unchanged full names, distance-dominant labels, ordered pagination and publication, page cleanup/symlinks, size bounds and the embedded antialiased glyph atlas. Synthetic extra bands test pagination without changing the six-point weather sampler. The atlas derives from supplied Lato Regular with geometric arrow fallbacks; its OFL licence is inline in sync.py and in the root third-party notices.
+
+`test_weather_bands.py` checks the single forecast-band producer, exact map consumption, outlook omission, size bounds, coverage and wettest-period semantics, display decimals and report-template consistency. Weather/ETA preservation is also compared against the staged v5 review fixtures outside the suite.
+
+`test_weather_final.py` checks trace-rain rounding, fixed one-decimal labels, equal endpoints, native periods and incomplete-rain handling without value mutation. It exercises the exact 120-hour boundary, all routed statuses beyond it, excluded unrouted counts, the 64-ride cap, near-term off/expired/partial states and stale map exclusion. Paired JSON examples are parsed and checked against the production brief identity, band producer, planned summary, map-page and overview contracts using synthetic weather only.
+
+`test_route_weather_map.py` checks standard-library PNG encoding and determinism,
+wind direction, forecast/outlook rendering, brief binding, off switches, bounded
+file lifecycle and no-network behavior. Run with
+`python3 -m unittest discover dev/tests -p test_route_weather_map.py` or the full
+suite below. Its provider data are synthetic; no live forecast is tested.
+
 `test_terrain_segmentation.py` covers native terrain segmentation boundaries, persistent
 valleys, bounded exit extension, directional symmetry and admission/formatting
 with hand-derived profiles and the offline network guard. Run it alone with
@@ -311,11 +327,13 @@ validation or evidence that the thresholds generalize to all recordings.
 
 `test_workout_summary.py` keeps its independent expansion oracle and repeat regression constants, with explicit v3.141 flat-list availability changes. Formal adherence, independently verified outdoor boundaries and physiological validity are not validated by these tests.
 
+`test_weather_corrections.py` covers assumed midnight/date-only departures, configured defaults, DST rejection/resolution, labels, effective departure ordering, overview serialization order, compact outlook clustering and push.py v0.8 local-time validation/preservation. Its mocked HTTP cases exercise one PUT, pre-read and exact-time readback, including an unknown outcome and same-date time-only update. These bounded calendar-time cases do not validate live API or client behavior.
+
 ## Not covered
 
 Everything else. No report generation, and no `sync.py`
 surface outside per-endpoint fetch state, HTTP policy, the `history.json` refresh
 gate, the completed-session structure paths above, the DFA producer paths above, the `--init` and `--update` distribution rules and the `workout_summary` renderer with its report-template field contract. `push.py` write paths are
 covered for their transport behaviour and outcome classification only, not for
-their validation rules or their calendar semantics. Treat this as focused regression guards, not as
+their broader validation rules or calendar semantics beyond the time cases above. Treat this as focused regression guards, not as
 coverage of the repository.

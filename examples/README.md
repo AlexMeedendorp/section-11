@@ -11,7 +11,7 @@ Working implementations and reference documentation for Section 11 integrations.
 | [json-local-sync](json-local-sync/) | Automated local sync, read via runtime filesystem or cloud connector (no GitHub) | ✅ Ready |
 | [json-on-demand](json-on-demand/) | On-demand sync from phone or browser (no local Python) | ✅ Ready |
 | [json-manual](json-manual/) | Manual export from Mac/PC | ✅ Ready |
-| [reports](reports/) | Pre/post/weekly/block/season report templates | ✅ Ready |
+| [reports](reports/) | Pre/post/weekly/block/season/weather report templates | ✅ Ready |
 | [agentic](agentic/) | Write planned workouts to Intervals.icu calendar (code execution required) | ✅ Ready |
 | [agentic/fit-file-and-merger](agentic/fit-file-and-merger/) | Reusable multi-source FIT fusion, identity, verification, recovery and duplicate-cleanup reference | 📖 Reference |
 | [workout-library](workout-library/) | Structured workout templates for AI prescription | ✅ Ready |
@@ -60,6 +60,10 @@ Both methods use the same `sync.py` script and produce these files:
 | `saved_workouts.json` | Read-only mirror of the athlete's Intervals.icu saved workouts | Every sync (refreshed on its own 6h throttle) |
 | `ftp_history.json` | FTP tracking for Benchmark Index | Yes |
 | `archive/` | Daily UTC snapshots of `latest.json`, overwritten by later successful runs that day (GitHub workflow only, scheduled or Sync Now) | Yes |
+| `route_eta_history.json` | Rolling outdoor ETA calibration retained between runs | Repository/local; excluded from download artifact |
+| `maps/weather/` | Up to four ordered route-weather PNG pages per ride, six rides (24 pages), for AI chat display | Repository/local; excluded from download artifact |
+
+Read `latest.json.data_overview` first for companion presence, relative locations and route/weather/map status. Resolve paths against the latest file's source; match filenames for folderless Manual uploads. Local/Manual retain the export folder; GitHub/On-demand use the shared sync-declared JSON/PNG publication list. Read and show matching PNG pages in their listed order, only after actually reading each image, and otherwise use text, with no extra Manual step.
 
 See [json-examples/](json-examples/) for fictional example output of these files. They end in `.example.json`, are schema references only, and are never athlete data.
 
@@ -196,6 +200,7 @@ The [reports/](reports/) folder contains Section 11-compliant templates:
 | `WEEKLY_REPORT_TEMPLATE.md` | End-of-week summary |
 | `BLOCK_REPORT_TEMPLATE.md` | End-of-block phase assessment |
 | `SEASON_REPORT_TEMPLATE.md` | On-demand annual-arc trajectory + YoY |
+| `WEATHER_REPORT_TEMPLATE.md` | On-request five-day planned-route forecast/outlook |
 | `*_EXAMPLES.md` | Anonymized examples showing normal and threshold-breach scenarios |
 
 Use these to standardize AI coaching output across platforms.

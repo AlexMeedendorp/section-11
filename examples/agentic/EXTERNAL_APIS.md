@@ -1,7 +1,7 @@
 # External API Reference
 
 **Version:** 1.0  
-**Purpose:** Operational setup and endpoint reference for external APIs used by the agentic platform. Section 11 protocol defines the reasoning rules for what to do with this data. This document covers how to get it.
+**Purpose:** Operational setup and endpoint reference for external APIs used by the agentic platform. Planned-route forecasts come from sync.py: agents read the matching brief and maps, discovered through `latest.json.data_overview`. Call weather providers directly only for locations or times sync does not cover (no route, beyond 120 h, or an ad-hoc place). Section 11 protocol defines how to reason about the data; this document retains the endpoint details for those uses.
 
 ---
 
@@ -78,7 +78,7 @@ For each segment on the route, compile for the coaching layer:
 
 ## 2. yr.no (MET Norway)
 
-The Norwegian Meteorological Institute provides global forecasts. For sync.py's default-on route weather this is the explicitly labelled fallback to Open-Meteo, used only when no fresh primary point forecast is available. See README for off switches/privacy and SECTION_11 Weather Data Source for lead-time tiers and request limits.
+The Norwegian Meteorological Institute provides global forecasts. For sync.py's default-on route weather this is the explicitly labelled fallback to Open-Meteo, used only when no fresh primary point forecast is available. Agents read that brief and its maps; direct MET calls are only for no-route, beyond-120-hour or ad-hoc location forecasts outside sync coverage. See README for off switches/privacy and SECTION_11 Weather Data Source for lead-time tiers and request limits.
 
 ### Authentication
 
@@ -115,13 +115,13 @@ From `data.next_1_hours`:
 - Fetch for the ride area at the planned ride time. For long routes, consider fetching for multiple points along the course
 - Cache responses; MET Norway returns `Expires` and `Last-Modified` headers. Do not re-fetch until the cached response expires
 - Retain a validated `Last-Modified` value for `If-Modified-Since`; 304 reuses cached content. sync.py accepts at most two redirect hops on the same HTTPS host within Locationforecast 2.0, each counted in its eight-request budget
-- [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) attribution: "Data from [MET Norway](https://api.met.no/) (fallback); sampled and summarized by Section 11". Keep the licence link beside displayed data
+- For MET-only fallback, end report text with "Weather data by [MET Norway](https://api.met.no/), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)." If separate blocks use both providers, name and link both on the same final line, with the licence once. No transformation note in report text; PNG footers remain unchanged
 
 ---
 
 ## 3. Open-Meteo
 
-Open-Meteo is the primary provider for sync.py's default-on route weather. It selects available models for the location; `best_match` identifies that selection, not a known underlying model run. MET Norway is a labelled fallback. Provider choice is not a claim that one forecast is always more accurate.
+Open-Meteo is the primary provider for sync.py's default-on route weather. Agents read the matching brief and maps instead of fetching again; direct calls are only for no-route, beyond-120-hour or ad-hoc location forecasts outside sync coverage. It selects available models for the location; `best_match` identifies that selection, not a known underlying model run. MET Norway is a labelled fallback. Provider choice is not a claim that one forecast is always more accurate.
 
 ### Authentication
 
@@ -164,7 +164,35 @@ From the `hourly` array:
 - `precipitation_probability` is provided directly as a percentage: no need to derive it from symbol codes
 - Combines multiple weather models; the default selection is the best available for the queried location
 - Amount/probability and maximum gust apply to the preceding hour; temperature and mean wind are instantaneous. Do not sum precipitation across repeated route samples
-- Display "Weather data by [Open-Meteo](https://open-meteo.com/); sampled and summarized by Section 11" with a [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) link. The free endpoint is non-commercial; sync.py does not implement a paid endpoint
+- End report text with "Weather data by [Open-Meteo](https://open-meteo.com/), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)." Use one line for route and home weather, whether or not maps are shown, without a transformation note. PNG footers remain unchanged. The free endpoint is non-commercial; sync.py does not implement a paid endpoint
+
+### Geocoding for point weather
+
+Resolve city-level text to coordinates before fetching a point forecast. First select the location using [Point-weather location](../../SECTION_11.md#point-weather-location): explicit current-chat statement, then `athlete_profile.location` in current `latest.json`, then the current official dossier's Home region only when the profile location is null/empty. A session's route data still takes precedence. This lookup is for the consuming AI with actual, permitted fetch capability; sync.py does not geocode home locations.
+
+The [official Geocoding API documentation](https://open-meteo.com/en/docs/geocoding-api) describes this GET endpoint:
+
+```text
+https://geocoding-api.open-meteo.com/v1/search?name=Aalborg&count=10&language=en&countryCode=DK&format=json
+```
+
+| Parameter | Use |
+|---|---|
+| `name` | Required city/place name or postal code. URL-encode it. A single comma followed by country or first-level administrative area narrows the search, for example `Aalborg, North Denmark`. |
+| `countryCode` | Optional ISO-3166-1 alpha-2 filter, such as `DK`. Use it when the selected source supplies an unambiguous country; do not carry a home country into a different current-chat travel location. |
+| `count` | Default 10, maximum 100. Country/admin filters are applied before this result limit. |
+| `language` | Lower-case language code, default `en`; returned names may be translated. |
+| `format` | Default `json`; use JSON here. |
+
+The response's `results[]` entries supply `name`, `latitude`, `longitude`, `country_code`, `admin1`, `population` and `timezone` when available; empty fields are omitted. Check the returned country/region against the selected source before using its coordinates.
+
+The profile location may contain city, region and country. Separate those supplied parts: use the city and optional region in `name`, and the country in `countryCode`. Do not blindly pass a three-part string: only the text between the first and second comma is treated as the qualifier. The qualifier must match exactly; country-code filtering avoids ambiguous country/admin abbreviations. Two-character place queries use exact matching; three or more use normalized prefix matching, so multiple results are normal.
+
+**Deterministic selection:** Filter by `countryCode` when the selected source has a country, and reject candidates that contradict a supplied region. Prefer an exact name match (case- and diacritic-insensitive) over prefix matches. Among remaining candidates, select the sole match, or the uniquely highest population when every remaining candidate has a comparable population. If there is a tie, missing population prevents comparison, the result limit could hide an equally eligible match, or no candidate matches the supplied constraints, report the location as ambiguous/unavailable and ask for clarification. Never choose the first result merely because it is first, invent coordinates or silently try a lower-priority location. Empty results, malformed responses and failed requests also mean unavailable with the actual reason.
+
+The supplied Aalborg example illustrates the distinction: the search returns `Aalborg`, `Aalborg SØ` and `Aalborg SV`. With country `DK` and exact name `Aalborg`, select the city at latitude `57.048`, longitude `9.9187` (population `142937`, admin1 `North Denmark`, timezone `Europe/Copenhagen`), not either district. These are documentation example coordinates, never a default athlete location. Use the selected result's `latitude` and `longitude` in the forecast request; keep the athlete-location source label, for example `(from Intervals.icu)`, distinct from geocoding attribution.
+
+The free endpoint is for non-commercial use under Open-Meteo's [terms](https://open-meteo.com/en/terms); commercial reserved resources require the customer endpoint/API key described in the documentation and [pricing](https://open-meteo.com/en/pricing). This guidance does not configure a subscription or grant network access. Geocoding attribution remains **Location data based on [GeoNames](https://www.geonames.org/)** in this documentation and other geocoding displays. Pre-workout and weather reports omit a separate GeoNames line; their Place line names the athlete's location source and their final line credits weather data. Do not add flag attribution unless flags are actually used.
 
 ---
 

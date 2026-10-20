@@ -357,9 +357,9 @@ class SectionPhysicsTests(unittest.TestCase):
                       for i in (1, 2)]
             entries = [{"event_id": i, "route_status": "ok", "terrain_summary": terrain, "route_ref": {}}
                        for i, terrain in ((1, route_terrain(1600)), (2, rolling_terrain()))]
-            def brief(row, event, athlete, calibration):
+            def brief(row, event, athlete, calibration, departure=None):
                 eta = copy.deepcopy(calibration)
-                Weather.sections(row["terrain_summary"], eta, {"at_utc": NOW.isoformat()})
+                Weather.sections(row["terrain_summary"], eta, departure or {"at_utc": NOW.isoformat()})
                 return {"status": "unavailable", "eta": eta}
             sync._routes_data = {"events": entries}
             with mock.patch.object(Weather, "brief", side_effect=brief):

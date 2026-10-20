@@ -10,9 +10,13 @@ Trigger a fresh Intervals.icu sync from your phone or browser, then download the
 
 ## Overview
 
+Date-only/exact-midnight workouts use the labelled 10:00 local default. Optional repository variables are set under **Settings > Secrets and variables > Actions > Variables**: `SECTION11_ROUTE_WEATHER=0` disables weather, and `SECTION11_ROUTE_WEATHER_DEFAULT_START=09:30` chooses a strict local HH:MM default. Unset/empty means on and 10:00; an invalid nonempty start makes assumed-departure weather unavailable. The shared workflow passes both settings, with details in [Optional route-weather variables](../json-auto-sync/SETUP.md#optional-route-weather-variables). The AI asks for the actual start or asks you to set it in Intervals.icu. New points/hours can fetch on the next user-triggered sync, subject to request limits and failure/provider backoff. No extra export/upload step is required. See [departure handling](../../README.md#route-weather-departure).
+
 Uses the same GitHub Actions workflow as auto-sync, but without the cron schedule. You tap a link in your repo's README to trigger a sync, and download the resulting files as a ZIP artifact from the completed run.
 
-The shared workflow validates and commits `route_eta_history.json` to retain the 180-day personal ETA record between runs. This internal record stays in the repository and is not added to the download artifact. Updating to sync 3.145 also compacts old forecast snapshots in `routes.json` on the next triggered run; see the [GitHub setup update instructions](../json-auto-sync/SETUP.md#updating-an-existing-repository) for updating both the script and workflow.
+For 11.80 / sync 3.146, replace sync.py and the shared workflow once, keeping your manual-only trigger. It publishes the sync-declared JSON/PNG file list under fixed validation rules, so future companion names/folders need only a script update. See the [GitHub setup update instructions](../json-auto-sync/SETUP.md#updating-an-existing-repository) for limits, safe fallback and the replacement steps. Compact forecast snapshots stay bounded.
+
+The repository retains `route_eta_history.json` and up to four ordered `maps/weather/` PNG pages per ride, for six rides (24 pages) between runs. All companion locations in `latest.json.data_overview` are relative to the latest file's folder. The AI reads that overview first and resolves paths against the current data source. It reads and shows matching map pages in their listed order only when it can actually read each PNG; otherwise it uses the text brief. Maps and ETA history are not added to the download artifact ZIP. Download users keep their existing JSON workflow with no extra steps; folderless uploads are matched by filename.
 
 **Flow:** Tap Sync Now → Run workflow → Download artifact ZIP → Attach to AI chat.
 

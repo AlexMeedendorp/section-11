@@ -4,6 +4,9 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.146 - Local-time PNG weather maps, companion data overview and a
+  sync-declared publication list. Preserve compact snapshots and ETA/terrain.
+  Pairs with protocol/skill v11.80.
 Version 3.145 - Compact first/latest pre-departure snapshots with 14-day retention.
   GitHub/On-demand workflows retain the 180-day route ETA record between runs.
   Pairs with protocol/skill v11.79; forecast and ETA calculations are unchanged.
@@ -619,6 +622,9 @@ import base64
 import math
 import statistics
 import hashlib
+import re
+import struct
+import zlib
 import zipfile
 import tempfile
 import shutil
@@ -720,6 +726,12 @@ class RouteWeather:
         self.state["version"] = self.VERSION
         due = self.number(self.state.get("next_attempt_at"))
         self.can_fetch = due is None or self.epoch >= due
+        # Separate failure cooldown from the normal refresh gate. Derive it from
+        # retained errors as well, so caches written before this field stay safe.
+        self.failure_until = max([self.number(self.state.get("failure_backoff_until")) or 0,
+                                  *[self.number(record.get("next_attempt_at")) or 0
+                                    for record in self.cache.values()
+                                    if isinstance(record, dict) and record.get("error")]])
         self.snapshots = self.restore_snapshots(old.get("brief_snapshots", []))
 
     @staticmethod
@@ -818,7 +830,9 @@ class RouteWeather:
                     saved["outlook"] = pick(brief["outlook"], ("window_utc", "precipitation_period_hours",
                         "wind_from_sectors", "wind_speed_range_mps", "interpretation"))
                 compact = {"snapshot_version": 1, "saved_at": snapshot["saved_at"],
-                           "departure_basis": "scheduled; actual departure not known",
+                           "departure_basis": ("assumed after passed start; actual departure not known"
+                                               if brief.get("departure", {}).get("assumed_reason") == "start_passed"
+                                               else "scheduled; actual departure not known"),
                            "aggregation": "Contiguous segment extrema; gust range is of section maxima. "
                                           "Rain amounts are native-period extrema, not totals; wet windows "
                                           "may contain dry or unknown gaps. Missing coverage is not dry weather.",
@@ -976,31 +990,110 @@ class RouteWeather:
         return {**record, "persistence_status": status}
 
     @classmethod
-    def departure(cls, event, athlete):
+    def departure(cls, event, athlete, default_start="10:00"):
         raw = event.get("start_date_local")
-        if not isinstance(raw, str) or "T" not in raw:
+        if not isinstance(raw, str):
             raise ValueError("missing_start_time")
         try:
             local = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
             raise ValueError("invalid_start_time")
-        if local.tzinfo is not None:
+        date_only = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw))
+        if not date_only and "T" not in raw:
+            raise ValueError("invalid_start_time")
+        assumed = date_only or (local.hour, local.minute, local.second, local.microsecond) == (0, 0, 0, 0)
+        if assumed:
+            if not isinstance(default_start, str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", default_start):
+                raise ValueError("invalid_default_start")
+            hour, minute = map(int, default_start.split(":"))
+            local = local.replace(hour=hour, minute=minute)
+        if local.tzinfo is not None and not assumed:
             return {"at_utc": cls.iso(local.timestamp()), "timezone": str(local.tzinfo),
                     "source": "event_explicit_offset"}
         name = event.get("timezone") or athlete.get("timezone")
+        # For an assumed time, prefer the named zone so a transition since
+        # midnight uses the offset at the actual default departure time.
+        if assumed and not name and local.tzinfo is not None:
+            return {"at_utc": cls.iso(local.timestamp()), "timezone": str(local.tzinfo),
+                    "source": "assumed", "assumed_reason": "unset_time",
+                    "planned_local": local.isoformat()}
         if not isinstance(name, str):
             raise ValueError("missing_timezone")
         try:
             zone = ZoneInfo(name)
         except (ZoneInfoNotFoundError, ValueError):
             raise ValueError("invalid_timezone")
+        local = local.replace(tzinfo=None)
         candidates = {local.replace(tzinfo=zone, fold=fold).timestamp() for fold in (0, 1)
                       if local.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc)
                       .astimezone(zone).replace(tzinfo=None) == local}
         if len(candidates) != 1:
             raise ValueError("ambiguous_or_nonexistent_local_time")
-        return {"at_utc": cls.iso(candidates.pop()), "timezone": name,
-                "source": "event_timezone" if event.get("timezone") else "athlete_timezone"}
+        at = candidates.pop()
+        result = {"at_utc": cls.iso(at), "timezone": name,
+                  "source": "assumed" if assumed else ("event_timezone" if event.get("timezone") else "athlete_timezone")}
+        if assumed:
+            result.update(assumed_reason="unset_time",
+                          planned_local=datetime.fromtimestamp(at, zone).isoformat())
+        return result
+
+    @classmethod
+    def effective_departure(cls, event, athlete, now, activities=(), default_start="10:00"):
+        """Resolve one sync's departure without changing the planned workout."""
+        planned = cls.departure(event, athlete, default_start)
+        zone = ZoneInfo(RouteWeatherMap.time_context(event, athlete)["zone"])
+        planned_at = cls.parse_time(planned["at_utc"])
+        planned_local = datetime.fromtimestamp(planned_at, zone)
+        event_date = datetime.fromisoformat(event["start_date_local"].replace("Z", "+00:00")).date()
+        local_now = now.astimezone(zone)
+        if local_now.date() > event_date:
+            raise ValueError("missed")
+        for activity in activities:
+            if event.get("id") is not None and activity.get("paired_event_id") == event["id"]:
+                raise ValueError("completed")
+            if not cls.outdoor(activity):
+                continue
+            at = cls.parse_time(activity.get("start_date"))
+            if at is None:
+                raw = activity.get("start_date_local")
+                if not isinstance(raw, str) or "T" not in raw:
+                    continue
+                try:
+                    local = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if local.tzinfo is None:
+                    # Naive local activity times use the same display zone.
+                    # Ambiguous/nonexistent times cannot establish completion.
+                    candidates = {local.replace(tzinfo=zone, fold=fold).timestamp() for fold in (0, 1)
+                                  if local.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc)
+                                  .astimezone(zone).replace(tzinfo=None) == local}
+                    if len(candidates) != 1:
+                        continue
+                    at = candidates.pop()
+                else:
+                    at = local.timestamp()
+            if (datetime.fromtimestamp(at, zone).date() == event_date
+                    and planned_at - 2 * 3600 <= at <= now.timestamp()):
+                raise ValueError("completed")
+        if planned_at > now.timestamp():
+            return planned
+        if local_now.date() != event_date:
+            raise ValueError("departure_date_mismatch")
+        # Strictly next quarter hour, including at an exact quarter boundary.
+        # Advance real minutes in the display zone so DST folds/gaps stay valid.
+        rounded = now.timestamp() - local_now.second - local_now.microsecond / 1e6
+        rounded += (15 - local_now.minute % 15) * 60
+        return {"at_utc": cls.iso(rounded), "timezone": zone.key, "source": "assumed",
+                "assumed_reason": "start_passed", "planned_local": planned_local.isoformat()}
+
+    @staticmethod
+    def default_start(config):
+        """Nonempty environment overrides config; invalid values fail closed on use."""
+        value = os.environ.get("SECTION11_ROUTE_WEATHER_DEFAULT_START")
+        if value in (None, ""):
+            value = config.get("route_weather_default_start", "10:00")
+        return "10:00" if value == "" else value
 
     @classmethod
     def terrain_distances(cls, terrain):
@@ -1984,7 +2077,7 @@ class RouteWeather:
 
     def point_key(self, provider, point):
         location = self.digest([provider, self.tier, point["lat"], point["lon"], point["altitude"]])
-        if provider != "open_meteo" or self.request_window is None:
+        if self.request_window is None:
             return location
         # Narrow responses are reusable only when they cover the new time window.
         # Keep separate windows at shared locations; reuse covering legacy caches.
@@ -2002,10 +2095,15 @@ class RouteWeather:
         record = self.cache.get(self.point_key(provider, point), {})
         return self.epoch >= (self.number(record.get("next_attempt_at")) or 0)
 
-    def request(self, provider, url, params, headers=None, redirects=0):
+    def new_point_demand(self, provider, point):
+        # A covering response reuses its key, including legacy location-only
+        # records. An already attempted incomplete window waits for refresh.
+        return self.point_key(provider, point) not in self.cache
+
+    def request(self, provider, url, params, headers=None, redirects=0, new_demand=False):
         blocked_until = self.number(self.state.get(provider + "_blocked_until")) or 0
         elapsed = time.monotonic() - self.started
-        reason = ("forecast_backoff" if not self.can_fetch else
+        reason = ("forecast_backoff" if self.epoch < self.failure_until or not (self.can_fetch or new_demand) else
                   "request_budget_exhausted" if self.requests_made >= self.MAX_REQUESTS else
                   "request_admission_cutoff" if elapsed >= self.ADMISSION_SECONDS else
                   "provider_backoff" if self.epoch < blocked_until else None)
@@ -2027,7 +2125,7 @@ class RouteWeather:
                 if (redirects < 2 and parsed.scheme == "https" and parsed.netloc == "api.met.no"
                         and parsed.path.startswith("/weatherapi/locationforecast/2.0/") and target != url):
                     response.close()
-                    return self.request(provider, target, None if parsed.query else params, headers, redirects + 1)
+                    return self.request(provider, target, None if parsed.query else params, headers, redirects + 1, new_demand)
             if response.status_code not in (200, 203, 304):
                 retry = response.headers.get("Retry-After", "")
                 try:
@@ -2086,7 +2184,7 @@ class RouteWeather:
             raise requests.exceptions.Timeout("route weather pass deadline")
         return json.loads(body)
 
-    def fetch_open_meteo(self, points):
+    def fetch_open_meteo(self, points, new_demand=False):
         start, end = self.request_window
         hour = lambda stamp: datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%dT%H:00")
         params = {"latitude": ",".join(str(p["lat"]) for p in points),
@@ -2095,7 +2193,7 @@ class RouteWeather:
                   "hourly": ",".join(self.OM_FIELDS), "timezone": "GMT", "timeformat": "unixtime",
                   "wind_speed_unit": "ms", "temperature_unit": "celsius", "precipitation_unit": "mm",
                   "start_hour": hour(start), "end_hour": hour(end)}
-        response = self.request("open_meteo", self.OM_URL, params)
+        response = self.request("open_meteo", self.OM_URL, params, new_demand=new_demand)
         if response is None:
             return
         payload = response.get("payload")
@@ -2112,8 +2210,8 @@ class RouteWeather:
         # Every child is admitted through the same count/time gates; no sleeps.
         if response.get("error") == "provider_timeout" and len(points) > 1:
             middle = len(points) // 2
-            self.fetch_open_meteo(points[:middle])
-            self.fetch_open_meteo(points[middle:])
+            self.fetch_open_meteo(points[:middle], new_demand)
+            self.fetch_open_meteo(points[middle:], new_demand)
 
     def store_point(self, provider, point, response, parsed=None):
         if response is None:
@@ -2142,10 +2240,15 @@ class RouteWeather:
                           (old.get("last_modified") if response.get("not_modified") else None),
                           "deprecated": response.get("deprecated", False)}
 
-    def fetch_provider(self, provider, points):
+    def fetch_provider(self, provider, points, new_points=()):
         due = [p for p in points if self.due_point(provider, p)]
+        if not self.can_fetch:
+            admitted = [p for p in due if p in new_points]
+            if len(admitted) < len(due):
+                self.provider_errors.add("forecast_backoff")
+            due = admitted
         if provider == "open_meteo" and due:
-            self.fetch_open_meteo(due)
+            self.fetch_open_meteo(due, all(p in new_points for p in due))
         elif provider == "met_norway":
             for point in due:
                 record = self.cache.get(self.point_key(provider, point), {})
@@ -2156,7 +2259,8 @@ class RouteWeather:
                     headers["If-Modified-Since"] = record["last_modified"]
                 response = self.request(provider, self.MET_URL,
                                         {"lat": f'{point["lat"]:.4f}', "lon": f'{point["lon"]:.4f}',
-                                         "altitude": point["altitude"]}, headers)
+                                         "altitude": point["altitude"]}, headers,
+                                        new_demand=point in new_points)
                 self.store_point(provider, point, response,
                                  self.parse_met(response.get("payload")) if response else None)
         records = [self.cache.get(self.point_key(provider, p), {}) for p in points]
@@ -2220,11 +2324,70 @@ class RouteWeather:
                 "complete": all(availability.values())}
 
 
-    def brief(self, row, event, athlete, calibration):
-        departure = self.departure(event, athlete)
+    MAX_BANDS_BYTES = 64_000
+
+    @classmethod
+    def forecast_bands(cls, brief):
+        """Compute compact display bands once, before the brief identity is bound."""
+        if brief["tier"] != "forecast":
+            return []
+        points, sections = brief["sampling"]["points"], brief["sections"]
+        if not 2 <= len(points) <= RouteWeatherMap.MAX_BANDS or len({p["point_id"] for p in points}) != len(points):
+            raise ValueError("map_band_count_or_identity")
+        if any(s["point_id"] not in {p["point_id"] for p in points} for s in sections):
+            raise ValueError("map_unassigned_section")
+        result = []
+        for index, point in enumerate(points):
+            indexes = [i for i,s in enumerate(sections) if s["point_id"] == point["point_id"]]
+            near = [sections[i] for i in indexes]
+            kind = RouteWeatherMap.dominant(near)
+            chosen = [i for i in indexes if RouteWeatherMap.sample_kind(sections[i]) == kind]
+            representative = min(chosen, key=lambda i: abs((sections[i]["start_km"]+sections[i]["end_km"])/2-point["km"])) if chosen else None
+            direction = RouteWeatherMap.direction(near)
+            fields = {key: RouteWeatherMap.display_range(near, source) for key,source in (
+                ("wind_speed","wind_speed_range_mps"), ("gust_max","gust_max_mps"),
+                ("temperature","temperature_range_c"), ("feels_like","apparent_temperature_range_c"))}
+            if fields["gust_max"]:
+                fields["gust_max"]["value"] = fields["gust_max"]["value"][1]
+            rain, probability, wettest = RouteWeatherMap.rain(near)
+            coverage = {key: bool(near) and all(s["weather"]["coverage"][key] for s in near)
+                        for key in ("temperature","wind","gust","precipitation","probability")}
+            if rain.startswith("Dry") and not coverage["precipitation"]:
+                rain = "Rain incomplete · " + (f"{probability:g}%" if probability is not None else "chance unknown")
+            arrival = near[0]["arrival_window_utc"] if near else []
+            end = near[-1]["end_window_utc"] if near else []
+            window = [wettest["from_utc"],wettest["to_utc"]] if wettest else []
+            local = lambda values: [RouteWeatherMap.local_time(t,brief["display_time"]) for t in values]
+            distance = {"value":[near[0]["display"]["start"]["value"],near[-1]["display"]["end"]["value"]],
+                        "unit":near[0]["display"]["start"]["unit"]} if near else None
+            speed = RouteWeatherMap.display_label(fields["wind_speed"])
+            gust = f"{fields['gust_max']['value']:.1f}" if fields["gust_max"] else "unknown"
+            result.append({"letter":RouteWeatherMap.band_letter(index), "point_id":point["point_id"],
+                "section_count":len(near), "start_km":near[0]["start_km"] if near else None,
+                "end_km":near[-1]["end_km"] if near else None,
+                "arrival_window_local":local(arrival), "end_window_local":local(end),
+                "wind_class":kind, "wind_from":direction, **fields, "coverage":coverage,
+                "representative_section_index":representative,
+                "rain":{"max_amount":wettest.get("display_amount"), "max_probability_pct":probability,
+                        "period_hours":wettest.get("period_hours"), "wettest_window_local":local(window)},
+                "display":{"distance":RouteWeatherMap.display_label(distance),
+                           "start_time":RouteWeatherMap.clock(arrival[0],brief) if near else "unknown",
+                           "time":RouteWeatherMap.display_span([RouteWeatherMap.clock(arrival[0],brief),
+                                      RouteWeatherMap.clock(end[1],brief)]) if near else "unknown",
+                           "wind_class":{"head":"Headwind","cross":"Crosswind","tail":"Tailwind",
+                                         "calm":"Calm","unknown":"Unknown"}[kind],
+                           "wind":f"{speed} from {direction} · gusts {gust}",
+                           "temperature":RouteWeatherMap.display_label(fields["temperature"]),
+                           "feels_like":RouteWeatherMap.display_label(fields["feels_like"]), "rain":rain}})
+        if len(json.dumps(result,separators=(",",":")).encode()) > cls.MAX_BANDS_BYTES:
+            raise ValueError("forecast_bands_too_large")
+        return result
+
+    def brief(self, row, event, athlete, calibration, departure=None):
+        departure = departure or self.effective_departure(
+            event, athlete, self.now, getattr(self.sync, "_overview_activities", ()),
+            getattr(self.sync, "route_weather_default_start", "10:00"))
         start = self.parse_time(departure["at_utc"])
-        if start <= self.epoch:
-            raise ValueError("departure_passed")
         if start - self.epoch > self.HORIZON_HOURS * 3600:
             raise ValueError("outside_120_hour_horizon")
         self.tier = "outlook" if start - self.epoch > self.OUTLOOK_AFTER_HOURS * 3600 else "forecast"
@@ -2247,9 +2410,13 @@ class RouteWeather:
                                math.ceil(window_end / 3600) * 3600)
         cache_key = self.digest(binding)
         provider = "open_meteo"
-        records = self.fetch_provider(provider, points)
+        # Capture demand before either provider records this pass's attempts.
+        # A known window in either cache is a refresh, not new demand.
+        new_points = [p for p in points if all(self.new_point_demand(name, p)
+                                               for name in ("open_meteo", "met_norway"))]
+        records = self.fetch_provider(provider, points, new_points)
         if not any(r.get("forecast") and r.get("expires_at", 0) > self.epoch for r in records):
-            fallback = self.fetch_provider("met_norway", points)
+            fallback = self.fetch_provider("met_norway", points, new_points)
             if any(r.get("forecast") and r.get("expires_at", 0) > self.epoch for r in fallback):
                 provider, records = "met_norway", fallback
             elif not any(r.get("forecast") for r in records):
@@ -2278,6 +2445,9 @@ class RouteWeather:
                 value = period["amount_mm"]
                 period["display_amount"] = {"value": round(value / (25.4 if units["rain"] == "in" else 1), 2),
                                             "unit": units["rain"]} if value is not None else None
+            if self.tier == "forecast":
+                weather["map_sample"] = RouteWeatherMap.central_sample(
+                    leg, records[leg["point_id"]], wind_factor, units["wind"])
             leg["weather"] = weather
             leg["display"] = {key: self.sync._to_display(leg[key + "_km"], "distance",
                                  self.sync._athlete_units_from_dict(athlete)) for key in ("start", "end")}
@@ -2342,7 +2512,8 @@ class RouteWeather:
                                                          for i in (0, -1)] if r.get("forecast") else None,
                                   "provider_updated_at": r.get("forecast", {}).get("provider_updated_at"),
                                   "error": r.get("error")} for p, r in zip(points, records)]}
-        brief = {**binding, "cache_key": cache_key, "status": status, "reason_codes": reasons,
+        brief = {**binding, "name": event.get("name") if isinstance(event.get("name"), str) else "Planned ride",
+                 "cache_key": cache_key, "status": status, "reason_codes": reasons,
                  "fetched_at": self.iso(min(r["fetched_at"] for r in forecasts)),
                  "expires_at": self.iso(min(r["expires_at"] for r in forecasts)),
                  "units": dict(self.UNITS), "provenance": provenance, "summary": summary,
@@ -2370,10 +2541,35 @@ class RouteWeather:
             brief["reason_codes"].append("long_lead_outlook")
             if any(h > 1 for h in period_hours):
                 brief["reason_codes"].append("coarse_provider_periods")
+        brief["display_time"] = RouteWeatherMap.time_context(event, athlete)
+        for key, value in (("departure", departure["at_utc"]), ("fetched", brief["fetched_at"]),
+                           ("expires", brief["expires_at"])):
+            summary["display"][key] = RouteWeatherMap.local_time(value, brief["display_time"])
+        if departure["source"] == "assumed":
+            summary["display"]["departure"] += " (ASSUMED)"
+        if self.tier == "outlook":
+            brief["outlook"]["display_wind_from"] = RouteWeatherMap.outlook_wind(directions)
+        else:
+            brief["bands"] = self.forecast_bands(brief)
+        # Add presentation labels without changing any stored weather values.
+        for field in summary["display"].values():
+            if isinstance(field, dict) and "value" in field:
+                field["label"] = RouteWeatherMap.display_label(field)
+        summary["display"]["wind"] = RouteWeatherMap.display_label(
+            brief["outlook"].get("display_wind_speed_range") if self.tier == "outlook"
+            else RouteWeatherMap.display_range(legs, "wind_speed_range_mps"))
+        summary["display"]["feels_like"] = RouteWeatherMap.display_label(
+            RouteWeatherMap.display_range(legs, "apparent_temperature_range_c"))
+        summary["display"]["rain"] = RouteWeatherMap.rain(legs)[0]
+        rain_display = summary["display"].get("hourly_precipitation_max", summary["display"].get("period_precipitation_max"))
+        if rain_display:
+            rain_display["label"] = summary["display"]["rain"].split(" · ", 1)[0]
         brief["brief_id"] = self.digest(brief)
         return brief
 
     def generate(self, events, activities, previous, athlete, power_inputs=None):
+        self.sync._route_weather_now = self.now
+        self.sync._overview_activities = activities
         by_id = {e.get("id"): e for e in events if e.get("category") in self.sync.TRAINING_EVENT_CATEGORIES}
         record = self.sync._update_route_eta_history(activities, previous, now=self.now)
         history = record["activities"]
@@ -2393,8 +2589,15 @@ class RouteWeather:
             self.state["eta_consistency"] = saved_reference
         else:
             self.state.pop("eta_consistency", None)
-        for row in sorted(rows, key=lambda r: (by_id.get(r.get("event_id"), {}).get("start_date_local") or "",
-                                               str(r.get("event_id")))):
+        def departure_order(row):
+            try:
+                resolved = self.departure(by_id.get(row.get("event_id"), {}), athlete,
+                                          getattr(self.sync, "route_weather_default_start", "10:00"))
+                at = self.parse_time(resolved["at_utc"])
+            except ValueError:
+                at = float("inf")
+            return at, str(row.get("event_id"))
+        for row in sorted(rows, key=departure_order):
             self.provider_errors = set()
             event = by_id.get(row.get("event_id"))
             if row.get("route_status") != "ok" or event is None:
@@ -2408,16 +2611,16 @@ class RouteWeather:
                         or event.get("is_virtual") or "virtual" in str(event.get("sub_type", "")).lower()):
                     raise ValueError("not_outdoor_cycling")
                 # Gate first; distant/missing-time events do not consume the event budget.
-                departure = self.departure(event, athlete)
+                departure = self.departure(event, athlete, getattr(self.sync, "route_weather_default_start", "10:00"))
+                departure = self.effective_departure(
+                    event, athlete, self.now, activities, getattr(self.sync, "route_weather_default_start", "10:00"))
                 delta = self.parse_time(departure["at_utc"]) - self.epoch
-                if delta <= 0:
-                    raise ValueError("departure_passed")
                 if delta > self.HORIZON_HOURS * 3600:
                     raise ValueError("outside_120_hour_horizon")
                 if eligible >= self.MAX_EVENTS:
                     raise ValueError("event_budget_exhausted")
                 eligible += 1
-                brief = self.brief(row, event, athlete, calibration)
+                brief = self.brief(row, event, athlete, calibration, departure)
             except ValueError as error:
                 brief = {"schema_version": self.VERSION, "event_id": row["event_id"],
                          "route_ref": row["route_ref"], "status": "unavailable",
@@ -2431,13 +2634,1906 @@ class RouteWeather:
             self.save_snapshot(brief)
         if self.requests_made:
             delay = self.FAILURE_BACKOFF_SECONDS if self.failures else self.REFRESH_SECONDS + self.jitter
-            self.state["next_attempt_at"] = self.epoch + delay
+            if self.failures or self.can_fetch:
+                self.state["next_attempt_at"] = self.epoch + delay
+            if self.failures:
+                self.state["failure_backoff_until"] = max([
+                    self.epoch + self.FAILURE_BACKOFF_SECONDS,
+                    *[self.number(record.get("next_attempt_at")) or 0
+                      for record in self.cache.values() if isinstance(record, dict) and record.get("error")]])
+            else:
+                self.state.pop("failure_backoff_until", None)
         # Cache records only persist while useful; snapshots have their separate retention.
         self.state["points"] = {k: v for k, v in self.cache.items()
                                 if isinstance(v, dict) and self.epoch - (self.number(v.get("last_attempt_at")) or 0) < 7 * 86400}
         self.sync._routes_data["route_weather_cache"] = self.state
         self.sync._routes_data["brief_snapshots"] = self.snapshots
         self.sync._routes_data["route_weather_requests_this_sync"] = self.requests_made
+
+
+class RouteMapFont:
+    """Section 11 Map Sans: Lato-derived antialiased atlas, with geometric arrows.
+
+    Copyright (c) 2010, Łukasz Dziedzic (dziedzic@typoland.com).
+    Reserved Font Name: Lato. Modified atlas name: Section 11 Map Sans.
+    No installed fonts or platform-dependent rendering. See FONT_LICENSE below.
+    """
+    FONT_LICENSE = """Copyright (c) 2010, Łukasz Dziedzic (dziedzic@typoland.com),
+with Reserved Font Name Lato.
+
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE."""
+    DATA = (
+        "c-ri}3xDfK^Ct9F;Bd#DII--=9#}xPBue5$0t}d0u4b(z?3%?3QsRa0PUM@qx~sdZTJkwF^Gf?a`+LW++I_9Adg`gFfAiy?{mUP}"
+        "&+msnihuF-um1VJ{_*?2`SEZ4`2CN&+0Ar38{VG&-;W>v!|=zy{r$N&zL|f2J|F((-wyAlLw`K{5on&(>tIy+hkx1mvmzUvp24X9"
+        "tpAMh*#`M6FnzW{KFisk&8zcgi{`UtlT$x?KYuoBK6^EMHWxliPoMeXXYui~d*QRk(`S?5ANk4iBm^HMX<QzrubG#8Ka%%Vv>6Fc"
+        "arh_}KN|U;-=96f&qlYxTAZH=^4a+Nvj^$3ulh$~@Vn(<w}pZD(c;wU<@;rCT=rxThQ-bwY*vN|sb%*+{ZR|=+0EVEczAyh-sAh>"
+        "*w+hh@%ivif_x%wKvB3y(g2Q6ITAMRt9rQQ_rUj+LsGxj|IV-cor{p2AcE*1Jfi>{AXzw1#6vI_dJ-1r_g13ty%kS!EDF`?{QX=!"
+        "`QW`+6|UdU`8^<%EAbofz1{IYGSJ8ia#+Wb6gu=}ewv0bFa3EXpR47!g0v<|wfYeMJKtw`I=#7{4et&|csd#SceEqi_E{fwxl;PL"
+        "I*5SjtfI9NXX+L^OwV~a%aqd0W31fQvJ78Q+IhL$(>dNxVmoh_d%Td^xf~zLxRUd)4rbCHF71@03ot{(K_K2;^8DiuIJV;RJkrcR"
+        "{_M_Qzmxv3(9J*oc;Ma)5PeIYe|&l_Qm@j?n>_#M)7;Ue)XrKr|LB8@%=+1mMhtzf5!FlSFZ&T9PW5NB)a}{J4}4O(quaC1ym=I<"
+        "@u1tY7nw2IQQArEGJ~>tnrl+tv(5aIHuJk(W+a+dmuVCf=YN9jQiz|Yf-Wn5j>tHd=dyOPPRo2QYnQfardhk!cI_;c^>KPG>O#_B"
+        "AcudAF#$gp?2+bkFVJnJN_U1XGHgbYVTJAtUG~+KB*QY@8M?@Rk0-<Ob}~$RhAw}g$c*^X&PFH0_LO!SeWldNuq{c3jjS?k&68n)"
+        "PVXVfu;$*)b@NYY=7OutwR%rRY3G9X+-voo4awXc+4P<{N#8B)dJjo|8rk(8t!^R6{zl$Uz~_ygF%a*NP{0`CZe(-PuAQ=@JLl5Q"
+        "Q@eI9XEyF=e!k7b-Q`XY`U~!gQKq{?&@-z&Lt(DdU(rW<h8q3#gVK)n3^lT!WOHfHP@}&tcrr|<zmjB__TGKq*<5Sgz1!%oBw4uC"
+        "-MfwKC#k#Id$-YFE0zqCzMWcS813F&v1~5=z1zrslHQ}ecS{lXCF3IMy?dFrJx}k^>5C-2M=vvqj$}sWC^HIOJ1m)@=*EpKWXOzi"
+        "i`c=%J6&e9eQHSX-@QPBli_c(+u>w3oO?e55<IvaXv=3%iA&e_Ul}I50kU&`KkMfGb<6j2$JZAv-_KjTpCsW$%%;3otM%)sgv!%k"
+        "R6NjLUM=(*;dXD`uN$)xH!zK*C@Fg2WR`0nu#%`rZWbo9i1Li}5CQFxM7^vU4+hyPKC2ajEPslWwGihqd4qGj0@vcv3{F#VexO=e"
+        "2xIp>`C7f0(fL_yOX@@JBW~E{ec?KaqN9uX3s;RLHL1W<*ZgHr!u1pO+yqmD=2ZCN=(^^<FSxLwnsk1DMs%;p*YjEZnh{|NS<XbX"
+        "-+#BfZ-e<W%lkh4{Uv7V*xnc96})GO@4q5&t@yqT+Dj!$gRHJjtTJ<i?|&jq1;P%(*`U%~A|N-L^B)tTL_oth$e)F18WNz$tt{RA"
+        "d81wv-iPw<w3hb_lOQ(S9W>pm^7Z!>sfESD;6|Xd5k|%v%$o#OHEdyV3+(J`QEdmtd(ZB=4nw0J;8P&-D6DpdyEkFzzSy&;xb{w~"
+        "v7aLiP}~LC`A!Jc^Fe`DMcp%u0^guNP;}SiMFZ=Rbzi6>`Na1VosM=#gSmBgtxYZ#*!!ZawcIPG_e&iVLVI8D&b7V2!`;D+thTtm"
+        "O56KB>HUrC`+L-dBkZC3839UDTtESJ{qgq&cknIc{kaw{z1%Bd7$Eits{1w&PveSQydCB;$LD#DyO0E3^CWA_9DN_$I|3c_?CKNt"
+        "BY*-C-8U3n=_i{Y0{8AFH|Vb5emw8p7esHs-VY<FqwMwf{(fBFlc(<=Ty0@4-)U>hz3-h}*z-YIT5P{$!SsVDcZW1KvKxhd?>Eaf"
+        "*Xn>2<GTn=N?c^b4*ZFowv;?Z8xMPTI;TTW-{*0Cw(0yqP$U5#zGCRESABo)`2N`)<BB_`e~$O}uJ1oH;Cq8jxoh`+xo~_vc#MML"
+        "DR72eInesQ_v80J{OQePdOsWwfAjBZuC4F=9J(!#VadTApXZ&o{H=eB^8bEbFxTSjdM**WqeA57W<_pXkeP@+yw+HR<tMH6=6%GS"
+        "`rOh!5^y*5`(|5~(0+co2L`I`ycAk5y)ej=un^bSdTzCt-9gW}EU72RZ_$2Qn)h2}vJ;EOg`R8HV?*(2)Naef(D#KFCo}B-u)$*e"
+        "y#ZrK#+4IX)7z1$4^e5Nk(V}F?qh7WZH<({#x7af@Sz#%zo?9^-q=iQ5OhfV&PZZ2ZeW~yLB@>Dwz5uN*&E#9t88SUoi+L`F54qL"
+        "?O)LEwK5}(%`~%DE%l<YhX#6l&Nert4rhEu?G4wt$(-!y%bC!G9^n3<VA1##j96QqnQd`Y9*cIQS-;JV@?3K!wq%U$BJ0p_lMk$q"
+        "f{d}=F{w$`U4C0UGsQ*5%x6|LNJ}Rb@BInxXQAk&r4DCl&ZM9Z3HLpT0xjT3o<`12u={>M3Jn525&yFHD*=aX?oI*2@Q8YqcuyX-"
+        "$hUqd;t1m1xgYT;WLAI1Ksd`OMaH1*>-00>{%Pn!Hmr{7%P0lEaY~diI<YKc>gBB)&S%0R%Gm)6D%X)lHV{L@oNV_t_N!su{N~P6"
+        "Fvr!A5*?(jtuHjb<OKRCJ$=ZB=}c!R_M0GkdB9(nWrjuu>#(_uHAjM8E^-vM2KF`wJ7^|%PO|UFA*evVf)sAiC%8(2B2S{sM?!<h"
+        "_kf^-B<~oe9OT?{C$uBpRe?^YTxGhmVbsl_j4@D#IblLrst-}`Lu{Oa9IlgSWX!Yau4?QE%ihTa83S}5-xLzrM9dcyY)-M&B6Ijl"
+        "l2ItnqJL?|(sg};%+9lsRi9t7>;R37`RdF@!emU|nT>?V7}b6z+ekV(a%J?HQs+j)qY}6)s7$@AxyQGyfgXEjmY?{ciH&-*5g&x_"
+        "kBl~mXTb+6o4$a_+h*MtW_+-);-47q@us(*0vgs==<S9E11wDVpjj4`I$3|Q&yjn|h!3Lj^1J;{a5t3NzFY7?-2Of2d&j081S|?U"
+        "i@OmcY)A6D?gtkA=_w|2UnERU^+)cFGKQqvCOV((T)lfm8AH|!Q_P0MxKqtOD>?o~g_AVcIQzSF_hlND$Bay2o&-Pj`6sn+?BD<K"
+        "`ycoI&15z^`Nr=3U*a1R_t`lu!ZPk|npZLpgX<$h<x8|dIhFI4HgjsgM&@(pW)mBS!ZF<(g&(r5uG20xj8b>^9eJnoJdeZgvna)e"
+        "+%ek)JZWIp$#Ewo>#T?3eo*Bbm?zd6ihM`ZrV#m5tUil8tOUQCOPkLIJsO!^Zz-()8uQv|)7gZC?=b8wTrZ&GkR?TzIO;l^-6W(>"
+        "vNm2rYMOmvY4C&&9uyzy;(2kzpE>(tI_tD$fjdxk+OWti9(Oy<DsQu+=kaQN1~Fxw>TW5W!`-6K?lHgCyKi1x=WKVph9T6mR@XU$"
+        "UCxK%6Y6F@l-P@I<|Ed{+M3b?hWRON4efl`?N&wJYUTK|#Bp2D{1v6;PJ?>vL0=X1Dm^#jeMH1G4?ffLp3dy^5u5$w&w$5XX!LPp"
+        "K0<R^E-~E?#1O3Wu{Lp=#B(gaYnzW3liywBd#iiaJReP;)&^WngIk*BqcU+zMEQ{7GEX}nA0q<}{BGwSYUkt4ppQS0?q_^Hgm+b2"
+        "K=jWW@G5jZBBP#P5_J`1J_@6qmW`->ad|!p!G0)A=iRDLNb}*D?ZZHfsdcsI(S1sv3w1t>`b{k2kQ5z3@xA+>RvmUk(Fc|J@CbMX"
+        "?Y@`yhi3l^I6c*$4dbD-oJG-2C-qsKXAQOwzGv6FF&>ZxzXq|JHjMib$LR3+fPFA=!&5y*ht5Y1N4LpIdgEZTx6X&mZ&K6JC67_5"
+        "U~wT~tm+sy+at%l#=|r9EFbk}>AYa`fyx2xGrQcYxph85Mw(qQ{|jY4h$(Yr--V=CqPBkiX2nl2j3@U9vEVC1+rBQ9d<5r1hYRP="
+        "qY}Z@H>S9R<axBQ;F+i67#79LG1cO35>`0_8v6-unS)>EKlt(cALH@O?d(+K<L(wI@)2d{jFBIesR)Fj$i$!Hdm!_qzQ{xfXc7xU"
+        "kqBR;OT36Kda206LsVyHR-SqZ{=<3+W;e6p^m_&FhvU29e9U%?Rfz$7@N^((s!v357WkN9rzJFtK>tMPM{{Vt^oF*qRpP`m1%THB"
+        "P>NDw3Vauw@}GL(Nzr^4dL?sVa1v|{V6v}O9tFbS#9&B%DPt?OBoe{ESsRRW#Snkf8z`xP5Ys3?s<FE@7*l%#;X!|i2w=h3pqSno"
+        "6q8EtU{DD;&Bdb{6ox%y`kO#9%pL!h8o;gK&-1rU@MrGlli_c!YZRNn1=@bu8uq8U2ODMDHxLBX;6Op{sP{=_0vt@i52XPNYUH~q"
+        "a8(UXN=!j6uLk4!$*>l&X}*PfqcX^mJHxyobK@Cg;hHpl<UBna9NUR0U?Ljn0YPDJOpW6x^mhTGNH0dDGiB^6bFY3FK$5dAvisCH"
+        "rsg__Lu5|)L3nCS@jp6iies*(xG=#MxGUorBH+&q5DMaMYEF;}nLHS!nL%?Aw92VLf*`vqH|?%h12mWzPkTn{E3&&hlC)FjHO&n0"
+        "=Zj$+<~i4EghowLIPJ(O@eL60&LGiDTA@js6kz|6N!poibCYyg8*bhYmiE`&yq@Xitqgl=Z*YZ~B;B3iR-W+w<{AE0Qf_+xZ~nLG"
+        "th2e+|IM`SroWjqJZFoi)Vk~<gZweM)l!4y@@k+R88pA#pfP<ILW}o$nQge21j}-4xIaGi^QFwCFefX$C9d4NOT!(w(<2atKD<EK"
+        "Cu6;f+^>Eq%9Cl&PGq20nk;}vQwY!b_i#8mUzjMfVYR1*%M&%l|M*zEc{23AHO24$e?0UiEy?z^(<Gq<8`FuGv6cJ@Pd20eRr}wE"
+        "m@4x70`Z_M48Om8JMZeFRA}&6`1{A?gGUV~X%dPQ^6w`pkXC}zZE$c_U4H*5RsvFTAwkaaB)L<8K;?~b=i~PNK>iW6TPaUwbK+_Z"
+        "!EZDHjFhG(HZ}wtEMLL*Oe8lk03-YO(tmONZg8gQ99x462};$_h2O2m=FOV_78_0kDY*MQ&ae2{_Dh}n!+trhf7IN>r~34lH904Q"
+        "ZuVc;IM~L*?SC07+<&K{2H6F#_l32S_J8s$?D2=teE#CF`U{?a=ifgN3!`@4xmt=3F132T#rV`8PUgeu?UiGuUfc59nPqJQgAsAt"
+        "kD(t!KZbq`KXD9EB$dT({#~xp=|J<HuuyA&@SYkp%G(s$u7QbGWm9Y8=I=0u{yg+!=*Q5Hp&tY1`8bz{cFmX1FmHynJM;F&n~rPy"
+        "=FS`5O^4%|(Y`72Bmk!5naAuk4i2FX#o0`UT+jocEY%r2IQgV_FCY2r0E|B%pM}V0GPk*s_K66lKQ?^?4#yK92>{<0mA-Iv`9pxW"
+        "P)*h&U<#ZUC#Te{3e1ZD^eIn{2+p3Mg}J)_Jk`X8PSko{5IUS=d~&^)eyagb@5Z}3>?Lnfvsmw_wz5IzJN&B$ZPQ04f6?#6kyI{T"
+        "`ZuPp!3}brzyHs)2Dx&cpGoH##CzrdoEMz0a^A)&P-6mak<Y#~vLJ$=6|zH3h!rTBJmNwrpRn5bgDkhq<EY-t)0^4tZ1`Kv^cW8("
+        "w?lt+{bV_5dfW`0<U?n#y~hahwj}^GUyd_+kaJ{C+NOCavnBq(9)HB2hgClh{XF#Z@Q*ML`A?gNg~L3=PV=zo=b@j6ejfUH=;z^j"
+        "^WZzp!|b~Aki_I<4A?v{68_{Phk01L%)?th4}br82>A0rOhOFiVLIdBuf-uD!A}Sdufc`e3#a7nkcW5b{j@y1$GVhtJ<c$2%3~L*"
+        "wd}p=oCkI5YwK>vAv%$zJ}<3qQ{mh5Mp%#FmgEk#)JuA%`c+NTJ7i7<M+^~ZN4sW)<TozIP3_i2D&=a>jZ4Bk_Xr6d%spNs4CFA>"
+        "h|p?p`%X%lKbRN96v#0$=2HauG!&x#E7)769RYq%63>M-r;;$wBV7)wX9<Tk9u*Pqouk(QDHoE65sLvT;^zb(L?Tj01>&|Sn<x<K"
+        "7MtUcnKue>H5#>4%nM1&zbWP!njvSJC}*FMeY{Y8U}RNR2o~Vv08{tz=^arvkkuk}O~iV_<b1uaihnQ|jrcy_t?c^{+a>#L!EYa$"
+        "5rr$cGf%N}j>WS|S37fgy@mg#n}XmhY#jFt+#?5Hsau}hT+S`W%Qbg-<S{snDd=WQ!QXI9i%!NA8pbrroc7+~j>6=!!+Cn;%U~&Q"
+        "e;~^Um%4YSFoeuS?tRE|FLlYe9f?X%j?NY3c~|B$ci6*)`i>w!2gLP$K<=~`{+%Gs@6vD&Th8QWqy~8x+_NB_$wrSAc{~(&0_?L2"
+        "zq1H){3dY&&f8jO-T!2rC9pqsBgPzyeHrWIk1b!N*cUlPNMz0Rhw8ze$p$mpjlc#^OgfW6RscH~kp-#P*8$$2<k`+4UIY7dpyq~@"
+        "YN+~OB)h%*5YOmCM75XIJe2dnsK!`65OBc&v(fWen&oU>w#E@~8~~%4Qw);aQrqW)8hHB{YcZeg7YoD+wsV!QzIK8CqB@8D0b?nh"
+        "F*V+E;BDSrAjH`rXXIou^zW_(Aqt|3Sw=$KLaY~o7+|Qza_Uxke+&8ekyY1s1v8{>XZ563%=KXQ7l$edaLbG4+*Qo=p!c`(;PE7z"
+        "v^iXlawV!}6%m>m9kXuI_ODb{`v4h>pUsHtF*w3!slC5)I`K2L*V<osJv?j-Gdpx5Uf+cN3RgcUoj{r2GmN(X(#`qItWNt9w4BoR"
+        "!|D)9){#6T_Sb5<{Ve(0_qXqF-`~E!eSiD@_WkYqYwmA>glvh*q7u%vLLn+%SUEeq{o;<`ht^+Q5P!A)x*-e)h+!;dzVYws%s2k{"
+        "$}FYiToEt|a&ATNSgj`G-_HvoB9pJR6;1{lJIWPSW+o9{;GsF)5n(4;EC1Rb9n$_t-_~dq7wlLZm`6n9QK~fc{qAOYM&rUzt%Rv~"
+        "QzXQ9q9n=7r8Y8o{Xp|yIBMwYQCPrKDs_lv492<9iCR-CLQrk=4)=!nUsUg#5CQxUli5Hy$_$7YUNhjKy6gvEK=nCLR*rbAtVHi8"
+        "#B(W}13S4Dc$?L0nm}~Ly`EvP`o2DQ6mM!mUo-m{=1!M}xNn^@9;7bJ8O_-rI7P49Ds);O(Ie$lN%swBvymSrdyaY@8T+V0WeQ^r"
+        "d>2-O@RS@6u4N7P4krPqcMkh_Ve;fsM1cqiJM01Q{>)(y!T0&1;2E%ri<a+K|IqJ`+P*(8`uF?yf8G0opym6U{{3J2e!2YCVLggL"
+        "c@ES{N6ya{%Lv7J4)<MDj#@nR5Zb&yl31?}g9rfo_E(Le<x@jX-UWJ^T%afK>d?~##mu>RqaWHqPlW+`va7;UAQjSvu^%y^*zv#+"
+        "c=AYup2h^z#qzAE@9Uwb92vj-ZgznV5a>xEnT87Vq?k5xL2f;=uY-<47zp>JGhg*Zmf<*IAGSo~STyxTcqAc{a5X_>k8~0_PKFjl"
+        "w=G~R#7$+6>an+=`_?o2g3PzzrLmiz!k)Q!35+!k4QnZqY){Y=C3$8VxAZm$Yc_Ec*<KrUGl1lAC*o$?IS?xK(1Rzy9Bz1liiY=H"
+        "5}t;l%EVXMlPB@+;HsQqz8$!j4B_F9-_7K!fj)lh!t*%m_p08}OWwMv&O&AoK6+`-8RzI#$1A7yBg#syn@S_f@-$Me`yCrb4fEZo"
+        "r3n-S6&TZ`<(YPbLV+pfn9z0Kwh!W+?m2ZqbO()sw)5b2M+L1QHAydUa*v2E9^qb2$-xSt8sHp78{g!nw2UEtWuB2oX$;R=T~;eA"
+        "pnF0MGN$Var;3Gdygn#_#9(g_+(xe|yr1Y?x!5DRD=#h@AS=ui1K@gY`YY-{M%W&@u7$k}6KwlB*T(~VU$j#aDS`q^0+YU&>@bBP"
+        "Q^LAqVXjaJZuPp{<v0An=AbM1G<$Z-fl9`9*>5BVwX~=A1{YQOY9|=k6ouT>#(Y2uluFYPhE0^)JBIuW!(jcbADohDXT?KM1Xp{G"
+        "%&Ex*zPddGXHBP949>DYyGt(dSu1?*W7P60Lri$*It_swcr|x!M-HZO9^11;#JH$VZN?U>(45oQuplm{v0>uPWo$wK+<dfYF*bp<"
+        "H>+BVO^Dr{R}G5KAKO+`dE?l5-Gnn%CguX=<TI87HE8a9#tKQT%^lC!5himSo5=L~l2yF9+Znr4RrZ{I#x|<?>oPV0k`dH7{@4UY"
+        "kH|*gkFCPJ!tAjLdDWoG&mG%Nm+OEzHjy#3(3xC>u`LXFtT<y!1d~Q7T+SKWiwVwWjO{5l-WTMt#TJ$$b!_4pLvs^R$0nRH4O59W"
+        "Hjy=_fz4=R6WMo}6$ZGaoH2cl7|Pgo6tk2twt~d0w2w_R-?tUT%*V$jnySWv@wTy%^Tk=lmeOH1<Jb~SUPkuVfX<m2>l*ojc{c-p"
+        "%OL#c{*;vgs%8h{L_zz8j!@<@>u79YT()lLwBC!h^EBhzmwDFSesk8j+~s6Hwtj5=*!r>kw6U2m#~N~+0><3!aN>6!todQQ%Hcmm"
+        "hu<*n5%qP>by=A_U^Eh>3!<)LVSI3jtkBe8Xcoxz`%ZqjMABt9=`_7CI8;bL|Jjd`3%llGUb`_{vR2HT*A_(dKwy)(uzG|Nmy1?n"
+        "&}rU+HbGDgJm(fjw{OLqi0Q$fMi|B^04{IEG)P^lw;<-WTkv0|gP%x`aP1~ZSQW2>Gx2{@-VcIhNW3BkI`hQ9q^8N{Qdd@_Al@su"
+        "w>9FJSgI!R#xkvPt!#FAKZ-ID>e)`h;w;aXX`~5|kj~3foOzQuCjRr4obr=<o@G|~7h8sABO<Gr;__PXWq1o_qXeD01U0|4bJcyc"
+        "3#P5w1yslF0#TjPtT&HS35I6jok}mDa9-8o9&qdXs8!z=EzVmI1g-W=%R~t6s10%1=B%!W(6mNQm2DV`+Q^TDkjfa`y>nT1S{Onw"
+        "hpp(Y+7TGlA0th$xY#ERn|UeSyMnGLmjf$5pzN%aBtarm`5A|M%jqDfbs`^$%))hNM_ciM0R>~Of{@5Qo9p&j7+5<nFxyj$=a#Io"
+        "Ff4Y69?2?E7l(QAe8Ms&-}-A5T<xi$n|m3$`3ZTp1XXSQ(!e%5zSxF&ul6n9=bOtgYrcc|v$d$X9P#}virBYDTNWE+ugzQLeQ;1!"
+        "p$V3;p&pp~tK<h8KvkV@`a=RUU)>FJ-Bm_>z_qh?$p5pa5U`2rj|*f4yqOdJ83L6-{FW;J+#&Z2Ab&fsWXY9QC~BNb;1Mv{Gl%yX"
+        "m1`_8jvH(Vs%8o>R8DPcC#gp1V^r>ifN)zh{u1Qh3kyt@@uzxdP-KSqp26LrYeSU7a|;~h+4kU-T@9$L$IDXer>FF<&!dfwd2oI_"
+        "HJGqUA#A05r_jkE-8?A?6NEcg3NqR2U?(YQ!UZai;2LZ{$@lhY7*Za}ihggL^DvepYA}8v<xDxw0|-hY+y&zA9jcrr%<8Gi_ak;r"
+        "LUB(dl1@j`CsGM6dnK;{viIw?jMzG<oC~t#1~!Kh1oFz)X<#sQ#D`R*G3?roLAaM`&`2m%R29~Rs8`6W-kh7V`$dKy5r#N*4o-dE"
+        "v7j-)Dy<Y9{fl=OpU#hvfW+R15A2?Krppyggphc@lqS6ZlmHU%81bANlG;c%U7?$sZ(SE_L(&~2eNeim{fQKi_8`MBsy?{N6li2q"
+        "S07u}!HNT%aj1u>?bLw8-SuYFXLAZYVPJ%Aa%<4#)M^hDrZ$L`<%;zy({+j7g<(~k@R;2stlF`U?9h`hK~K}$&H@!VY$5gE%takl"
+        "SwJlbt+IOKz=-|RjAPrTfujg5ycSKI$@`1M#3WMw<*mG+ftwnny-pqAJ=rvL>w};YJN6;XTK8eo_o44Y-v<M1;@F40??c}QO&>n0"
+        "mVIzyGtvX*uGxoW>prwCYtWLN(f6V6!{4+IMcY0==2G8>z7L)Dp>;l1#~`xSeTdpI`ea+*sT`5u#@byka82_Zb7;+w>VsEK0iQpd"
+        "3si;y*Mq%KQ<aswaX?i6LOrxHC2Ye7OK{!2`8Xvnt^p9Iu@eIsbYfva4^rFM;FY77eqPnpBa<WyiiLs(BOL(W*vLmFea4}z<_j>j"
+        "I)?b>Z(5In%>K}^HvrQO&SgYPhZ*TbtVd*jtTpBl-E0!}s>rqz=g{J{UZbhjBRYd9#`Ds63~%KK`!2_HL}5vK8ho91cElJ1>S5+U"
+        "m2cR0Ii7D}yn<&`@E%&2P$8b4m*MRceoORf=Hz*N*PO{`A`2tc=18Ii(TMrS<b6*`0}TS56m<i5J5e@EEZ#i>bN{Te6_;Jo{ZMYl"
+        "hx<9tlPK8JJdMSkcE1=QcxyfyTYk;Z+(v0<+vF?5UF}aSy22^#vzgqlXD=ox(c`O0rH|?fwYzVIdTmuWNV?~}i4fHpg~e9#e9KH)"
+        "Sb%$g2Kp55dWIX=hx%&FFpa#(K3G_S^_#(fo~|*uW-|?*F;+S#zhX5lJcVTkn9g>VD#8TgnkIXhRm!cD`Xn)mLT+$jC<UhRQ;!Fd"
+        "NyvwoW9U+T;0L>Tz#R;#wbB}Rhc4;XW8mZ)Q|{yg!@1%zo|P2t@5}(>R1RonmOp{;LN4pFR<@?Z(mu60VgybC#^_mJ+0xnnFxuuz"
+        "g$pc61hmmQFc4qEIQl+&-bfd1BjqR_3<8DunaETO$Sg|K`zb3Pj(1F&eBUn$D_gPEDjr1wkso2qNOd!??^B0+`mj(G%E`oxZ{%iN"
+        "p)3f2b?FmcmC@ssyQx-bbk0Rs*7%N7xhDpEHNU`D_ec23ziLq5;tX9qg#jyoDvA__6S;EXW8_Ynvq4rS(q2d?)Tt*85|1c;w3cn4"
+        "su-;>G5WY4j8yYP6)lqLzF7;$Cs9bFl4!F)T!Bnl1rQZfM|D9BfRrj+>0)|g6C|)iNxu;}FiQOWa}b`$?(jaTaL5@}631<YVGBjI"
+        "ep7=p3<pt$#VS@1#DfH%J;glLMyl|$#bFV`+|_+$KymUsOMwd{4~k%x*6Z#WiO(jFP5pfXoMKbS>hH7r4!>VI&wJf>@vIP-Cm`5j"
+        "2B9cI;E!C1bD431U?W*pfgoDj9R^JKFGWt2mT_+sHTr=bz`4Uz*f*kSFS!zynC#R2ek7~7GgNlf<4+0DlK@xd^504?xcoJJz+fZb"
+        "KB!PQs#do&w<Fvic;KKxZw)MWBZe}W+)#OGemS#wrk6Swm_N@`3Z$N>bL<~nf5Mtu0-N)vZ(Z)F;s&c&fw%d2Z5|}~z;uKQ<JoZ4"
+        "ZJ@8PJ<y^qG++lqi*k*f12Jypy$9won*#AXV&1#p42ox%orD4Cc-(4_KpyjRKkYaHuSVDHoOwiG&^wp)0^HW@qy^CS;-2jf7{ul-"
+        "7x>8ridG3@7F2hQ9aiVEa|}U&Ou4|$vk76d`<c63U?+Ew?&iA|a)G;EqFfjZ%4-J0ou3-I`TfW5e~c$Lck}UZI{a-iAKp!eQ*%^Y"
+        "ktYGzP3KYy`&&#$Iq7#$4?Vg!o?=x`dL=}J={}S6O-~NczuYt6Y-Ea@5c8Kt2R$QO1pV_jefs^3$c6s|kqh^eUM}=<p_dEZonb%2"
+        "+7CzD0_u>*C?|<tvPV8U?A<5ivk3W2N^;;=sxEcW0iPN>yFly%kW}tf#pjMVGqg3gDqc{i`dg%8w5RcjkzXf0O0=U-dbDU`p2h&M"
+        "yBLWgtLH_<(zg@0O;O9n|5S8$O{c@j?Qk;vc{wZ{@|6`H7gl(zw=pj$VD-i|&jb%QwST~?P3xcR-6defY9a)iTOmT+bQVTvill!n"
+        "&GUfd?ig6AKq9$M=H_`zQZ==%XJJYds;h9bGWSbm2hJ_I1RvS`y6j1Ezp&^8d%rf^ej$v5(#jB1^WYFX`_k1zgdk*Q$SP!;-bdC$"
+        "$UmQd*7p$DoAlnQ!}lmq%8GjyUC;2Zc@N89v{|^kM+;b2-lJB62EvMb|B81H=l*Tp<3UH^k#)*;JJfR0t(v{7$yBRe|3p;1zLl=Y"
+        "WH@fAdb#CplF}Y>o=M=G;|QioWRdTJU)5jt`R$+nfuiFWu*&?G{9~QBU(#Rq=RhF+&n{y9?zRJy+R1rRygFQGHDcm(-#f9We4bbB"
+        "!rYoN-V+fe@_SO@Z{mAvIUV&Rps=zsHL#2D9%7<W-os2=pWwlFFp2*(@0GWI!uJs9V@F_aVvx!9r@lw?>L!mdyUa$KN-5**auqRY"
+        "EUb=5g@bJ82AjK&Pc}@oNtyk!$(@wHhxqUr)-Q{^cYyV<w7%WLXHO0?<snv~3-0|f7?1)`#GokB9U$FrA7nPvxqp^DiS=*FWWs#+"
+        "Z^y0X8HD-IV1JxV>i_&(_wr^p<J;Nr_7J_}&ALlIQ&$%|CYdR6JLILNm7beCta#ZH{do(6y*Z#=URxO4Oo+T8rT7*Z&*Ze?7tfc%"
+        "9zK^G*~tNW7nU7xO+Y9&mgL)+9d`-dMCBulD*6JRJRL-dvpv)A{_7!Wk?FkQoozjP8PP%cFx@Mk-S)v|h6!V#+E^){QOk!Lg?ohP"
+        "PGFan5WU&={E{Lo+PY_Qz`pI-BGC+Fmk5QW4Bd4U_F};;hX$hh1_Tx`46rR1_Ax;DWWWEaJ(Hok;En;>nIzT@$Zhw@JQw^jIK-#{"
+        "frU*iT_-S|sMLX`Uv%~@pJ^PkBG(R2#>bpIc7#F1XUM<0MsM^_|6J*b!XW2V^NpkPJw-ghVuBo+zXp`PBt;d#C<apW#sXn`5@i=%"
+        "N0Du5Lcd;2QGs@yhC0VvhbWz`Lv+j{jYj1ps5;!S2VcN{@okU#vzz(dxK4(8?+^XSaCZCC=ykmFRo88~Leq<<Xd`W~O*xt8X(z3R"
+        "`F5bUG`-2J-I_*G=GzV0O%XY_PcP>+b;zyEY5x>;$&4~WB6#Z(SQnoq7D-$(N<AyM$Zm|B(@0J7vn66^Ff+)&Y;VPIKkO-Z*b_|j"
+        "L^xxBPGq-(K-4UmG9xAhwEf1GN!x1XtDzGbe?zb>_uR-rA*+o4MZh1XF10<HIo3rMH&KQzWuW12ptVDUNW`tPREvz%uRYV|)7Yn_"
+        "Ho`P@u#>Rog5@iEMCBY&tkZF1JmuAe(x%ZNGtB;NbWu_bnYgLDW;(lI-@XxPgP|%{y{VFAs!+3kG-EKz(?p*U3i=w(n1_&2=aqnW"
+        "C1xH7DyN&|l7)2)wv1L1PIg)EPYI9Gu0xpH^pCX$Bgm!y*2#>ul)$g}-bd;8zvZ(o8^U?agR@*RXH5X*(dSiy;8K32krOAp^!z>C"
+        "{sBqUCI4Kc%}#L6+;YTtBBSgUBFGiY@KSc$)8ktJ@4>JxA;J6pQ*WCtw0IcIJe8WTaV%p&s%EB9aH@Kq&ORROdyW4G#Z~tPTTz^+"
+        "BGY4Uo+(qs#rJ__-4f^NvVTkc81Vb)lI;i4Gm;F6+?*Kh*jpn;urcAK;(8Y9UNUERSQzg3L|orU>*HBxM%>mYH&^2NYUe33<Gh!3"
+        "!fc|(CvKdl^B6SAgtsQl<yG8=+IgzX_xM>i#$^sT^SXJuoc{qszmRmO(^=Nd(`Bu3KXhf%C%544(Ve?Se&<FEY-Z3kPx$uv-jMxM"
+        "7rk?C_Cr+q`|-RF)|xwOl^JBy>qswGnlV&ze-ceU)w^84FOmKHA?w7UW<DC(p~yy%^`;`|<8PWhdkF=S<g~<}l<trV&LG|kJB^=a"
+        "+u*X|U(UWcbRS;$4gkw-_P1^=MuUq^Q(XMw<MY{W#whXxSLmF}whYu=>sSI$%#QUe;7?CsQHYrASaXKta}nz~8}%MrWCY%aEGNFS"
+        "dcg?8zcsuR3?nME`ycy_`NijzV_cctr`ZNibv^|=WKrS0X?b#u%*Nz?_2D1(XIV}{1gAa~tC|nWwFz_V&_=c5`Lo&8C|*0)Ojiti"
+        "(Ra*{#KA~8oQAfz&eeWHNP>U0-w-e^|61$u$S=Zx>Q*uFH)d`%5f9wkJK}GQ2JFP>=}9LtW=e$F&q$%Z7y0n4y~|~t1Ku*U1o73!"
+        "9QrLR=R+y-w;c!Cbx9wijT|~}PdkBfGQZ{cAXp|1MpvX!iGfB`p74rTv=8wgk>zyq6mPiAlX=d9&bni?zZ<)q)8vtob$(E;!ggXM"
+        "|6bQU-uCFj>(IAc`)Z$>ssVW%{7If;0fpel?|<A+Z^pCXZ+FAr{M%ve_P+b&KJP+|$z6BY@COXT@2+8qf4%CeU0GN5yXv!wwWl4e"
+        "oz8aXbnP^DZx?IF;y7~Ft_xq9ymme#RS;|K=DA0{uX$?+iZ)i=t=+ET^TJ4LH-^7cR$ZOD`i_rU*N9iw?ueC$9IlV5o3&d4EVQKz"
+        "eOI}1>#PGA`iNvy7c<v6%TTa(g<|)*%g_Rq5A8C;D{Cjtr{7kFzH82K+ERu-g1B+}9J#Gsh2t+yGE}_pBsnQ&b>_>^4};%0d2b;@"
+        "#ry74kEyX`sDAB^cv$8tLzOBfvf=A0L&dd2{W@z$8Tw(1!4_k`I5PCzzE^iHdgue8P~?M)3>ED;{eJTJGPEG+fhk`PEof_Au=P+8"
+        "3)oZeV4@6tpcY#VnKG2NcGP{Tn>#ZW#;Y<SuAPl{C(0wM41MFIR1+~W%e*~6T+o(N2mpK)b?vy1QHB<y7LQ4W7FmmiO)~Ut)aqH0"
+        "*3RM4%Fs4zXOy8}?L?f@`0v#&Lkp*BKA~NPzB%fX@0Rx-!2Qd>LPcyElcDrViY9r4$k4*zZ)eCORfdXd=e4NTqR3Ej?fBJ-^!{sb"
+        "?)d)9tyYG*uia58k99H>o;wG#$kWKsHfwiyo-}&sTkAY)1u8=y;*q1S-aIdu3<YcFh_QuOb;P0*T=!j-p+(lhhC}7iNrtvLccSVn"
+        "%TQtMycX>SAVqB#c&OgVQTsT;+Q%`zxw{(={ezEVde@zgBemxg-A*ENJS;uuV!87)eo$uK#{C%a|M7D_s_{iG`6FirJciMiRr@xe"
+        "uJ8)^LyA8Bj8&ADcs#Ep-%Yhv``hGYptW%jDYB2Y;J2ZqyT9-dIc><*O2<xZz<7uA_nB=#{ok<-5EnRiYa>RgAadIXpuOnWM%KQK"
+        "X!Pf6!+B2CYNFgWME}CPgFQCsV6T6*KXVrh#r^D;iHi&ZTqXhYrMHm-JV7Vd4Q-@Sj#2IXg0>L`%QWixo>Mtp%r;Qo52ua!Am~E>"
+        "@YT3Pr#su1<Ln*peUQWP74m^_y$%VLAF%KJAW5Rk)8S2=^CHJiI^MSsgL9OHk4WWOwoC?<l8<x3ZUg2d_bRtGav7I#XhX5dT-tb+"
+        "Y)F?jQptzo(#B&4Z6qDEk^V{Ac<o?a-rMgFP&s+;)`lpHe5dmQbMSstt>woNhiPLsoUuHX{t?Okg@V;ah~$VJ6Ya|5Ka`(}>SH`d"
+        "$)>f9Ec*6;m8~xGqhI;+khao4G#q478{hiFWL{k}*K&<}MMrM0e_yAw^6!TCx80>zc6jon+1~4<1%EpZs~wg`YBt!cxT&4uXyaR!"
+        "iVpcA75s3DIVt>u6FOimC6Ta01Wc()^ADFpKhc_cj*i~}N*&Oq!k!IAAIDTzn{uXsMZb(L%I15Xx_|Q&8OOwYwVg~deP~Mx%?#PK"
+        "nrH02C9Yj5i9jVi*p8Bx=dyk>)j^(*IoZi^N_j6$hBR-Sl&8_R%n6KhSGFyv4X^8#sqEx^*P4zF&;PD1?HcamGHKhrh1)(MxzgwD"
+        "!w)_>4h`@yc)f)?4OJ1{_g>Z3T`e6xAj8_vUfhAJR~#+^skeEO*g{urbJjWt5eLQIXMeu-p1VD}PUiSuxxJSWkq-Jd*)M4aloI{<"
+        "?Lb_`o!)Jd3vkmxdzp;}&y@F@Zo>+pF4RFdC}_{?U`2rL*Fh?N0AEeppOG{hb$do$Iu2<}pk35~&M_Kws$+#g*I~G&4wfV8e2H<5"
+        "d3s>-y`KKqBv(hAlmy4pFasqOB?n^=_eQC)(Uf$XgtP`A^^cqyWuamR8&j$Qr3~d%N!f(B2?rZ&e<u%W`foM8WKj7Uoa$o|=10nQ"
+        "6cjHb3{yeVg)dy`@%Nhj5W1D~H3_BlJF~I*+=d6R@Gwd$mHdSaT~p<6@iDNw<C*ts^)b_dh=aft1IZtwrri4dASfO>Eze+uy5qWZ"
+        "!}w-Ao1G}0_v5Rju^^U}FN-uJt_|<J`1kY5+OC63W$&3~r(=0<L#a#0vfm>^30-Hmm>xrK6^nzG+6Ln;b$du#GIB6?w;{tYC{Q`2"
+        "hN;m*%>vxrX-ttw(;4$uOPemX^MiaR&)vtZyYoO=%E(bymhLEj)&XW9wdu7SH_~QP)**7Y5v25@jx<Dr9p2cb?&Fqq<g*UnV%&k0"
+        "x^={)9q1H^O!Y~%8n>i-dsX{!%ll~21vd7eV!JKJ4XHZ*tb=h&X;rHZ#w}s^c^BhO<dD4f;|}C~*#Q>nOXF-kZe^SujQdr>Xge6U"
+        "yoWj%cL4o19gJJXemfX9kZs+Jd(-*2UnQSL2jea~-{<kB^L?ImK#i2_R~a*CJ#NLn)_&X|z4T`nat-+Jvo7wjg}gTH@9#{(aNCai"
+        "4d~Pz+~3fbu<b%`dFy~OZ|LKBjBUmZb;@~r{ao_tmmTQmkg_{(Z<k11t0rvTb=(psM=Z_bIBq%RN#4>9O<y&XW5;nT__pk)V2(RY"
+        "RXkkwQ_#m92F1ccPge1kjV`s$&L3$oVZ>+K0%xj+m3NFYY04uwx2H{??Kp04+%2xSyX_87C8d)lj(cC@z7Iir|Ekk-OzE8b`2COR"
+        "^v3t^PgwY5+8zr}Ntn0#PuBT(*lGW+>$`&%YsA%8`gi+x`*-_y|Iyx^&F!i4q87T-q<{C9zT2OL{@woF{@woF>%BX-r#!y=dklJe"
+        "@UQT0i>Jmf9%}qza^rbDe$nF>J$})@+rQht+rRtQ!#>0uFAn!Y|L!k*m#CNbXQ6+$f46_Pf46`4Z}V<T{Nk~WMZCS4+)vJV_q<=4"
+        "cdvdHNmyL&?Yazko5t$=dvjEk*z8<Nr^jjvWCb3Wa`JEx^Y9&cNu;SLcrntYHAlq*J0G7dra9j^LND5qY_UTho0tZa1GUm+`kNoi"
+        "q?~wox^E#l+BEt3CJ3P`iBPVYk_(NQqpyyAlwviNd}zwJ2ZTH@Af>nR{ffo`RG;O$MlOaDH*>%!{~8{--*P^MK#Dc>_e|I}9Vj^>"
+        "mL2EqtIrOQ7lT;`vFk8)W^~tq5SP~Hql*Z8nB!xUbaB}LSvl{73klYI*3Ess)$*j>A2IgK?<5047<9ho(%xKjGIAKx-py=+Jb&G^"
+        "8FifN?;xi;&i7Y8pxn@`n_L=Q=Uuy2n_cJsyOurhS83BFA7C1r`BE<H{wvyia>xy6Yttn^psmfwAxEICO_w}@kwNF5D01F0S70o+"
+        "2{gL2lQ!YKx$dM*HMYEqHh~`U)lHkr*7*a~Hl;YnqLVh$wz({kHYGhd@1jjfXYxL~Xj95x$6hD2P07|Abke5mS6X$^W+d60lUe&V"
+        "r4qin8UegE)i_O`XwN07zD=O#9Q$hDt5KBsI_~oE3#$B{A*I$XUq|vbA$1zidJq0UE^C|Tk5RU_ajXqE%jJBXxIL!Y9Gd+96&3qK"
+        "0s*yqB}v^{^vt<n3wG?|oM2BU5u;gpeUmgDQSiWQ&8)$)NDc9t{vcbqmWqkPy!dYW%oE#9>bf&OH#W2O2Rt2f6HYJjnA7=HaubSq"
+        "3E4P790{Dd+TLuJ69LrLxNU3KKwYkNE~BK|d>{Q-`?2<8?Z?`WwI6Fg)_$y=J-0#IJToKHSld1S&|@vRaYXx3e_s2s_G9hG+K;s#"
+        "Yd_Y0to>O33}fx~Ip*I>fBgQ(cz!eS$HVyn@4eI1qInf`#F~F5=R)uQyZ`V0zx)5D{x{-#dj6J0lkv^{crv^@$Rck#{FX}{`<`Uq"
+        "k>!zPy5-@?Y$i9W?@Qm8zAt@W`o8pi>HG3`=}XS)OTy!w=Tf~Pi_KZF;$oh8_U)b%8x+N?xGYeQ!^%rm>(h|i_H0c<o~VT%p6?l)"
+        "+J#g<!W0XYsP(X$zrECX$mYj-uVEOh)f$@uw=k?o{;>07tt$-I(&qPC>DNuA-`yF`q4H&w6R!U*cII*Js5dd#6o<I>a~`-suw-%%"
+        "bx&<Oy?onF_tP8CzaP$yyuH~KczaRS*iNii$$Tx~N9WjIaqSt6!J6Xdz4vP2?^4<tH#VXJC%w>dogK!hmka!H!nW>bz!v6?6U2Ya"
+        "U`=)II8AMF#|h#Hl$dDVIL&SG#<|Ew=6j4W&c(Z>Eyg$#5Fax@??CD}6L2qS;$o=dd>s)mc;Yx=%tEH)%ag_l?^Au824$QumcWn`"
+        "fH2O7n5+|6$0_M9My|bWoSe37<J8qxb{QwLE%P{G{L0=MXJr~Ew=L5+q0Z)0;`FrRggHxSIWe^3th9O~f1H}T+hv?#;g4MO2N+*^"
+        ")Ne-R$T3dN$^qlVoLTs39xKO(g*!JGWSm?a)^W}mIRpqiJbE4%5=W3cR^XdH<qP_l$?<Np7W?*FxqFArZL4<Y6UMO7V!O3+NV)?^"
+        "d1VapmY++<BySD%F<tHzDdx^9zb*IYc0|yr$a(_2^KA0XrY9r|la0>Shv1$w<})JbL(-n}KU?TSfszX=Yo+(ed+vVbK2BA?)naN?"
+        "J$^T`*%u5wUedEh`xfI=?3GcOwiu_f=Vr*+=h&Yy)WKCAQVaVNIr}_2TgvS<ZZS?|&*d$~sptaI*=OS>(w+k{*a07cb*M#K)CnJ|"
+        "bompUa4^a4Teldey64V$p`6AU$T?EZ`j;c#C-1pq-Z#f_9>%(G(7))<fmiohb6Ms$-ehvF3o~wq$EH#Z5f}Z~@89d+>)-3&>)-3&"
+        ">)-3&>)-3&>)-3&>)$*1F=#RJ<G?Ncf6~9#`FoB}ZKE%~ZS>jf#v7kZbboS{RA<;Dq(3W{-85Nkg)J((vbqQ#gm9QrJ~eCq3ldaW"
+        "$*#io>G@NM5~#TR2D6q^C8xAR%FIsM{X#C&8Y|VM>VLHwgL2Za&$d;EV;JG(c-_<eBUI4}b3OCJd~wKBKTpnS_T>^MhIw*LJzroH"
+        "*-GQ0_qrN`Zl28UI^DBHTY~en<xtO+;~+roQ{6nxt393eZFGZ(`wGm{L<|XMmY5L320%M-o(ixobJsDHiTHb9o(6C}IjY(tOi!F^"
+        "=SgxIFv_I}>3BCV1Ye#fcps8eY>PC)v9vDoJW1!1N*(s4JJ~o-u$&Mr{j@lS1BJ^xPtfg6N}FCN^4T&^P@WLzL(gish-IE&AFTTp"
+        "oYjr`88%M=44<&k<6e>b-a1cE2l9+FC8j4Ipm#SqPXSE9Z7gT-hRJ@yJi&c#*tg=|6X;BYd4l@rfTS0T^GTT}sHf=46o~y0bzssw"
+        "L07Scj+nk{=nJHIlFYYTn_fKE>Vo=tg5SeZy@>l7mdPW|lcY<mjC!%OR@8X{vP~^XB92kkuc`B7-nRlpLa}w|^91xdshySS&Z5r~"
+        "EQbU3t#D=#dyPI%Q2vNvgW|orGRk(#JOz-pc-gn&{9(E~XPzYeF-K%@Zn43v^8~5enW7h?_aSedBpFf2=P|eGwS;*BWjyM6kL<FM"
+        "IZuj?x3$^@+<Ag`PWc(zDdOCDlFxBwziZj^1odqSeUd#-avCi_A?j$JP+N9P!#=3<BvTB{c$>>S1!{?xTcSNlo+lHfuA_O9F^xS{"
+        "M`z3vu$e6OjN?3seY0UAuJcsu_x@3KS9Dv3HBWB%1Z$q$Fh|}zk-@Hhp89$EOV88wpJUp|x1U^QXuEfNUsq<xcWO_<&0cxop30L!"
+        "-B`2%b`EO^?ehqymv=B$C%=witYqAhI99$-$UIiI%rTFZ?N2g~^<YC6-Hnw=ske@m7eZ?tE6X217%N8>=*P+q{Wgwu0)3w}S)d<l"
+        "5yyO4pdIT#DW$k*HP!$R4{;r9pro@HwHj+6r|lTD8*3nk!OmNaRmO>|vcNLd`q?vNfo-gTTz1wN`eGlef(MM-jaBBXm}CKAto7$5"
+        "O%_nbdcYYsB+dqDtSSz%ZZ+0`C<};V4T!RUI#!}AAdi(K3m9Xi$O6V#DYAewR=X_VjWtkGY|UDY)g}wLV>QbH_E;7D1;_&SSk1D4"
+        "KUR}0a2c!Q?-6Bz%UBJvz-g?iEGS!zRVNEv#~LUhysgHH$b!7hSW#KfVyu`fXfswt7TgJbB8RamvS8k7ta@9<X{@R&Xg5~WKha{W"
+        "sw`+V*7|wraIArv0;Sbh6<N@7tO3GJZ828a58HOEiY#b3Rz()H94q8KwI8d*-wE1d#ZlSaSP$)Geur@a7~cC{<GuGc_qVg5H~h`N"
+        "tHEC1`#G@|_Th)YDm|v>D$+2|!>-`_F#qroxic7)MclIO$H<&TZ9dqza_5sYCRHQdkFVGEaSY6OkH?r<MRh>Op~J|jLMw3ql|OQO"
+        "cApM+!C5EqzxUx`&kshr!R^1SbB^urjgs0r4yzp-JC)L99Th39h)SMRoyOGuGE>^NZGu8xCoMiBr@kAIQt9RL9BE40<x=YLjJl8I"
+        "y@2jdZYn#29+TVj>=`fKN@`!_UO>Gp<NAf*o-n5jbnyWenIYB;q&S;9d1Lol9u@5S-p$urX=8O>IheHeA_nJI;9VAkGeKxR#`#kq"
+        "we#Fv1p;%>U}xf*_$_?wORR(%7}KCt45p9l4<Ik@+O!VWHbFjXrw<_|T0~jkw@dStB6II>&l7wDCx2bcD}O@A4vrXh&McQh$Jy$6"
+        "hUur%mdzJ(37eEx0*8asq}cDZc^;G!vq5Kj9$Uvw=SD3-+v(gSf91J>eO<_N^Vza_rLWzV0|wY`rL0BXoxC~eXxXSG<{>=qs$BP4"
+        "a-YO)qsnz)`;{HagIvWrXH{qGda~UXoy|S4uQr(8;B}P~;NshZI)eMg)U*TkJt;O77iD7K#dw~#(a0X($CEW;BcL?dy_-x+-?e?r"
+        "{ZU&z0pcc*e<1lt9AqZ6XQla-au2ZW2FZq3xDyig!OVw|dn1D_sMr&{_GSOX+PdyEED6OnH2Y4*SN0@(Ih3(5EuTxtT`{p?389)N"
+        "Wl#5cj0S@sWwdR(N3pyWr5C6&B8f6APHM&U*_?l(E<IN~95L^$26*)ExMz>?5X*Zk-dq|Vkh#D~%5I#Ot0|6HjTdacLl_W2>GH!d"
+        "A5fZ(HkP)tRXcx4RcLs%-gI8HwH?pDkstQ@k;`ACVbz(Br`>b#jb%T6|6@A4xu2d(H%_{Wg%Ha%qW{Y8xd=>iOx<6*abPbOVSDav"
+        "CGFgNMr_B8TpH9NHJv|hF$P4wW2J;H|DJXJ8(}U8>GBs(h>z<Q#gGhJPR@VU#AcAw|HqOa=gj|Sr2LolpOiBOOg}sIfmOl)a$-vE"
+        "7?eBwjy(nxALf=}*vmRJxAcO7WpK+%Kt6`c7!)jsJBBdU^HqqP5Iv`ah#$8dL(+B(?bqQ$_JwfA@FrtF%rQWFpMRz$dv?J-(-6ly"
+        ";w3HQ(j?%H0s4;5b|-xd)gFy)BaR`A<a`WSz_=e$l|RyyfisLDNx~q1iZ+-XwY<_j?POE%bq&e)&m6;G5VX;k{7GQNEljrB%8noF"
+        "_)TSz(Dc^r?f2Rz@SoL2Y*Ah)2!g=9bP_%WC*ZIjLqCRo4E-4TG5iU~&<%E!E4=E-aOVF>c-4ocx)Qhgpi5qnUw!cJT#sXY#GkLn"
+        "v*xt##I-*9zplr(KH3V`<Xj(YnQQW{O+J!NxYvjevRnT3VG*v%!N&ZAo$|0Te`U8^Y}KajnvZ=je6PvLR&j~WdD(|AU6Y%w?$yru"
+        "*)smrIY(O^L+3ng#Xj$xt9_WptMauKOu2i`w!BWA^R_kEyzAp@_RMwp+v?}-^sN}*msjR-%h-J9TyDh|)IFaY^>MU$6i)X+HeHw3"
+        "jrxjO%~OE&_qzOU^>^EvA?UhZndja4JSBgJc~Uvw$~<+>`_`|I>!WbL)%EF;|J~ecSLT4%&vkj=hp}Ck3tm6h;)4r&^V*znStse9"
+        "7q03aU2($~TDf%vez;;&bk7m5pDXjk56g62uDCkJ&iUd8QQIwN9IZ8XZQi(I*R<n~FG>5Md;U0v4Ry^SSMKjC@W|_@HJ5x~zXw|K"
+        "$w}PiR-E#^%Nb=nGx}Y5ZEpDye|O-Gaxtqoy8ds_dFD>|<VBv?x#q2ZBe3wz6G=Aj-Sv5yb6(^c`Cncm?|!>GhPYs(>;J~{&;O0p"
+        "6@Eg(zOV8d$uIbg#WjB8UBmC|ayfp%Z=_fF4XKVc+owXhkKeEV8|gD}gI?t~YE`e{00u?y6P}u*@n8P<{g3;*o7s4Bitm|Dx~+AR"
+        "8e@D8@gghAgc5n1`>6#V;&51}^KROy57=!t?bLRD(n&ktI>o-5c2NCaY{wtKn4mNol>>a5Qd2uP7L+d$-AwUK5;;*zId|&BtsNN;"
+        "P;6laM{8yBEpxbDQ199}w<B?&7tZZKU+mhw9pDcIdKj~vLRZI^+0If|$C}wruJdy++gWtfPJV@U+RXE+qjo-Y_$0F(Plrvp$KjOS"
+        "oYR5(d4Diq{)~1O?*?BvBgO|nIA4zP`2pg5>%gTQ8GAr5czZk5dZA!NIrBa(F$`q;*@?c<iQcmBLjN)GKwHQ4aN7B9!^Rb+^~cW9"
+        "eTDky#YRZujD?#S_94Jc=d;|k9hk>{P&&6G<^Ny1wj=qbjdNr<rvQgH@egh1{dGk1+1c8Op!{07wj;&O`d_Z?Nd8=1Z7o7OQZ19r"
+        "wH?`)vvh4o;uiUzuI&T?;O%03F=9K(n?*)b@4+NC^KTvP9q-e%9Vy21-dRtOe1LOjy#?w&ZS0*W)8h9$Jri=e#Tt}t>;h&^4)DO5"
+        "D5SV&%^a1e9nX(x!fW$6#703JbDq1lBiY|ativf*D=f+@`DkiP@V}~a{@mWoX2ZKf*w$or^>P^b!zB!>V1{88g<9@rqfPlEn~w%H"
+        "ZD*q-C$Y^Lyjc-VPQ5==<2DXsvLkv;aFv*0(3x5M5FktGh^uhjBs{_2QLvpWdVgUO$NofK>rhr{O;;xlr;4e9q!2eiS2BdZ<qMo%"
+        "=8@^#hwDOe{{WTNO8H73<+%~BAQvj7u<r&gRIRuj)k~zRyHEp@zxey&_-8HW--*sAnq~tBTC|NuXTSO^vdMbYj2y$^P;>d%2i81F"
+        "F684paKc~E@^hoj2bnq(>8LE!Hcaw=LrLeDJR2_zLfS@Xk|ANHna!o0+8`PN)oy3;`dMjfQ51N*yBC>EJO%6djFQ~dvAzv5RXvUZ"
+        "bYF1fT-=m<bETQ9q2+8jrG(eADHzfj{b0+v2ua1od&*I}5Sg@X$kw9e`)S<W`!3;ykMW<U{|@280FHGr5#QUHn4$|*2vNz(DeXL$"
+        "*!ers`bs-}48WQj#gw<nb^skV(2*eDvYhJby14$OJ4>rKgb=#$E;gUy<=G<pB7fCUA)*YuukV8MH!6fm0Vo-K`m<zXJTTL8sP<LC"
+        "XrRn-*-UF<rq%26;@$q+Mz=+1zV|&Wbsch7V)v~-W!QCL7_4je;gOD&6%W^=p4HIOe_caM_c!;G;q8%a=6B0BJBSDi<Ba-mAGooh"
+        "u;;dK>u=MR#Uv2F-fkoJZS`&SZS`&SZS`&SZS`&SZS`&SZS`&SZS`&SZS`&SZT+>{;=`rOI)nP{&FyS>e}qeCLx0>k6R#3sPwvYf"
+        "!n?IsCU29NPbNbqZ4%_kiTK+srJR(%A7?+#ew_U{`*HT;?8n)Uvma+a&VHQ#VB=hLIZh?va@B@`sswemD7FCR=)gDwQ2@Ng9@RP8"
+        "IR~==Ci^i^7$zxaMYwoMWCGl4E7v(Yv)JAV0n*q53m)Xi*y#zTVPTIF?Jv1+ktPTo2Jq7;Wl|uzu22ZAC=5&z0vPD9Z-j)Scu`_("
+        "-gJyZp<j@(Cl~3Fi;4}5^W|Gu?und8cBV<7ktm5;v801)L9+S0lA<hfETVF0l>-eMwN40khy;BZp<Gkl8FWd^yCTnRo3`pL7jt@N"
+        "+e3AP13B`N68(|BP$E(3#h6labkAtVWWy(qQHid{y|VwvnCCK$HfP*&HwlYtB-u1UyZ=p{cyW3&o(+GyJ7Bx_SD?a5d%D4S+ZFj)"
+        "yfm0^-4KWr@!Z?Z-{m_K7PN3qy!oa^1LwpjUh~F`5m_CpItlxMcl&vduN6IvKgDQdSJ=Lg#9E_Yf@sOlZq`nndxv6ohWEWzkypB6"
+        "WP!ejn8Vshk+a~w;zrf3O_5%x?&)A3%@v)pvSleS+^6QXH~%hm?GSkbqmLPrVO<{(70ifgURh-VjQUAj)=py&ILUodu{ofRZn{}J"
+        "WWH{@S-aD~O0EnAeKAB$e{f|ewJ2f4l%b45fjgEAg==U0>H|xLg0-_n;d%@iN?kiPCc!HxS&(ID%q*hzLY1M>hIdxU1>?ZlkrdW9"
+        "nha&F-LcOVNrsARN6c=LP-JNAQUH&#F5I<4FppdN+R^WJfGcjSYsb(ht?w-yvx<axq_Ae~SnAW(C_~-Wj?gE^wL3n0gA5hdfL$Q%"
+        "(I7)z*UmQHxMi`!R3}5Dwl<<p4+Ud!Dzfs5&t<E%Lv-h)o3&GMbq~{RoC_Cb>KPM18#q$}vFsYH*G|EZk1`ajU021zKP4Su(x!l|"
+        "DEGhh%CL*II~|lvlt-eEVbG4wDekYq4Cv^~pxq<t&WlC6EHGNkW8#>hhoC!mwRVRG&2}{?+xJ+>1lGygshCMeYlrC0ZShvE?(Bl~"
+        "5aoWGLbXQBWYoU+v<}1bI!v&-$gZ$<M;V&we3ZZ7`6soH<G=m!`yX@vP+aQd<hZ-Ny|R~scR2{m_YKpNlozkZ_ZDvNHEesBD~KgA"
+        "OGoXrRJ;Ii$8!*5QM=%jHD4kgm}TaO+`c$Ut`vI@<_99LZy3`(!dmU8u?BWdQeKj_^c<@=8V|knWJ^WPpGQTV*Eli*Z)&3Tkz|fH"
+        "r4IQ9%m$(dRb@G3{JkWWK!8XT?Yu>5zN;_(URvm^7g`=*MBAcy?es`8WK}Ggvg+bAq4eTiZ|Q*2AQUU;#Zgm!Fra{O%=4HC`)kia"
+        "dw@k;8m)jY#{QZNSnM++QlIkn*iM*JQU2KUfrXJl05x?Rt5K9yiD+5cWY&|#v+&Ni7X?{W%auJ@W<?gu4C)puYFlGzd|!0=va;zL"
+        "W~8Z*=B%LZC%b0>mVlt$g{L`P5M|c0-E+I6CN*2gb1L3HCYfbH#g)5pkdcs<Pxby;6RqWxuy6G9DvbN0QwjHvL1ukWEXh~eU9d;="
+        "50cD!qufy;iIE}BeS)o#M_5OLy#jO#o&Ne1qdJgXW`QwoNY=Dge-*wn*2v^9yZvRdwF*0HztG5ctISHM5dpEC9j3@CM1G)W>oF$l"
+        "kycjLLMQ)iGApur9X0l1MUhq5zQ)cL9sP%Ltsu#&fF!dP9Pg?nnqhCSm5eeg<=C${Q_?7_u(g_)&cEH(Tbgvi)NHTq_4247++RAI"
+        "vD9J=cNRTzuU{*Qtps$7N`o=rXT8ws120TF{!wo$eb~;r&f~)ON&(#hu#etscB^P-iE;+dYfi>9L`+SP>pHKXC=bN`ZyBsAOt)BI"
+        "<J9Wp!rm48|ITMa>llk3fnD=~^*^THUmD#aL*}|9-NhF@POKF{_pYF<!jz_$c*q{yyLi!1MxjMkVfVydU0;r;+fy;Miny+oBC{SH"
+        "Yh0x&ruIQy*Ed;aiI^WJ+5<-6<s@09msw8CV+?O2$SR%8S~~hCRE8BrR%v9`v%A-CDPal}S%u3i(a*s2%!lxtrW9F)$}DgvvYAh!"
+        "Zt*dWS^g?dV1DEz{D7ca_=AiURV|)zuT^~)a866!9VFhxnOmd;qFZq9pf~hg2R0mD3ygLLp*2xPF42G~(h~I!TC{lAgj?`fb@9gi"
+        "U4w4HVlB6O*WeSO$*L~iHTguCzIFNCohuVXW+ZVkK%~;UuF;Z`Zo#Y{T6M-wdT+r-dh3dX25}1>>kP`QwR<O8F+&&ZC<=mZ!In3I"
+        "%$l`fp#HSyz>NCu>geyg8(#?j_O3~c%0Xo#elfg!E4+UeLIpo9hq#GL^Z-DGV#6{To-__6Ntkmq-}D`TCxXy{1sXXDTxoE=fxnSA"
+        "G*p0OKqh^srW66-XlYc`C0Z^?VS2TI=P>M(1U3S~5Kdz*d>#o1d|&6dUuPWB9vD}dlIF)kPk$nYZc0T1*VMgk1TLghJqF<~f<m^i"
+        "5da)(Lm%O}vt68!BCJs)<Cu4;!vgepsPRH4H)!$@Q}l|Kq05NUXOtV-M&aJiP2eV3ey0YdEOiXS3S(`Gtc6`}=o*EEc|Y;JzGo^^"
+        "!017NT{I<=dGEg=_jBAbZ3aR#1Ha?DC}EM}(EK3E7t^zc_jA!jm<QN5v%#hlV?dYAsTGZ1lXB`dX!D>z%SX%bh_%|&O%k+x7LK44"
+        "Rqk~Ya*|_VQ{HErCUHQkRft!jOE)%iUU?uhW)1{tn+&~$^WYYT24(&Coeb|&mlRC!PCDogOQ+O}y1VnF<GeWN{JOn<)&(QSzzAfo"
+        "H@YCSU3m9qq$Pltu6sYx>w*xZrSE;P*JYUwWIsJ5^~0#w#SQ?Gve%7&C*8@&UN??|qC2E^eO}UgDyO|}(fL!Sy>8a|%_Q-N8tjmh"
+        "?cIcK_fYL!<6d{PcefniI-=OSVa@~9p?-?4C$zIksS5YDK&=<P69mdA^_^u#wehtM0C{X+zmZczNVXYV0}VFFlwn}6JTPs19WEj4"
+        ">EzvASBJPn)1RHIlSY+Mr+MS<bu%V+SYNQ$2QFzj^PO9eBI~Jv_EinE-`;q$$<F}Vlc)jNr*6uz7#)1{6oSjV<a?$uPZK;ST(Ckq"
+        "Oe0iKGg&Uu#Zh!|$O;|E^W>cGw9w}Th#VONk;$N}I8kKOi~YmJn`^n)UDm0v<wAIjxke1QjPQL8=R0MdpPaBStm~A}_FuuN*|4C^"
+        "fAU6;uwPMgBtMYXDfj6LFHzx!it&Qs+|gc!F)=cY1I)iN&&Qh`6j*X=df0O&1H+}{N0%eYKos!Ko4QU4V+JVs1GoF&)}U<98TX7K"
+        "UuVvD*kJ1fj4jVunbYOR1prLR&4PmFR}J0P2Q@a&K*O_RW)Q<VEnL?Jl@oIXc-lH?fO390psTs&zz6HJ0DEEX4C0FS!}c?72V!D!"
+        "a?*++t68V692Zf5G+DNETp$jCdFvc%OW7shcVKYIbzb)En}iX<uAse9KWOh*Qr3RZQCaA|&A!dP&A!dP&A!dP&A!cF)h7R`f%gCY"
+        "$M1hk=Qs1)$<RCC?9*xYIJ<z2yZ$@kL)7|thUa82wr}V}%*)!hly^0@eMe(E+v%;xcD8{c{+f?Eir7ixZtOhC7Ih|&Ne)zZTNdKm"
+        "duQ^Q6y4=+4{{0n+NbQu=3QsqkTPw~c``h>Xd5wm-qVnH=e(yM9D+gcJxvZ)u<YrPliy73P-P{4(4NXU`ciuKC{djMe2g6NZW*w0"
+        "B*iIv+9gN{dtMkpG^Xc?Mfftwdq*;h(oi;PjV&v9SPQao7<44>bH5{^@~$I!zhVV<8N};*H}W2m*;^3Vp$_AYg(jWJ`%O1^FC>iZ"
+        "-Q|73Cb?2{n6dkwwvq&?9m=|q_ls6Rzrq%J>qy=|cN09oB={P(B9!+n>Ns_i`9bnid0pu+?tw(m$JIjKZ=Hgr)n^IieMdTsyI)lz"
+        "M!VarPuH<ocatb6Qr^ED(P5mPiK>^oJp<K7bbJbB&DxAD8vT98*4cB&qVdO%-~SlTZf3*j@Hc-t9N!J+w-&@P((KSA(1*EAuJE_9"
+        "{%;4(Uih0y`|AJJ|E>R9|F`~c{one(^?#%MP4tef0)vindnKJH)_CzOC`qmH{nLN?t@3&IH@Cyz#@{;McsRKo`ZHHAbF?``SuxR>"
+        "Gm^sclwFvOj-iJfboGK{@Q^~!#mjL)6j?0Q!U?H+aq%)VUP%^W{^sKCYmgR>=jxI-mc?psytW)D@8Ydt<ymY{S`LD6@tSfxxJ@od"
+        "*52K=in4G!CnL@|xgaqtR4B(I4XKDI2c2!aIZo$<m5;SSZ#d^9>CZ`jPWp55w>l@O%Q>0+#B*}zbWTdAbMobKPFS9^w&x^wIVU@}"
+        "b5gjRlj0|ylcmc!x$n<Oe@^~l=j7exoHR@d7USvRwCA}@hd2!KBn(`i8e8}u&fX;N=uNt{dXrWfU#H%OH`DvlD!so>o7AyxFO0P9"
+        "QPH7>!#C6J&c40Ay}rG^y}rG^y}rFaUwdNSxV@+!JjE{hhLisCp^3q=X<q+h9XmL^xt|U1521q-Z|F^~kfQJ5<apwS6g4zuCWTI*"
+        "Uh?QqfD+F!{s1MC0m{h5>&O<&t7B>r#6d_i6dDSl$4UnzP`k$sMVA1q<>K#b8DU@z<$3^8o7jvmfkt}RZ_S!ojJ;<mbV>-PGJ=&t"
+        "-#n$ZlL;J+)Q~2D(ytG@62zLYUz)HBy#c*PsprwiX0SJHL(riSy*S`3($wKOY(frDhp7;1q10o_477J)&D3@UGw{psw~1*_4fI9k"
+        "(Q_ooFv$tMv!y6{!^5zIkg?2qR&Q}xliTG{Gfp9mBxz5MRRGQiI=#pgYhljJGPsb|tdaXOi+pLubO=>Qk|O|;#{|)P{%+LfGW{n9"
+        "3hw_@^D+FJ+4zuO_rB(1%&%6(4t>}}<XYmeY3TJ1<_Ff-yY1)oj~^WG8Z=(7{Qq3TW%HYfKOWwGYi)PK@pyRW+t+?A0A)&W3=A|-"
+        "0+Lt8?B$`k!jBmIh6F%uje%%lkUT;^Sr~(j^Swz@3O6QplPunifq#{6a_Kf&7Ak4;H?wxSI7o`Xwo49@;D7nv50lx={r7(GhQCek"
+        "hLgMD)azUpRQb~>pd_ZfuuMnrGz|u&B`B-d4)9avjScUZj^_-gEETqMjsznu78G$Xmtl2UEC>j8h3Dz8KmEb+>>9NGL>kjp)EdGl"
+        "&;>?{bMc{`gF+016tuj{jk(|3EvZH(oM>TMt4vI0A)dQ1D4v3X;<96vH-2(UbSYYGE2le?;}(nD5)Zt(C1NO@g7_o10PvsH$Adf-"
+        "g5XSjOv0)Lb#!`#x@E)sV`kG4q@Q?<N|HVz?zv~W?sNH_XO13Ylv!Ch83gOYJYs9DILgYM7h2bP3-5=`g0j|9wc&)eAH~3MeK7~Q"
+        "kHY-<d-{H)1*1xR6at}*CBdaW3TVfOerBS8c3!1ErZMTfiq<>qqajc{jO7H(!ab-(U@A{OGqJs_`RW}xGjHa^0qHA#W~5>lK)=nK"
+        "{UggBn0(`V?;p<ALlo=;(Nlglb8?(-LI7@kM?A}W0w$Y6^p-=vFBF#MTyIP=<Alsq>YfNIU-M2gL1#Gw_HACg$*&AHIn=2#bl=8d"
+        "bppc6;xTAh8&hw2|F1P@?%mwqPY$U0csRKq`mIs(C~NFPen5Q*oCwV4)j(e0-20=x-+jOPe)s*pTEB}t35%tHZl>vXzIp-qD6@|*"
+        "V!tE&{wr?@{Z93^ziemA{Z7qT1Jrq?e&_EN{QzKau-_{J{wapviTxJe-A|8r#ZIw{1e+cd<~jFmUWwkG#WNBbsq|ZqrAe602J5#8"
+        "!`Ne($*X=obRMNf?~Q2h22ygIz1nYc7-R%&B&FXLtV3MOBj&@AC*rt|dOJs+h{@zuTzMkeh7-0NtYqDuB?sj>W641<XKeW`_mkCc"
+        "v7cYuevAE_x9WG!?e~i$7k*K{7j5R7zfZC@`$U#UoPLX#XUXmNW1DjciYBr36Hopwqu*kZ)g4z3KC5>Jx!)p7=gfGK&nan-obTJn"
+        "=-(6V&=JCbDxptB;~|HBi;Iu*m2%g@-);PH>OEhC%3Ni*j(`*GcH>h6Q5by85$psxr)!Gu2VhN+*dGlRqGybi;(m`~Gj=o4%a=oT"
+        "EkhD9&!ESieLZVjpDYW5T=bf-q+FT1dtPC!^f5Y+EI%e;<(|pa?nhnMe$>g$%o`8KM?dQL8h+HX9g`O|-bam`i6eP0mpd;o&tn)?"
+        "o@U*5hA`yyyV*~GV&@Sd!62faFW(90>iahngPft-DzK>S(H_`N4vd_<cphzV`6KcG5WgzKct!35Oty*pp^H+~&k;GOWe?Uq8WAUq"
+        "91ANyQ{=i?7vT6!KPY3f+~EvXZl&5^Bn*P+zfs;Rja(Iq?mu9Ksk-@GMcrcJ`W~a3kB;w&yrDbC_ilgkdz|qlKl#1LalZtBzr}e^"
+        "v{g9ie1!Knx`KEwutJ<c0ToW9!OqBCqhUL&v`=p)9v<-w8s{_&cK4#}g1YC*jJpVSg;b;f->1b6*jDNtQMV~?oJ7P`J&j#`*m8r5"
+        "ew9B;IIgH~hxFvgQrawt59;+7<vu3yGSFz5F!x6e`k6d$(zCV5yVZ-T|L?{D=}gzW!P+ldC$DbDe1=c0v;S|6FLvCWFP8T#UgaWZ"
+        "j<TGc*j+qh{DJ@?wvqS!?)%;MyYDxp-%)ssC3p&hl-2Jrm-yYAi!E*IcN!b~u;zZ}Z~EJ^_QRU`{V}rmVfFpatpv}(ywdcWs8`_q"
+        "mih4hba0G1s<~y@%R;}`P!rln`d+?L=CbKGEKq~;oAVD{zk%+i(@!Pb=k|hy&~#g<17lcuM#V02RmU|)C?or1OST=5{ryh2AC&$5"
+        "VCP5b`weWfoGVXChMlGKJJagn_I}44+gI*)$l~qG{T9zu!Ij@E3`FjC#JY#%eixj3$kgxKU)S$tn|@D%pSn*}Un8U6VVnIOfY>0m"
+        "e)2k^ueB;q0;>GQ`kiNJY!Yt6D*IWqhs`(>@Btw5+aq$}FZ&r}VbJdtnFn@0hx?J4tB(0CE^8zCK`=~5jgOlvK0cMteegLImvrVc"
+        "M1I5y2C@0@PCl4dG1ekN_Y{SnR>x`JSrnp-@~$WYz}Qkt+|8%7N2Rl{()+qDzSM<2`-3LVaj;1dKLR4J3)$E0O<+vL^38mP7bib#"
+        "k%qZ*kv{u#@WuYK8rQkK@opz)U+n$0e6h!+{nn3{Pa!$B^)e@EBx8;l4FhV<iF_Wc@q~}Yn9_~uu1>85#Rgh#2+3Eg@gc5=2rI^E"
+        "l-@13cjwrSZ##5hj<W+c$+x{Fk8Sy;$Ebna#>bU!B_7!2c^(mTYyp!N?`-jIF!*G}V&u)2B9S*#kbI*}|0=Tn@~rCdTdFODW&C(Y"
+        "ctg79UBcBxd&Zigw(-%Pc&!=7w^c|9!}c7X`$Md?XY9Ts>0SXbZUbu($gNgS<vj)CETjC7G<JNswlyQ?elH}QhLfvfE&F)cF%9B;"
+        "^J6hu;el}*JkT{>UG-J+i>3=)iaCGIM4OxKlZhPp5vp#^FZ}xC=-XHQ*!<sqcJwWuMB|9z3tznsU=j3`W)Ib8X|LM2xm2thKPEyf"
+        "PXW&e(5L)~>epPp;I<H|+xUaC9$Dv1DSbqSYB5dAqnxA1m|SZX(<@0iO-3WFPFq-Gjf{46VS2wLln0aIx{lL-4`YbT^6}g5Or!E!"
+        "&S&3tO>hOf=3vik>TF%(8*h5f+2nacf83cpQ?1fd4ywt#GRQl{2GpJNB(-yt&%f;vxt`j+Iw4>e`tPcIi23o}-hLYN?ZY{r)9wI;"
+        "f7(KB3gfaBgkLgp%m})TRqmGzj+Do^|2dp34!--h`)=CkmZFSRbkBW2F93df#qT~dz8hNdOvt)ueDEc2#IvT@FOj=W+JCqIZvWl>"
+        "yZv|j@BSUXYkO+jqp0KB<~O&~`{CWumogjrx7YKfERwLO@9kw06wFr(Iltw%Emu%+jMYLLTWRk{V&;I`N@f>aOmw2ROW5x}s~m7x"
+        "jKcgr$TKkz{a0bG%dP5v;r5r3KQvPE9G2x&w9g}}-5~Zs;d6*NHgs6ss{xl1eBoMq49U`u&3!?^GUZsg1qG)RD=0{R%1FG8N^3ti"
+        "?{7#lN&CJz_u$oj|BW*KQ2+ibY5prMhHj`f5MVyJPdz@b<?#vrK$RC1*|D63i4O%hOB=I~6JKMIQ(As0<I8L@k&quV*j)M;hDB+Q"
+        "AwoGNwfysK*r^S}vc&L!F}zrKB{nQmS4{Bq+qOH<;G5qR)|i`%d@0vSSZ%-O&O71}*@_acbC#ilnN!Zig-aQ349{}Q_*juSr8e2{"
+        ">GHmC|J~2>R_}kW^_m@DrT8B<b)MhiRH=fXds+P#z9k>$mZ<XhQ(Qkt7Id}A^U$+bGBhugAH&iA6g}fH=IMVkAm<wy>CX?b8Tk=6"
+        "t9=?HT&@Z8m{=<^<#p_&Bug_zceI`ThZxH%)8u3(#CLBM9%Q38Q~b-~J+nOOjyxZ6D(QNUF_|+f>k7H_-`w{XF7G$GPKox%_Vbx^"
+        "7e2;xzH%Vtw2^%*R$m{+m5PWyW0(V{v0We!Mq6Vdg0&MwUyKybQf|jk&LxSQw*~4EsO*}b?M%#Wo3)W$<*JSB@-=5XBH6D-USpb$"
+        "jN{l5<U`HHM5b)BCB`YAbk4K<JjAzMDc{fqoB8L*_+`((Kj)J6hJGuaYox^}u7*3Ycx*s%cjmhEeeL_&_w^s3ueCgW2#Z{UCF6Y!"
+        "^X(j9n(DoW^%d8{r95|PUk&lafHx)g)fihW>eH~V*4W^tP6_BM0pl25a0a0xKn*ERT;p<};Ra<m2P`q*^b5JK27L^xva4|9J}vs="
+        "nX{hR`Ed$9HCFms<|Nzt$h8sQGuj*io^z-LLq1!eUS7_T18a$AOqK(Q6r)P+s~j)MkXh1i&}EkN8w{D%_qFe9-`BpceP8>&{_?&$"
+        "KgSwY|9f3ScycrK?}yU^?r=Bd;|>o8>}j+8LiDr28DoYq*9#f<8=Z2=%W+{C_tir_n*?fH_N}CoG_igFV><a6@fyLWd_!`c<RlLM"
+        "QcuI94UINa|5^W8|Jh&TGYm)mILdQxHW~glISBOeWH`UO0?7{%`lx|Ez?`+nWdQz+Tnriq7)qwXE)3J(Cwd1TO7=l76)*tof&tFd"
+        "y)8&abMgF@FQH$3;c>vt{_p+Y`@i>p@BiNa{TKXQObCmREyCO!TnfN{RlkVLg&aV#If-bJBvIyLx>tlJbh!|+9?-v+sZOUm>W+Gy"
+        "4>-6GolPdoJ^`m*i4}fLlY_ocxg@8rmGA$fNmh0uaZFm0ID+6q2sYup*`n}oi^9F`1%vzk_WkYq+xNG1fAh7FG$3L0H$m<_Qh!5R"
+        "p-pXn0f}Q<(dQTRRY=HU@2`kWh<A#;zar@ZBxtnt*HB!}++RS}kO=qY{;o`gl}!D8jB)afwZ9;M0wHzi`wNOd?HT6{1U%uSTupx~"
+        "-%5DF`wJ5Cj2ZGFq$OEK`U}p;njs%_XT;Xu<N-U+_Wq9Ofo1_(xZW1Ps>3hEz}t#0e>>~1ab2YT*1GHr+5ijAeE|!M8Uo^w{Tsy^"
+        "*+<yFFj05Ly5F8a!HJx8zdetP^2jJ37J9jBlV^!|&e4EUy*vZSb|*aj0VL78<LM9L{p5e~^oPCfZnNKSAn;v2Lzerv(w`yQeGCKk"
+        "a+ZDu?$t77>1W{lWi0&++yR1IrRZldUfhMGpMga8=QBjqC*k?aS^Don4c4RTzkqCdxVz~3ItW5$27gG;fh6)T8j{En*SH&Na1A-="
+        "L?)~B|K0z0|KI(8clF;Y2Kz6+WtBg>ncW>^)%0$7KO0WRKerHQBZ$Lbl~|I=)`8k}fFY{Lo^cEiOqv(Mz2a+<8c7LpGX?L?6#qc3"
+        "CgD|zK;&qmUMV0{UZVvb7z5hY2hWK9kr)y)AGJy3o3@`!iRJ|z1SGIA6^J<}OSKh|Y1$U%$&%#YsMpvN>kpLq7>%3%y*~!$Y(St-"
+        "?dK8kg85)m@2w9dQueeTkUof9pZpc-7$Et;Mc<PW_21)xI{Up|=i1+%lZq&I6TmQz1s`HO7)jT*-u?t_e^l~(;Fv%n?_o4p8R+dB"
+        "c|LSDI1J9#CF~V_T=khG6$2}bTqo=tjRPV{8u;9_I7;e5hJK;pCD7idk*5n%!sQ6gEonZ81?^rTw~RC&#6o+}{@~9?PQ_cUG#{gW"
+        "KKl9S=cAvGem?s7=;x!KkA6P-`EZ$!>pcg|d<zmf)ycNK>)}wA<S1t@4777O$x#H1iJ2Vb0xs#3GvdinCYaqT!ys64l!IT_DLG16"
+        "1(of+5t<xjR=FlexnMMXa+Fb@90i@9J|MpDYv0$tuYF(pzV?0P^wnL3Kj`rPXQRW9k2?H(IQ6dUOHPu5KRD0%MRS5wDKa}4eUOVi"
+        "hlNh}^(KV;w-1)&<(4*5LLoxmko-4)ACVp%KbBt19QXYx@6QICI&ttaja1Gp;+K>Pot9FuhFrD>3Zw6FP-2{eHTVt5z6bGha~-P<"
+        "*f}79J>=)<S#f}~KG4|b=7OY4oZByQDJ{iM@r2>q5nZ;49M?<!hj&BFfw2!K-?kVdIkjUH;+{M1Ymt*Mx1ZTijRW1w_Mhbu_jW4D"
+        "Zc-tQRPsHG`-oJ0TqwM8Sj&)|xHgyOam`I&8%uunG`4U6Y<}v9RcKbeGwXaQG)zo$cgkb9{q<v5Q{IoHF+6bf0l5g0wJ4HNHr0D4"
+        "k;Y^{4{|XC!0Dh&f)W$7Rd6KpBgpvjg!!@NQIw6Rf)F`{2Xc9y5&rV)h`t{I&-@(s0B|Nt>|unjyLiW%ixd?;I_I_+u|_0`av1EJ"
+        "S3*1pDAsl6Mxpnlt{@fE1?4rDICZ7G9w980fpL#y9^8I%;z@>~%w4SSrrd^AnpHN<Jf+0<XZpgCON!n(H5PO#Y=w`!Tf5vcw6R&y"
+        "q;I}PbnyLzS<EXw6#cA=4jpnYCBfC6gN^pDY8!2QGoO#oewOL*ettb0Elt9z#`af<#-2IH9!t5o7SE#%oL9uY!~89pf}~q5pZB8k"
+        "6xvw7fux_y?>@xFA}oNTC>4IR7LgJ4TFANGuxu}};H7w9_=D^)|F3ExnI-b>N5fkM>$#K*(0;1#p3hfq^l1q4Go#4`U<;mOjxw4Z"
+        "3pvpP<aZ6W8O&R^QQkG%B!%LyV(30Q1K-xBgD+*9gQLG^(3j16SJp{5@1`z%T4arxm>lp!O=rA!W&N6EC-v|Cly}1x@3z?+4=wg&"
+        ">gpQ}AP;=ceAn53jMzAgcek=Xo&GL}HBMOXA~ua`r`hq1vn@}&7eEdMA1e-{wX5?T7MG9_cnmN{K%=k7_wQWELm|gEHTeY)y~dx+"
+        "^OFr%EuUq5125b|ddB$u^f9x)y3+YkLUUnzkZVodSGlQ3(eBgiztQQiquJc*`#Ie2a#7{MV3QO4Mwdl>ih{bB@wYuvEQmfQ*3-Y+"
+        "zuUjt{#_w&*EI`n%1@0W{9i|3@BRJc?CZV19*z)&!TMBKG-bUQ=3B@qEVlwSl$_@;LUk<EzP@00uX?QBP}uHht3~<(!XM`ADoaF+"
+        "9pYTMwW95ORy4kvxfVawJ^Lx{BayK*e>yl6LC+r|Jb#kV?{#Lx-jMj|IjU1?d{?>Lw;Z!YwfVI|Jl69eCcG<S3+H}=Tv?fE_kJk-"
+        "28EZ+KHEg~N74PYq3Vlb_-b?6m&WnaD*fj8Xw`m~4F9asZ;o$P?srUzCD!zt=aZHDy>_)>Zv&<;R_-^?hbi})<%2c#`}WuMd)cPn"
+        "li;WBlbmYLV*L)=>~G*R9dY~3@@=Z}B%sP)tlv4tW6?Y-Wk1t$Ix3hpBEL<)4Y^Hobsh|RC0*e6<z8oR>-sFNjg)r;^RKCXkmekg"
+        "5=RfnhA=F!0=;>I#mFki=EJM=$Aozy>?7a9<p+i5=I=v|{D?C9yU6|~`diCS{GPw`UGHl>#UF(xxu@~74mPRoTuSeM%w=9A@Y7k("
+        "@Zz!dOC4~CJhka3j3;Mveaw0l!yf7T-S@lix9;u{@QgHQ_tY50?#J(cc(a@P+3du1@W$Q6l!oD<pX&>+;Zi>fOnLGI?7eac><R(%"
+        "eo{FEHHS~p4MQxiaIH(kvacI2Tn~IcM-D=wxhH}E=Hd!;nD`-ACx{Ex;ux~;N3IPg``tw@pVx2?F1U1_4o-Nws7J?oyj-&Dd<$36"
+        "$mP)aAZ=V+IEzL*9(?nT=mWL!^)kBtEMiY&A1pIoh4%X$#<KLk-~WF9`~C0#s^6zS2hQfd{?=nAcL!g~-BFL3bsAT9h@ndlIaLWR"
+        "C@Bxd_x-i=4DZR@W}O}1yioZjn^(QBAnyT<rITv1El3<@p?eXHhamipoPTn4;<x5cfHT<K{h%J45|5Uz-c%m_)`F=7kF`!I=mH|o"
+        "f1=fEi<M9UR^SSjG;XqhuT6+~V_x_^(2^Om1lDj$?AJ3VK27y!?P>3T_=5eO@`~h}oX+girsV$p-jku_9W2K59_C$9WQoR>*p2lr"
+        ">U5#!FYEC1<i)`M*X8g}4Ci=0*V?pt`J&%@(C#Dgw+>=s{lfd5^O;rqXx|e_D%qTrb0Oy_Chc+PM_rPRg&e0yIu{xH4o+jX>?ty~"
+        "><Nf*P^e5KVmJcVan@kC_Xa<MF!r<m=jb~aj8dztnkyK0fyfgv-skK?75(=91n$%PWn}T0A2Iyx<cPOOx=6EzmY585&qpx<?U#K<"
+        "W__i;H?ey5#hU?}*U9CFXyYS#lueG;IQsTfXGB-u-9a@y=%)X7jj>H{X1B9iH@&|fdXu_@Ks(*^k%0leaInglgH0Bk^LN2qDgAil"
+        "^rMj-lz!|u*zGF^t8LB`r5_v&d66;tk;DwS7_s_MaQgAek<SqgZ%YoCGT?iaLOtWdzdgeqIgNu#qs~=qQvck-JwfTmj?<6u7&lng"
+        "We|0zLhun_+`YUFhonQ_M&FOVAALXie*DS%QE~dgilv*`ZAp}`bFiI5GZrD_Cpd7e_a@u%h*{)Gc*<3)`o_|X7+WOSJDBb+V<X9%"
+        "?GA<ZmCly%FkC1`?G?TK@Fd|zvw3C2^x})%5Uiqh8210u<c6CJf1BP8CzIB`_>><1P&7J2ja7$kd1!B?|DN#9aPE}DmdW$%``h=o"
+        "?{DAVzQ28cUHTii_cw6vFYvRM%>HhuI;YZK5o`XU`Xc5MR%9OQO66M7@@}RWpIy}7H1iZjCCZ~uZ9b?l_cZz`)Q@G~K#0cpo%J!9"
+        "2e|W&F`W5BlnK9=?N!?-_Xt=~`H5nDHcbAA`#)h=q7?I|;U(rcR%rU&bKQ<g7r&{=Nmi~27;LKKQy67{6L85lJV(!Cksk5I?Ig^v"
+        "l!NSG2b49JWqxz_t^5CWcQ6E|clG~uL}t+ggC^(X<(-4!Bpjf@jOG(eWhWOu5oU@M(exO>i;_^f2!}N@DX51yx)MgvQ!PkPC-k#K"
+        "LN>2si3XP?j6l*T))?`E(L9*tROhf?!97C_<Pwu$7Fvg`nOrL-?2?^g)MTYQ!^I&wWc37RF<}`Jh`XSWWdvb8pBWru`XDoK2~Nz8"
+        "Dy>2w1|;K!eKISN;>9{=g)Pu9C4hW_R4*-OenU}0R>m`L00ad`zM7m4ocWw`o>YZPIP<2nEuL$cU?%=;Pn0i%nYNGSpl@-^(s_8Z"
+        "5c6<(TWZd{m3UWZ<in0}2c@_|E9_xHV$)~ro`?c^pm3lTev;4pm~xv6-#-UpJm_ROMd?4u0O8Dk(9*o-vf`K;WV!AUWc&u+>4Oom"
+        "31Ivz;F+iAomqhK7e-mGdmhE}CCo90G%XTYE8#4Ev2?{|kK8ux?Re>XoBrQ(32umtAJ}C%$<Snx({LGYmE}akl}xtP$#JJZ#6u&{"
+        "fl|4&0gb_R;P!YUx-7TL_`xQ)@>3gX)wiMMdpA?>{%olE(+&+a+uAjToOROUXmeo3Ozjuc`fTVuN{XUolM1ZnGNlTYgK`2YCl=HL"
+        "yrv$Gy`qR1=RjoO7?m3V895&upN7!o;MAD}GIE*jNCvNj&=?eg1W~Y8q--q`ie`xBTp~tyLNTbqm@I6!m?9_4pHIqeZNBV%OqqQo"
+        "DAWpLUAI33P()O^LxVzpelifQdx=gq8gAfBM^>ZovW}AmAXwUz%RAk^#LxO=9d8@CfbNe-tE}d>wY*GG)$|A5AHo@z`>;2zWg~CC"
+        "m8IMmoxIQ+LLx9_lA|k8E+BGRJZp);s973-f<%-Hh%(#A3}ikQhO>S#I*#upnckS%nbsAN$Ewjamy8q@bns2G#$-IdOYb#uVWTyQ"
+        "QJJZa(72qx^Ls*n7P>ojY%$!Vv%Xc{Yx+~@&iJPd+<|lHEAKV^0e5a38vqprm?<!$Loikf^v)H)44qE#fu8k7j;=7d;NkmUryDIY"
+        "48&^YIKkwCuy(>Z&L}|ZQki3TZd0UkNOQ&wI#h}P0IBBOF4XpR6kRYz&ib3?+&(Ge%W2+FVSn$XHM-Y>YKeTtjnPcPUF=DFZLF6I"
+        "EBTC@J+py4UQc^&8zAa<ZW{S-%kC)2&B_24R6uUTF&Qx0g0tTA)d<+$!98iKR@UgM_1)0Sd18_a^_{z502A*5I2FZ4o$#{fzV*Q*"
+        "GlS(ipizjXDa>+VRxL9Im?;2;O;nmjM{i_6Rb(7ctl5JX`J)3#1zA?IBCMOUR9esNMJ|*c*;$9!WX5x=GH87^m})(@mHgc;5de~-"
+        "RMs?LhXwq}U|mWBf3;2^o9)YSFtPxq7nK=70~hCXU=i4`7Ki*ZV2N`8<q_FQk?^X{Vm7E}cYtR`yXq%BH4yk&Gd5;7-fS|wJu<gv"
+        "9pQii@gfZg84Lt+2Xe-34PcBdkfmc!1o}m%i<r5<q;G|QbWmWro)NH5b$AzybVv!#A6aJs=}7PsEHbe+ij6IvYtJU{=jQW`5pEJ2"
+        "J|tpwszWS!x84_^O3+$=A80F(YAS5gvDs9EHHwZd-?+avsBC?qkTN7aT5wV<8JVp`rr&9g2~}MQcZztH?j#4!oZyIxWBC0?Dj7hv"
+        "4-Pu$8zb@wIZGeJyH|UbxFj?QC*nEGai^JsLo}BekW7b{!usS@MM0vo_KerDY?L$l9gjzQ(H*gZtP$C<q$<>stSNGCWqDE7)aOUk"
+        "?I_Oq7s+7@t4dpYu*zg?MI4Xy42cz_FLx9;j}>*_&++qkOFVbt9rYBGWLT=bqr`sc?c%+DuT;7yOO4z!>P_CKMebr}MU?9k^WXiw"
+        "?M%*%{af2*f~>z(Cfxy(Nnjs|_pU)sFLfDLQ=9IDoGoD=kt;ZWvv}D@Ih~jQ?fYED=m_?lcoq-)NF-zt?kJG)YvMpEL2R2ZjE&wp"
+        "ea&Ug1cQZq3kpV2BmuQlqdApXFJSRV#(jbqOTJZ*=nrOsd`3|$JVb#6;V566OHso{w{E5g2M1zcxR|FT(v{VTNX~hDUD3n2p@J}L"
+        "1DKW5E^0++tZ7Vg(ZRei8El62t&E`1Gevn31Q=#qMX?=B5(VpBU@=ZL>uYlEs>WGnbAGJ}U}bIw3AC5N%Cf#B#<6*Qtt1NBv8k>v"
+        "k#QUW<xKA&yQ6{Y%KARq)|H@yywaKErA7%%8BFq}W_>>hN+`A$1t*-Cp3rX7Jz?uB$hmt;s!CwcD2_%Ns}w0e7n9c&+0&=>eWtG~"
+        "=9oy~9ZhDH=F<AEIZiiBVgD563InKk1ovUZT35t*HkuBY>x#&V`6zQ_3+I^GzY2H{68_0%3op80fh%c$XY9(futcUK3tUcf?8E|x"
+        "0QugD1r9;2Rp9n~I5_e2_wT^93AgjAGX|%whFH{cT_G^wxUQ`GRjZ0*?bmfXYQ3(-sP($)$g`ZSA;@IcbxrNWIP3G?eqC1?&t|sR"
+        "uR-gx<`Rt~pEcKYO=5=4Z3nSFT-UWp<5dMe@u|V0eGL{(ZoKLEQ1bkCIJs@*2v6lyrnY}N2ZiyO$@U}Zk#$AVQ#tf+;L^V%nT*>%"
+        ">fu>t{C%3fJLnjq9!)({>1f0zhCC1gEL7Xr9!0O}YZ>2Z$tmxRVR~e{rJ!b8&^T5~YP9Z$10k&6bN!y{_guf{{z`ieIELjk^~gWT"
+        "R-)?^PcAx7RJ!Oq?3bzlFOy{N-^itZuDa{L`PN;>vztSa4u3ivPlxkcXU(<94M}$w&m&WQo~ksWQ<0(x7Fx6&`wfKt<BKO0YMR?S"
+        "wQ!x7lrA+}g;`>eb_<Kw0r!vzr~cM<@@5uGOGjyltQK}@^Ps%8|BVk@{ty8Puv*7oHpE+(bln~zx3}FY_W2HMp$<(yHCBFPFMQ(L"
+        "s3fm8G(rd!sVsX>w=bSz3u+>qLHk_TextO_w{9G^HO(!dLJidqU-SIUaHFPCwl~s>!Ht(;a->lvG_>MNXw_hoTK0XdU0|}ToB<jn"
+        "y6qA|zO2Q&ZQnI0y_Tl@W}{IzvVUjWyE=K3Smlj%@2)ZnW8gAh18WKct8CWEqc_WZhc;Ovj8h|5*S0hIOurv=)`yM3VJ#dbSOlp>"
+        "PK<1OW^lcG@Mqk$)^R+>HoCDrSJ#`(b1BTX#?vdZe>D1$=+WDt#qT7I+^-YcLb;Of6-7~!E1_yZ6zV-x>UGi6ctFt&&3TN&>f>Z3"
+        "QM?tkM*sg_H2T|vN<SaY<&w~1vLo@<?*DiHzx)5)|8L#@21(MO)cOC;Qpe-r2xnGv80Z)+f*{>|eA#9C_S4|yJl#P{{cqrmy*O6!"
+        "1q6LuJc8fC5wpaeUT*Pj3*8j30G+O9P0b+OmtT&0RA4WXY}E~{%$1+;8wo@2-8*70sSSONtPFVHGS1YtUP){Tzq8{JTe?oFThEOR"
+        "SFtih82d7}>8xMve?#Y4+1c0?jc%=F^m#T0q{w#qve=&WcP3a!{r}J2+blPZBW<JiGF!S!wk3<wM7#@<qHWriEiSxJ%-PInMvTxx"
+        "3q>5NN{e&t$CUV!2_%37NL5vL1K)JS_ja2QeiNBbKA9OKCL3uh#7TGl6nmfRZM)nMQjUsbl(Jmw#u&`Wz?rhc4GSmC?*%gnh&?Y&"
+        ">><<HrBY1U+2DiR592&alT0<+@sWu&`)QJy3yZZdW1Fkq*yhMwHy|^;ABsIojcLaI9B(angK{@Kp|h_QZ_v@8Kjo*9_WXnYPMqB&"
+        "K@n|mjOj}tRnsX*ykCV?$lkr(QLBq?bDh3Bqaufrra1V@wK!*`(f@x{Va|td(^*xQb3CiEyWHRYq%6;(C~BO=j?_L4lvm`>U*^Z7"
+        "mNa-&h_PZf2T;;<UYJxWH2zF>UWX5J>NzNhqej3~^%%#3_w|(^fW!-}yM5o8HpPh|r@tC~(&b_DwXW#zI`L~wAQS>AQ6`A_*SVN6"
+        "z8_Pr-k@=@<ZHv6x@#<E^6u8EP}cN?L2nDqa}(zW>hlTh?jyx#92ck$(an>Z+;HbUDntKE1tVPft@w6KH{ZEA+%9txM|oQP6BWNg"
+        "7FDA0|M`D!Z~uM!B_Ho*-yZH~H@Efw`$zj9@4o)y`2O4c>p#wK{&={%xqG;o&b87r&z~>|lD@R3EGKS#?U=)0^!YJa2$JP{BvWPX"
+        "2?;bI{@p#%-`U8(5~M!KP=Rm3kL7!7G#uecFW!RaGx`g*MRIwq?uk<m4JYc~y%5frH$wS*BS-<1(y#w_M81e18u;IBWhJ^(y8OTM"
+        "|IX&$<&3<5tq{I%HQ0xnKc@FLlWA3|<oX(H+~ak6yl8uFAJ>}2#BJDmz`*dRuk1o8NC3+%j5E@aaZIg|Q%;j^-c+YwZma^gu&erR"
+        "tQ<Z)HXxmqHT9T8Wq=LS!<Z9l6-WC(p%l-9NJ}YBO;lJFf$8f!a;Ucf4YaI3m=;MW6Q6b#29220YA>%(Su|&CDlQ^E@51kvyA!+{"
+        "bHTC*6d>H?zoo+6sI81*PXHz;4_W}mluCEw>-zvZ9T1R#$hd{^ZlnwPcfq@%xqBle<-XR*)M5UyrXqQLr!}cX_9L}puhfF6k-pI8"
+        "o8eAB>I$ePde9ITJ(bS<$zaWuI<Re}2OA@8D9S<){KDMLW83#mu0&5cMsvfvLjH~Ey^|{0lkZ(&9=H5AruR-e?#%GsX~%7P@AT_^"
+        "xzhn_+@A`^tNOjurVJXH?(}%1b{dshXA(xz#)><w)&)@^(j)2M(ddFp&D}C1G=LBxl4e)t@cKeoc$lFJCaUymF-wPqG8j7AbB+$1"
+        "DDrZr^xaqs;pix@c<a1q$Q&3=JV`nN##|2H74Kc#BF-qM<r3>P<+-SReWx2oOO^q03UWBhq1cCUjf8&PjWmsg03N}i{bUuYB@y5A"
+        "5B9fIa8AJs-=fLx)jbQ%x}aJYj<G{Yoa^40hd9nD9r`rk*GkA9n==t?i>KJyXjuMo`_9cS?PcF(zudlaMA#kdJMq19Ob1dD`ZyoH"
+        "IO8UcsZ1=8`*Dj4RY8w;HxHAW@c!p|HkV)W@<OFl6CX`SWb-E3i>syW{ZQG-GmGNii9V#ZWQKMd?e2gxriA5NG}aD&VZJs7tZhS$"
+        "W;P=Jt#)o=&7$q@w#6EAu?|qi(b+~sZsi2yElT-;eMDq1>`wF{8SGhA5E%;hR|IFRS+!b{tqL!Y?NmMfdJ^<6@k+s|>+W{?b`H|Z"
+        "Rd4=iWFn(=vS7)&5Az<f6`qY*56>&mFM~e0x-IH5{fvH+f%-{(KfWK|&(Qs3Y0VmeJc!x6W|9#9EZlVq!7kL#rB6TEU!b2m((luy"
+        "wtK<;B2@~!+}{h|kME~nKMw=-Gl_n$er|j81N~;-d-U^S3SMVU>tkdLh_Jwy+*zEpT^e?_nfq`SolOv)+z0dd0r2CBCHicULN#sQ"
+        "9%KSrzh{$+?KU3uY!iqf{)PIv9j2cPHqo=6K!x}B#1|)!clPj5@y@>fHweD?X#?FqVc*kwHR8|rX@TzI8Dp6-@A$>n)B124eCG6>"
+        "{cVfUd@7Qved+T>k;QpVeLJd?1;HqXX6%b(3-9J>T=VpvWPU^n61G)iC$Z9pSwVdp30&=iN{xO{;ADmf4XFtj8yvgsw~;2ggz>F3"
+        "_EW<XOOsW|zy)`zK>aw;as<xjLYIUOyfY-f=SA~v1pTK3R-2dtd1Fm5War0U8}$bnyDSYsmJuicAPszFNFs2axI)it=R9Zl!9-tH"
+        "w;nnUV0-_Cx#g>o**DkffHU5|SBy{f?{g0Be^jjZJwsOvRi&qNcyM#ZWxZ~1#>gY(IeauFCj-IRgq$B6box?fg8=zT-H*KimxiSR"
+        "g}Yhk%FRjdLeOy|qXZ`$%?)~Ovv#{l676SFWZTjFEuTkf^R2|S;C)+?V_%@eCN$@wTEiD&><cj|N-XhV$CC@pvlqv{AQP(OpH&3g"
+        "EEtv3AX?IXpaQ*h9Q*f0I4{jx$F!aI!dW}N(`>uD8aq0t`N_s+e-X~OJq=`l_J9A^>d6nt4}W|1!`}_)htHBW#q`d`c7N`^JBXz#"
+        "W_&w$FZmM_nmeX#h<8=%7SzA9@!tiq+~vlcq%`*q@-IWqTE8iL=x==Ay7qTdixRBbb+Fkp-M-lD8RDlObz|LdeUgOl9Il<Vtlf)2"
+        "XMZv4^nz|q|DIvI)V*3O<)o2U!6}W)_#4)5na9kWyKxPfdtv&!jC(c=<5u&0t=17HCo<uca!E}>zcrRr7WOR1_HD`8D{3v386X&S"
+        "&e5LT(wH!-Jf(uGz~3u!&s_FOvuBXo&gY`Zd#2&3GxzMQ13WGCK1<G?{fJNz04siGf@4{hD_1{2g4TnIv9;f`+0l@2hq-3~uRODP"
+        "&-#@bd{N=emMxZTDK{sHh;#Gy$_*5s`+h9@G3vK{3KIH${5kaJ+4tl7@%{W6`>|*(E;#iS4F2XB<$t^ORwtmG_`Ulpp0`%?gjFf;"
+        "*|+=IIqPY7cQd)W31<Vx2F7vpSr<LXnLe028*PPHzpW{E-dd53GMuR6ck*{FUy6=ZH1odYB(_w+Mxw1Xc%tt2ls=0QD(-mPEY)0e"
+        "XuKc97{=EBEBN9cjhNm!kB(UGcF*uJWKwMG!VdSV+j3?8Ev;|E22)AR3B2`w9g8?rI7S=%$dD&Sy^tfP?@&zWl<iMM3Hp_HQJ!2b"
+        "LRke%=E(OmeBi|WQTIAvl%A&L!T4Su+L6Cn%Bski8>}QJ`DErrjOAQC5ZB&js(fYw_X_yswr%b$Du){KMRzzi<XPe(WAb+!Wif&{"
+        "FO@MrU7u8eK8Yte5%F0?9BL}WC;t%EP!&fW<Fj)fQ)Vi3BJR)S%_xk86U4JxtsB5+bv(Kl%<mTa6tuke4CBWT``2-5#bOs@9cM@>"
+        "=i{TWm$^yKr{Y}CL!jmOS}eS|kaP*6kY6HaL?`mggcF>Db4i_bGA~U~=G~sH$g`f(@?d;<^E-ct$QOwfdQTPGwo-7iYF))7fK<g_"
+        "vKJGtUv<orh>T-kl(zqTCArd!=Yz<V!{j(g`tF3O13U?5m95`kzYJdoi_sh{a$tkI7+B=~OdS1c3pf8)C;v-}ugry|=(&~s#%LA)"
+        "lq+=mW1&;VGP*d-S@wm>yL1FPBJ=~7jebL_q>A{kQX@}cp=R`3kAiHR&X4E3#%UaF@cl-7CT^}S@eShTY$dp|&nDe0pgHFHyj)ui"
+        "2O?j;(Z6HlO~mKC_ida(Ihp5Ii9woG80!4nB)q@*<L>5<>HKDVcXKzfM>49&d1CeQuVKTT$oJ$**OF)6u|rPeD*|4{JJBMBHydee"
+        "=Tny=M4&qz=;a#AC_u}c!`W|3Dbw9VmWIukvK8$~8_SV%G&+HhlgoO5jJik*ILU07hGC7fJ~bLffVAx6CL^*nCvj0cS|75G!8`vt"
+        "W#RPO^mcZ0e}>D#arM7nQY1(vM)Ri{^Lvc->85Sl*W&Go!ZYP$K12$$VxtY=3d&xkGg21(#)JxpXXs5b$7@Qpl={l$H&Du}uzHq+"
+        "wfoG_@01&>?qMxN4a}Ov$CK%aF_^2Oi9)H0ZRlXYgu;NyvS-oWV^Hglp?Y=U78dE|;-Xp8!*_1~fn9q0IMIghN&N?N`!rTBj4*(<"
+        "f44M<jY+Jk0o(4cy8q%L^WuU|W79mM%6f>p@ylrk!}&3jO)3op-arZj#PX<0`5#CwggQ)=N_SVEHJLh}YgJ4!JWQSXS&^zeH>Ur`"
+        "k8(@hUDMEwI5%EcF1o`t{40h)yptgx<}|mITZT$g{Y0kG&xQV1MN=ka5$CX&o&akV@*EQCeBt#W;OfseMF`}J6i#uZD8oA~+*|*~"
+        "2YK!bvA-R0Mspstmv1NmSDR$5O#UF?&o>@)sC6YYa7?XGBRK_3#_)%O@cV!Ya-DALp16~?t{TzMI6<Wvos+_aE-uUOdS8h$EgL7-"
+        "7MucD_j(UdN*S=nuBK(!&cA*uCIi4i#5wFBcWkWKgn%g)Y1Qs?ZDi%W-HXD7UNvu6BFmI#H@Bw%YqZ~&Qn-5J=8mPH{#(2scz$k_"
+        "e!R{>w?>Na7w0vq&;Mt)Mun_r^jf35{XQG%&QU(VIf|sQrsjIgW(21@N1K)G_U{vNfn+j}N61wI>{!<+oG$Nw2f@x}@?GbKQBlVT"
+        "mKS-KW#^}Rm<)Os3-|^hx{2T#bd`6vaJ(4W2JWS;%eye{_MoLqp!(b~8HR5wE4J7jfaNo!|Lip-no7!!eG%L(^`78247!2>I!rgd"
+        "*hkXuC-Rz%3Hb@#w^a!;@i)@81czw9)be2>>)Ch?2qZlh0A4qCU>aj8!98U+VZAw|<Xgrx6a*V`Pq|zgTS3rAH!J)88@nl`<cH+y"
+        "iF2d9GsA0<zAI#Ls<3xsJ<b+RXdRw%CGJ$N;Z&J^U&huNy@YiCx41%1VO^y}2O@N*#_m_>Z4J1svOShf>Q_}+gr@(gQob~A{>lmK"
+        "ZTi>YJ3@*wm$%rIMxv!fSlT%0>xk7q#N$c}JFQKz$Vr3I;e=d_w>x7Yj}`~goSA=P0SmX=>SveV*sDW-^Yzk<4H)NL->Y17wq+O>"
+        "+u7Uhg-GQXhb<=0bC){&2H76m?Fnr;(OS3JB>kN)g8!i1|HF95qVpFT`2HMMkVKnbRM4JoAWhG|FSYDv<NKTO*~xbw-i%$Gd`X<w"
+        "wVP?5cap5em~WtU{E)n?M+FyPM&~&Y4*m)QyqAaMoU<#Cc@>TExBDR*oGmE!A_I}FV$)sXBBOyYeXfBQhA_((SO1&J*>FC@b8<Y#"
+        "VyWkyt(OLF+G4Ra@z-Dtm@o{YqRQcq)~EC8hZFE{qj`1t^-|T`8-P;;2jSnS){5~r?SlsY1{+hI(-Dpb7)mLu;WxpCSviTT8tU6n"
+        "W+>3{!}qmPIDv{Z7P!mC_?$GqFDbcsyZ+sLkNbJ&z-`uhT?Ja*4=2W2A@-jtuxIjZGC3#ZolGkUHtCye>`|svsMtJ})mLJzph^<G"
+        "qP)wcWO3mImJu!xgp#(}sc4<bUe$L6^7AGWWm};s2&5JnnaJpEsqp@E)=jI`2%fG^Q_CepHJ~joum&xKM!2Mn^#-X&r2=)?NnVC7"
+        "kV5dxw(~t5B_u?!L_5!XE(&qc+HcX(&T4JZ#u=VhOGD}`w=MzsEp@iwygKv@BO0;1j|)YTTOeST66!}6*oOO<uN3DH{9Y#Rp@d3z"
+        "0<7Ji4n5t{hyXm#1gTscUzg;*Lk>jiDU*Y%)~fjdl6)rJJrPmv&R@G9?VXnAcaY}S?WY*D(I$`rmVdiGCx!J3<j7JrKj5ufO8YON"
+        "2c1QFl-5T=bP6evZuh`TK`BdlemfP~x{%LjyFL=?&=yr4NghzSxLJKC;k@fJ_dqA-8{bLmLkA~ivGlLknSCM6_OaZwi8-e?e~iPM"
+        "$>ip~C##QLhync*M<VT#-6oMh?c}#2a!sZZ{0YZv*Ggy4Y~t?8dh_G;<NXtlSB0$nw?bCN-^O=mWMw?5kd?bzrl3t26>UtF<|cpA"
+        "zgct{n#q6eEg!u9c^<pxu~SyN=do+L_dIr9|DMOL-CxK4op|hTiU(s7AD22`FPq1%eZ0y&;TN>!u^WZmNujxLdF%`;MC7a6@z^;Q"
+        "(!3zi4<3)5XAPZbt&+iG2Wx~iP@JYo;)-#3>}ZV&)!psEV@GR5Xu_IwL@XY=ZjI`@ujUYQc<iP%f|~wp7LjL3$75%#5#+B%wEIrO"
+        "V`r=pbje6#GxFG3YgDXMYh>oJ+pQ77n>6v*d26JdpPt9gS|fe>89k4kwMGXm|5ndq=d9752#%J|fP%+vTB8_pJ`~otmd8%4QP`FF"
+        "E@wDCOQrYec<lUlZLZWqv^;k1yEfINP0{k$S?}6v_d{<B=y>dmH7ZT14YWLV)*2b~SObq;b=Oe2vF{9oN5x~;+_e%V5KuQgk6m-u"
+        "65!I;P(n;RcAY!|d|P#SA|sDoCyxM!O&M!o=CSMK5lEh(ERAI3v1?^Eh$&H|LE`Y(wKDr{q>ry+@z}NRS`q4G9+Steeb+$zll-1="
+        "dF=Xk4N|mdyNSVL*S-CTK%<e~R349A_x3}M`;xGmSUh&7egtKW9gkhFL&7`P%1cWgyPlT|;~D1od~tc~rj(~y=ZQb>Ur!#pv3VZ5"
+        "9@h0dcFlM^kKOawndjW|*gJ3QR!E69tx}>{=62V59qWJAOc1r^9J6T}Tq?*lew(}6&0_!OwsLLHzTMs3*B;gJr25}K`ku7Sg%@-*"
+        "iPijNRGN@?N@}T5bODj07M?=rc$sGOUd)G?Y7E=mT^!|)IB=q~T0ts1lz<mXxVfxRi?0^&#5Ek(T!S2@BKPxE=HF4)$OVC2m^8KK"
+        "hjTbTg~i%(CO^RosLWdNHZqg=MN9R93T;i7r2yWrory;RiT~|5lom7i?bbS7X%UFpI&OKJs>H!7Xu-AK%&pd=SX<URrS%s<&h`pg"
+        "oFwu9io0jnf~Y*7V!x%tWyVqI?UH8-R0w9^8O?%iktJIc^l+=POsL=qN#j-~Dh&zmz*3Q|>ZC~CO%(jlB{7XYUpjBq_<_Ur_>whg"
+        "Jm{<ZpSzZ8I==biVSY22-#mm@X5M7YW9{mBPI_l9Df?z7dFz{<#m~Xd!O!6r%;Bgs9y*I~rTUvnx62)Q;w|!?E_!rOc^BfSM+ay9"
+        ">#r~ee;@oD{2croe%c%w26*;6A#A^Ci!Zi{+doxYw}0b)k2zGOCfxUOIlxhBZPoh<)V%vP3(uhD?DppV%W8G24qCZF&X-wP0rU~4"
+        "^*Y@000NPguBgU>sO3x5CKE2>GXOD3qC-G{pB*K#rPLRzkq{8ux>^AUnuvk%M@rbHLb8FTZ|r7HFo5`+XanH^?X$=e4IrrY$8AmY"
+        "F?bPm2Xa4ByUitlN*Cj_RD-h}2%@J2)_|3nn)SFa(DNXO_f!97WS*BM#NyBWH)Zh}jD(7zTfAR7&~mXI!Xw4<M%DFk^j<Y~h)V}7"
+        "jyqvJz6k5^W;}OFTUA`*?i5;AjLYPWiHrFu3*qgO<5{{VH&@t;?g9frUY65fG$vvZ8o?KiWz>AB7QSt5fC7ydU&KAKjvGOYd03yw"
+        "3zKZegm)vCJT<YD&Y<Cz?2cxEs);dd=BgGb?fTFN`InY)JdmC`*>X_F@PWTkmgi1T++=S28@1QyYs>|xx1fnn>&~U_1~w0IsM(A5"
+        "@zz;C@A$#ZzV2PB^U~ENb)^Rr_OqlP@eF1(>bOv7n(e-RhaND<$?80}7e%7uhlZ1LcBle+Wpcp_M_lH1FR~A_Ql?6cCMbb&+PwK("
+        "pX1d~US25vX0J(4IxfcSl2h>h=FZCP6QgMNCFv3!5kV!mo~>ADBvk*m?l2HUa%d)rbq%5BEY;o3H1*;WT`hTCAq-ISTNX%NP%t5^"
+        "b|bas*gh@~WP;#}$z|^y>|X4L$`v^NHV&sZlbb&tZmYaA(^)@XU<M9}0k<i-1695B&~`SEV4#hAEBxOEh8{dPx$u7%h6{jMv3|UM"
+        "yneiXyneiXynp%euAIkfsB)tl??}s5hl-^*-jTL2G)!JBjaO%x3W;{5@v7D-7Ar=`<E0_LIG335@_5hIX(sF?MSPRTTU#&VOZ5kV"
+        "*SadT<5joAccEGq7_YW+cx62cmArBgN%X0*(CR9W`ARX~FU6ZKcHZ)WkIL~LJFB-_jsRGs9hxJIw?TmN&nzj+Fer;B!HRoqp=>-}"
+        "+saVzJXqR^@H|*L{J?qe<Mre1G2Y01ynU*jEk9hx`?bW6we9-T9PEI@JN+`;r;~5@_mi8un?J(ao9XywcJ~w0=Plx*cri!jaB~Hw"
+        "Pf6LwaV{xEiI8!>f1i1=8uf3J$Ot9&>2tjrjfU;hK)845b73YZ>?cBQP4IY2IX5GaFj~_jFiMwBD1vER2J4fxmUexz(lOfg886Dg"
+        "`+Ve)Qmp!9mc+B_^X&?KzF(ow)!(?!k3Y%2U*mjU;~vFV=<^zKiD`iT26A5QO6<|6l8(@)PfdWWd!Obtb?MVIf2TfSb*JI_tU!!%"
+        "@IE7T<*q(`R(i?ib+jG0&&E#Zs)7yGr|_Nc)A#B7^nLn1eV@Kh->2`>_v!oeeg3WceCpymmYV<eGh9Wj(<-be$kT84x3h|EIu38{"
+        "W-JQwGE3yzNL|eql$~dZfS0*kU9)!TXA0-W9>r0N1g|6kK-{|gd%6D$k6$$&dHfAWA5xuBUQtjhNX)F3JtwQ(#LOpeH*VH(#~*I~"
+        "xWBo-t^UVwHnwp*kqX3>Svn1snuy7$0o4;R@^Q_$Sc?IL(AhM@3>(3rw}r7c#S6~kC~)&(&Q3Xlma4*V1Y#hj>iQsc3{DQfBoy#h"
+        "HuHqFxT<rNEJ%in$}xC3TX8M|V6bZT*IC)t!eYhCj|sfg^DZE4atR1~aEsnuT)6I;NrI}VaW8t>9Y_XCQskD)k(Pdkg^v6i;^Iqn"
+        "cvpIFHb7HL;y1ts&Won6g7R)u0^)`IjY}NHth#gwJ&y`~onGP)O2s^~h46doRDMPpWND%-`rr85{Km3LFVNh>hxz6IUYNXhjfRsb"
+        "5&kCNQJp8S7Sx%N(ZVS<*9pacS3+_6?ID~td0NNS|9Vk(mX9qRLK|`;<Y*n8#)`jB$OR*7VXxJx41_;Vbk1OuogTS*f?%|p;GB>!"
+        "<A2umy2?B4r*mt8m$p;{Vs!$%$yL+28l_0bN3p_E_X>Y14}FtMv#TFZX-m!DZjk0e9<Vmx>>LHzj)_i*FotvK>cML-;plhy+h>cv"
+        "P4&5KQN8=t?M+sYDX^B*=Hn$QwRC6gqRn=^bm_jtE#<4}rwtBN2P$?E-#bdvhYA9SriGS4lZ!ch>hcPsAjSoDSB5j%3Td=sHMK5~"
+        ")@QlYaJ`AO91}uZnZo0-j%Kg_ZfCAYaMUW2wkGX=zJ&Q?@@+Di-Ar%(m`p24K5^k;rm<}LKanO?b>K1CKdA%|aXFskGJADI=~fxy"
+        "eJ5+BJ4Lxbm|S{;5*JhES9ge8uAUU}D&?dB4}o-{+l$jZ28m$a6OUA<og76CKw1lsr)5W78f;#!q>Cpd-zGx)AC*F=4g3gy$d8Hm"
+        "&@?F?K;S?@J(hTWojKfEAmXJY5=D1{Wv&#2?V0O{=v&pJ)SbDG11t*8mXtnk*R+cqKPk=cNIIW_cDh_ig0l;_QRFY`&OmowcZ!Jj"
+        "_G~Q_3AbZ8**4gp++@XW6mSBOEWUea1R;5n=G!SWICVxhubs5N0+!g7a_VGF`w$3<;j6q~g<`*QdA{vA5MiPA{(P6uSFU})BROHZ"
+        "G%qmUcj;{6{Q{5jT9uOHO_nc(s+@DJ7{K{{u2jm&rSQNKE3jK-eyOKeQXoIG*)WggrV3h^eH%ZV^8-~u3)7qM=LId~2fn!mET)T@"
+        "r%V8~Xf!GtFukoHpd3qQky!MbEff!rY+=~+yEG+0gDEvE`Ylxtunc=y^xMsm)EYr$4Xb`*eQkMJ%VqYPjdXj~Y1;E3vgud9XI<dQ"
+        "sg2a+^{d~r804t3>9^Z66@0O4g`-8kF(Y~1b5i5}7X2FU8TGiB`^~IsxAFTeM{2)`d%s=E8(wx^X1}e4tl2Y{ey#S5-*0AJZ;#in"
+        "-JWs#wcRsjzt(%k?ALnFc>QK86IAWiZ>d5Id-dBPk#<?IP5rieRz^eio6&jQ`u5ufR7|31$bJt_duHm_Vb5ApMoYvmWs-)&o@MHw"
+        "iC%lg=+|k_82xJZY@tAl6LrRF&Ypn^YnJCkzh|9}YuRsCm95apdE0(d-JZev%$EJ`RbUhX25kH7_Uu!oGgbhAb-y~BuKCUR(R#ek"
+        "nmucD)#)s<?N_^JZ{51v_N&{o26(D$EW3WSdv=5XmtDV_J!|xn8XUFiSGQ-c7+|vLSGQ*kNYuz7n|?KWR@;&tc*yTpw`cXb12CW8"
+        "Z=$x9Ga0O8_uD!R<V5QYP!8w8?YG-A2@tD6NQ@0|``t-ErLaDNqlDS-Q35rEw?p(e^7>WpS%W!*0!5;6kf@S>nD&fcUe{{Rgm=fT"
+        "U-h0rpkCANE%)qv4dWw9eo_C^*k0BDe`9;kG|hM(bbHpLU+tdt=(o+8ZCL}|&~HIIOZxVkNRGup`h9e@&-DG)PQmT|M-&Y@-T_<d"
+        "i1@GMh?x8|M@0JCl@;Uy+GoebR1Jc(;4?dITvD32c=is6)@!H)fgn|^WX<1fNF(knbN=Iz!m}nBW&HWK!iBy7GRc}Te}e%nXD;B("
+        "|F!j2l6^Wk98x_+Yur%+b7M(xF4&P0CA*FDZ#}(bHk_lO2u<ABC_Xk6EbjcRfGOtu^Oel<=?$#E+uc3Z{B=f`>-;-s(13t?LR8l3"
+        "JAXZ>;X415mE7gce`6?T?=t_i4``^G|BHg5(P#dh%(KGf_49Wj6PV`Tv3BfekJ|a?W|?O{|NY2KLD$WH$*JCEJO4LZeTy-F2V-je"
+        "RvX##jw*jKx@V%yTUoEA5`a%MRA}S7s|c*r7`_X2SxI$9&ddC1vci`>4b(8H%A>(iu%?)<k8&o@(n2PZ2JZ_aOhUVl1hGT~OmL0C"
+        "1yP+4W~7^;lIqO2h5{$L^*mhGG2eXHI0z_0NnFTu_U^6So5$KRL*d_&dfJOt$2Nl!q|EA^I>xQ1NC}PeW~N|@n&$teU~R{7w0Rc7"
+        "h}yT&F#pGe&7L+gLht;vBqJOQwxDP?aAaP_dvol7Bj%a1B95etYNG%&XO+?J)?a&0TNe4l%tA&O*58hpwPnfFL?2qE=u=yM0x*%c"
+        "!}V!HI^gzc#!6iJG+-r8ee%f${5}m>iCdp3SLRvt$tH%_^l8RQ#6B5vtl-%VAbG`o5()9P+sp|oF=V7wMNr)G^b8}(24W@C8S8!+"
+        "bY?8`W(Jv;nX<>uB&=jSG09PL_Sh@I=v_SZ|1MyD6@qt(r=Es4;r&l6g>aP?7yEhRO`RW8i!ZY}P@UYlC(%#|R@}ZD!-rBV(pNJ6"
+        "o2CA1FPg$b%K-?q3Pxs17~rU6q@Wyl8s*uekfFs{(dfK^siZuc6kV++v7m(fjwMj_Y~l?SKFTu;NJC3fgaze+BXA5J;5^TgZ7G1`"
+        ">B_87+q1w02ZpWD#d<t7O1+igB|UaqhVsv6s4h5)I9C~I<Xi%Q2%Umo*a4aF!3(sYzb&&EJo>A(tGqNn{OT&xOyvX`9K~yZ-V%en"
+        "w8V<zyc}unRbuPVp^d+^mvN>6^X~f?Xj-6b<!+?efzo_KEh_c_0r)9^c?)B0MelJ!zkRQK;B8I61vDsQ<?JD4U`GHzYiZ~3DOO@`"
+        "owy6%Mr&;A^Z|O|ELasUup9uox7LoIrP7$e?~|4xZe@Joe(jvz?S9L~;#}B!Ytl{Kb%y&Mi#eF|&hM6>K_0}#IpbnkWO0$nZ?jfj"
+        "o<^4MiY!aX_i*PL;b3rte+qSDZJN#*j!KDHu7%bi{^lCxU|>WxGIs8;7P{!;M&?cGb7Qj>3k|Rg*!cEqp<}Yv?{+npmF-&SqQ+wo"
+        ">9Mdq7p=S`2!Du?Z@U&626FS(T=WFXwa_`t_eck~TnmlUTx8{2t%b&M-sl<a+S{y!&UwBRZ9<#1&^XWuX1>K*sGaD|U50yVu@=gx"
+        "|7MMl4a;8(wPPtEK}~j~h7$W}?y_)JxND)tesVEtvySHM9OGaA_u2*f=@I>)$9@t<$AJ^}!zrn@alw8#5fHHx_Cq(uxp2aMICsPe"
+        "`(fM>C+vr@7EW0JIBQ|&e79JO7W?_M?ANpwhYJ~tPu7WC-jRN-b)amkgtW7BTK>D6KOXLG#^FtPJD>w4j-$09F)cQbT4k5@4b0ws"
+        ";#}@bPLFO-1hC{Xf*~;c+RUyHz(1aGE!ILbvt^Hhcg74A;jGFW1|dug$~*jB4eTxZvOFeHIf?VgH{S?jt!BWoq0o}eh!B7uHbZ?e"
+        "vIVL~YNL_XnpT!zlqzpyWPF6#5d;UzsH_esWTrU#P$np*jSWj+X9uO9nWcuKv1XRciK*f57dUNQXi_$xa6)Gz8yUYRrSUGHI@Ez#"
+        "F+-_CIQJm2dOvY(==ss+-gD0zNHos_)t|dH;yGpjSzv4@yV%P7n=NR%*xG`jea6HKq3-gya*d-6*gK7~pKqQ;08{I@Jm2|7_Q1sD"
+        "C+fbnMG5BQofGGtK6h*1I7Nhr&+YEE)~grs*#Rfru?4TTJCvd874Ppi1bC`xSieiv^|4jNq*Rwy;ep<xEE`e3v(+YwPrvlbd8hXt"
+        "#*w32wNLBHC~a;lhTFrp``OJOUk2JNtQc;y*-vM<VdUjGDhBKMQ8*0u!wotU7-Z`K7i7mm%AAzgD6~^PEV@o~l^uF6_QKAvwrKhL"
+        "mDZ!m3w^Ei0A6?#TgV<L0t(@5HmEV2W?g~E-7gS*zWs(RNq|>lKH#aqRiVNGdk!r@IBpXaq;jY+OJ&Sv!;G1z3pvcaCMtRbvn%Y~"
+        "aBnxM+=jD3_YNvE*^qm82aK`FY{0#np%RnB?OjkJpx}PEy<6ko84Y&tDnskV2JC0<-I-MjL5g5C%-+?kwD)0TD7bf9S%-0#p>XdS"
+        "*^{jXkfCqXUIBo>RffX71M=Z>)mMh1y#r$dHjtwX4Hb8I*HebVy+iu3VvU^k?xX^d9AqdQmk1C+(8XGYqP-J$KM#AzQ25@d>q*<o"
+        "Q03m$HvPy|hQht0n6>YYG8FFJd}gw#R&INzC<DE6lcAyUtU`Ijm!VMBr~u?o7a97>IZunNwG2%bEIn{%t%oMOca!=1utCsv$pW=`"
+        "G8FEMHWkB@r3`)L%Yx8GhT^r;;|Wk6O=dQGXTpRaNujjaJ0k$H<gXjtyU|2un+gB$qeovy?(K)2eaCM)8EOvi)-|0B9rx*2BSSw|"
+        "y*gIQ(AQDVrjVg%@8-EG^_2KeX_TR8@A&WJlUat29rel3@EzPcE0$(vu;pK!v13G<%CviDmjfHgBT0s$y|cv8ku$E;?VWADYN#KH"
+        "G8ElA+w^@XHHRQW-S_UIl&=&rRJeBz0Q{Dgp?&u5(l!b`bZkQqG|QTT+&f3S<3P#K*8wm#L^P>osA3*{Y_5w8MSJItgJm)v+UMSZ"
+        "R){hb?A^9Uzf~0euz0Al0mt^;@8Q_i8_-DE8;o^&9J7@$yM7UH9?bKr^c&8KtMoe=YS&_PQNr8d`h~+ie7{b=o9HV2ZkJc-Hz?C<"
+        "^cxK4u&aRg)_FOZ6_IbgwMvn9Y*S#dcWisdwzzlRvF#n((%yN;ws&mHd*>b7-mxvcciyq>9owR;@s4fp*yisY_gpI1&O5ffV>|MW"
+        "?Sb~rJGLcx<Q?1Iu?^<y9owLJ$2Mr*u?^c_%dvfr9oy5hV>|ryj_svT%y6g%FSaq2iA59h2%d&<xT1*P0iB~#k?;DV^mR$V)H3A;"
+        "Jg{Lu;Q0uF=5zo+t$C<J36Ovh?XHpGKmnM8HH8uFPLbgNKoQR_h-kMzdvVb?77xTeEnnI^p{vNZzirFjK)%@VkR4<DZ@7-Hm90Ze"
+        "BNGf(Jgl?<9c-3(Wdk}m@7;g|0xIp!5Cj4`1<()#0+^<2NCE-eyU+Il2?TKOj=%uyO&|b!H=QBlW<A*6Rc8VGPEUoo6r4Z%fd~Yd"
+        "=s-yOIKLEocPAOA<sf_4IDejpAP^uTUL$*oA!I1&sC?}&LuuzYOquH_Lo>yj^wC#_svOuVhqu$-ZOv=sws+XBNqWi9Oym4n_aP9#"
+        "y%TkyxDSB<zIU=+x_7pB)O&aNS$6^f+&d~&;n-1z!o4GF(mgxM(9B5S&fWCTg_-Q~>Y|4tSyM9phAl%6ob%*BAjnt_d_)A`$<U0q"
+        "=b1Hu06Ez;Us$Jk&AHB>wWSO_uw}u*iiDL}IDhsw1Om8sCfs9TLm+^AXHMaIVy_!ci*Il~N5vZ-WIyz9UuIVJoki2h(5#PRTPH&o"
+        "+g`rhd*0qTIO9jx*gKsJMSFM0b3W&3Vz%Wo4GE7ak7yZ+?p@*bPEy~Yy|W6|*%@qk=ggUlg;ozmdv~(a_)a<*nwdy=nx-WXpuMxz"
+        "esgs&0KRwDfmSbS8QL%FX&k9!D86?N=GMDHhW6RJ%a|1;EadR+j|1M*d*_CCK!Rl_Lk|OBY?O06TMdEhqE!DYY43XAU^@v9?RD?K"
+        "GK(@4?A^RyP}uVA3ISC_Yn{(y?0kMWJD;b&()k?c`*Y-_m@@pL=sAOz3$Xd&Toz8QK%iJ#3G}_|Atdl2!+md7YJ;EA@m8gDxignU"
+        "AW_jAQ*k%SP*toieIk_Bz!Bho5gs(DZ&znWA}gD)?;er%yGy+y{4djFTh7mpV_)aWw*nRw-3-|A?g|mEBIrI;gextZhZ=KY1q}3("
+        "p_AG0dpD$$|HB3t=&^T$Ir$;OZ%`*cbd2WX0iFDC@1T*^+sXd{9iz|y>FMNu5}cJELn*b$A(dlYrk9hy5JCRDcZ93Fcb}pG*++(c"
+        "$PSv#5Kew7GPG}mtGsswWt?XH_pXx<kNuteDuQF!SB9#b%vnzv`lJN;dph|Ob%e)TFBw{>9W*3a!D;WLT4{Zp{2#gqk7VmCL!a~x"
+        "nx(UoKQTmjEL>%1VT$nBILgqSDZ(Rm1c*M&XZ7HshdzoKE)0LemZ7|eX$L2N!O{aWdp)$^?RjCXhrTmG{x?e*`p9+A#FjGDBHI1K"
+        "N`@AE2TiiIk)g$k5ArW<ocwU_jM?=Te4-StD{G2SMr0Yi3{A?xBV4%{nWpJvXwk>{tdpVd{rs(K*50{<RnM-lcUl>W_U@Azp`5>&"
+        "WoW_8lAx4F3K{zDs84<vzI(LDl7RPSrI(?|fn^o=v(!g#qP?>V-dbphQiX{q$H28o8TzgvIU0|KCNdO9l3L@%d!-C@-@A)au5|L_"
+        "d*@&ljTJJq&)%KevqBGjH<BE!aKJUacW!tG8I4Rkjx7%z<-jfm!F4}m8CtA**l?sgs%2=Odk0l#QHFxO8}|#`I+nfniq*OZ<;icA"
+        "di(29U8wf+>%X}ME7x_U#{>%{s~_>5i(?cR_G|SaSy{7n5>3(hw>|<0JBSO_Z#sZqrBZ>z3?W+<7fu<AF9k|{VVj;rSc}boYoTNM"
+        "mc3G30LAcLQVh2CiY9ub&)=7X5tm*Z6Qwf>|8;kjcOZ>?W$C|r^QpH<!(mXSm`}Z}*t_9~2|o2UwRb-CHgYQY)Z4(R<Wq0^)Y}Tj"
+        "gipPVOdX$kTLGZ@)Z0Gwwn85H)Z0GwHZ6~Q>TPxwET4Lt-aD6YZJ&DEC_{bfZEEj)>TUM`HlKPMHlKPMG@p7Kw!c>D?FZ!8p5IoE"
+        "?fKpBQByigqv31MJ~oD6P_Bm@D|Q^LhN>OB{E)!?LEHvu4Gx44LA0OO|Nqkv3xS2>MUW1_(x}tgb&6IELiCPWt64j+pO2pD5gJLc"
+        "62Y%z7{|{!Jp^9U!yrQAvZja$_SPeUAD-itprF+Zz5aLbq6Bp5#xM6f93b_5E!bB%6wZUxT<?^vlS67GHZX8;dJGm357YjR2TNmJ"
+        "pN}jl%W2@l_q~&!1kSya-#humz4K0f@8p;E&O7<NlV9FD@8tJRe(AmQPJZv?7iEoi@_Q#gfA6^GQn_~C$?u)~k$3VBw0GXgFUceC"
+        "<o8Z~3U~HSe(&T*%{%#F`)fJ*r~mlpzh?7qceBaOALE-p!rPnK{3iTOy!<SQ2#dZt{o~>_@28dVay=1q{pkIxqx@IQl~Mdiy1=Xc"
+        "ziPk6$##HWwO->v=4!phV6Jm0;4SZuB{Kx&j_sMd#$v9(3owsNDAZ65&h>Ms!m2iNt<bw65Pr+KR_cJ0<<mz4JR>G37wgr2buG+Q"
+        "@?QOvx#B!O`OlgwdJpE;`B_}3^zs|%{#<9S#Y)!hhst$rHCJ?hu9L@zn(NmYQ+sU&5l!@5(fzr?8mo%amO775|G6r>DCqwDw7H_f"
+        "QFlLUuJXGuWK(+thVt@LO1REDwz!%Fr}cg~<;b+0D={B9rXlBg((2MEXEy_>bwFLIy|XPe%G?K&2gNpb?I3d%Q;wODb(V@~^cJO8"
+        "SmTUwCx>5S$V5=;W`nOWtB`Rr^cv?ZFXzxYa>hfY2iB2`5zC`Hu#Wt~MBs<jk(qNHSVxA4^<1B~d^jCBcEh;(>d0@7P|xuf%(btM"
+        ">^j$8I&zO<+kJH89(m#2b!6mq+%i1a$3b*t>pbd1=*Xx5G0(#{fR2ptcP0z4zmDwU%@k{a{hYZX{p0p$%@x1#E;zDVvF5lZj;!&x"
+        "b8RvQ92w2kW{-N|$c}UEi6bvv=Zfx+xpvC=pM?C@ozZLQYs#JH>QWzN-hZwxe#P7VbG5cH+cidP6KhsU?zqON4u%6W#BGhiT&FJ4"
+        "8w=-i{PP=NLxh)<2jTRl;zHcrOwV+PU&e*V(@wr@(%8MDMSMI2l>HKH*NJUk$u`upSuGfealvAt20_HJJ=PX_cQ`i630p3JF0(_v"
+        "b1?=~HvD4Y$QTI7nrOL-S27Dmy9@hzTh8b|IsMSuA>H4N<@1|o#5^V%tg_j=i8}j7mZ9KJN!OR;u=#Aky(<MA<S5>S0|(n`_fKTb"
+        "iR;0S@;<-eA~uu>>t^#-CSNi~|Av))Gnt(5Ve5$;3FoeN76N?#4}Ebhe2&ZB{>G)-IbrF_^Zvf8-JpAc{Uifq@Ib8ceecync*Fo)"
+        "CS0el|LQFUs9^=Ci)%~vZfRd8xbChE;A2O=zuE8C-^;Lf7uliV->kpc?5}@bvH@!4sqgOq;%YJI+lKAYU^_s6tG*E?YJ6;fj3t6D"
+        "wCO)U)Zci39Xa*n!ix<??6^cJX>rma?#SzCH0T>F;8>r-p6LN}EWyt>fSks~i>>eRG1ck3mU>|NwV&a=POhHMAy=0vP8Uw(QEv}2"
+        "vqz?_z9-sfc_`b`rZMJ_Qz&MFT*}zNcCCS`(ri%*Yb474lE8nq)cH;y<#>&gd~T1S0;k$d;yT(liHg?|g{hFGCzq~qIHBS^#EDaP"
+        "+M4IKW1P=Tcz{*ya85bUoa^s+V9VcPADHGDM46==+s#z_8APraNdA<x@~nIaqGEtDj)xlK8w!68dq#H(>zFrk`!gP*Kafr4OFr~B"
+        "8U?(!cXrIUDBea}lPs~;OMv{`55x8C<l~QFcDnT^-u^!Qfwj+D-P1j*aS;Z=sw$_PK6Y=kyIzd(qo%pzs|2nd^ubjmpHI2(s~>*7"
+        "xraK2uy~AqYHR&{vw!^aUk?x8!f<*Mo@;kc9tNx3y+H(l*lO|9SEEwHKTI<_LAJzBw5`=4jIlyyn>Kv?fx`Cft`l~O**YhXgU&kL"
+        "`6CK!vK0dbFosL(TblJr?-{q3&@B+&H@p{)NeC(;*PF9Z;lFkLHt4ZOwt$BJ)_?22_22&8zMV0GG!w<Qwj?S4?a%+#-v$4z|JHx&"
+        "zrEhKb7l}q_0Ln}?ZH38w?hD!^D6?FdM^Y%bbQZ-P_Jli0Xn@nFs<vh$4IyZ(1iiblLauCzG1e4h4&|i?3mC7)Qb@ay0Y<frrLbS"
+        "?D3XXOcXfY(9+}9fo+4<>+}Go2QWQ==@l^lt^d}4>%a8?rUx+nUGU%fZ~eFaTMuCRZwCZ0|BV66=^4NbuLEGFKw+~Cu`3WDXOkLG"
+        "3TLq>KKfx7@&Qn_LJ>y60Dxe@>;R?MGy#~ffO!STK_;n|!3x7)W;GxTnWP#<B?K+u+5jf0iV1ogtEkbCNqSF?w`@R_9YLAjym>~Y"
+        "2O&KO=|M>Ut^d}4>%a9Nr2p1~kp5f$t^d}4>p@8W?QaD_{^$BE$|6ryd3L@Ow}l3@tV6-6c>B!-<Wl9n=vaAD2za6gxNyFHoOd7Q"
+        "oeBuXUW{`fq5p;$oCFI~$Z3_UE;5zlq|di_%%#<s`>d6Ak3bl|0&q?*`F+cR$fxr8egSQDVep!BSLAWzn+GsGfaw8D|E>Slf9t>X"
+        "0H*)e1DO6>|E>Slf9nBE|LyMrU~c~L&wt&|zfHpXn?ELJ1oJ-RBbc#pa%fcOh%2?x6@$gZm2`&M7-!^G&=QxZ!jU4|yO3~FMKeTH"
+        "N>xJ41jkOR=#D$a@1cZ{>I9s5$@snKDQVG%egDcwze!5~s-mLAa;gmZzwv+L|Hl7~{~P}|{%`!>_`kW{-)Jn5|8^G0)Y<@%lxJ*^"
+        "Z1jrrh%9Ry3ndVUa?cquFvv{z*ifNLg5dZrG7-@d8y}QOgnoxCodbVIQOW`S&WSAL0pr3Ho4f$V#z5seew+3N+_<WwS}O(A?f=IA"
+        "jsF|}H~w$@-}t}rf8+n==ll)V0Qnzqf!v=nNsK4`Gf5<XoMIxxJ|Rm$U+nKmC={!!8TCT=jc)mWTQ$lmLFrz{u(+p8a)y@DIR)-B"
+        "n5*EvfmTT4u7Iu_n6@|nAT1|Yi>qD7b$42Xw6<|q)V8*+@>bI)2-``rYOH|6U&fs>wCkm7@EjTc*y={xK@NT#ejI)rejI)rejI)r"
+        "ejI)rejI)rKXV*ROMEL>;^Em6ck~4=Q>EEmg;awH#?koV8<Q=*h9ubf@8Z0hwLm@ue#4sFmxrpbVjTK=CMa%JYGNZY$t(XHCQBkh"
+        "Wsba;^Xj*d%ku<hNrXP@#u19+h#_(@7fgS-pU!HRtVb%G`FQSpPWUY2<T92C@~h@33<!S^<<Z}_!7$Xdmvnv{ejI)rejI)rejI)r"
+        "ejI)rejI)r*6siPud&?!d;4X%hY#Pv$>iql=8y39=F5Z+@2+1>7SAnV=HUsVb?VT+U@V*3X)@2R+5g#{|1iI5|7Q>X{dN1V2-NHA"
+        "_Fu)z7FX?mG%7cC{jXH#GgSS;gQ3bT>R)><j_Yi+C4NCqJ>mC%!GE$*Dcy<h!}VVQKE;Rd12fGU+4nC+30HaX2JJsW1xGF<{^PLy"
+        "ONC@^2ku`Cc9<*nz`cJQ2%(4|@6*3XtICG%UjSjr==NUyW3YMjWAOf?Vr7WD@7aI)foN^{(EXzVMN~1RzWpaixhe<mKf-}Y!}kyJ"
+        "hDr{LA^MMwTE(`1|Hwg69*6HAUgGcy{i8c}h5nIq=XUu1bFu#v1mwNotQ>UynV8@Iop`4?O>gupMPq8<{v+SNUPSAR*`d$p{ZBam"
+        "1NXnaa{oyFd>_95!|1y5ZG2t%UugC8{_ij9|8wy75$mAo(EZ0ajA3y71nKCe9PkePzav9(aQzV7-Rbc9^VnqL^|N0PC|M3|zbrI4"
+        "_y_1eeP`J4?)~Q{9FkKE+CL*9L7)C{wlu}wI`=PRY#WWX>45l2F6PhEg+tl)|Cq=y;%ONCDtk({1kP73+4!4Ef38B56sp(EfPwbI"
+        "Kg}8D`t%<#u=F1N?>OOHuKhpEc!ir?`k&8_Y*&VD|Fa-kUcrA6R>hCUzekaf)`4|bIk4`(J=BGK9&R4yH?!$abztS|*I-mm=SKm2"
+        "EY26((qRQb<^2y?i7IS56OBA@piAq=5-@0iFstUAzG%QpmeL0OJsL&SYHUKgw-{SJpRoESNg_fnZ|%XS7Pyq0AKJ%B*0>}iEX{xd"
+        "Kewzveu<l1i3ZI+9BseObP@UX+qYelz3Jrkedoli&Q9WZE`{^i7&C87Cn5v5$^{_zaJ27EVA!L3xEXM+Ra*`?*GkDu2b`<cA?h$!"
+        "YgUSWuGN_H;pVC_?wsa&R>}vQ>qwar+i9*=?;T^VHnKoHS613?_FN|m)E`e4sOMS;K*pxmTm#85z3esDNX+xGP5aC>5^{lXWPxt3"
+        "k>u#_H`lNBDMdrM&-MI9+Q<UKT&s4nkOii>Mj{DdGV3+hDr$-?3m9`1K}4M_V9ZqlwAHeJGuJcFwl$J8*mIRZ%}uYlMod}2oNL6C"
+        "1>CtZWdVDxELmVNSB@;Om@7vX*v!=|3+(1v;Rae+U^!QlEU=xcUKUu-RnlLOEU=!dUKZHTRVNEv<{DLbv}jr2GFOc(aGI+u3(8(|"
+        "RmlR^xr)xXS{As@m5>E_pShB<pvPP(S<q*$k}S9bxRJwLC0Q`<HCMGQ<1|-U7WA8|EDQS0Rh9+4=32Ga0p}{of}V4gWI@llO0uBe"
+        "T&uPpaITUp=s8zO7WAB}h?)1DE0zVl=ZbBF-g7<ow+eM6g<cIrRNYq&sp+@r?d)cJPK6TQ-OT1cIid;(e4#?%z;nkBfYyueIR5ae"
+        "{R?F!g5ez=8?3Ml-v9Fby8Yw&ephe^p(MIj=zjrOI9KQ&MH&UyxWfP(3bt4HfnsNo9M-o#N6XT<XyyK69Hm3agU4h=IWWShCF_Jz"
+        "=w1yGtq;!fUyeAW+iHEizU`uNn>DfMyJk?Z*C>5;qI7ZPZs|xFV>mi7;~F|i%ju<JawXGLdz{%C7MF<aT>NhNoKSPrvjLxEqp!SE"
+        "pRLWiP5&|xrZkmwdXn}@8BHu2aN(HsK9(%Uv&fd6anG@M78szfDPkHofeA|h&;o<blIS2t;hI1tOC4S~6ME-FX)nVC5J;H&n8Se9"
+        "3zC&G`VfzO<@7ROPzTALk`sMxYA*`?8AqLtT;EI-c?Fygg&1+?*h(@w8SP2gN4KT+7DtoyshCbhwiu#yocFfAm-yfH(}#$tu@i^!"
+        "&(!<nwI4Fgj2u<HTsaalsrH6+9tqs;3v}$oh&Ke*&U)HOSY}H1wJ*w%iDQ+2uTT3F&n5o7-k6WLkAtp_6zwtW+T?%cwZUUOifhx?"
+        "hLpxSK;$R{c*T9p2YLe~c~k3XO1;FP$r%u!^C~F&9UDTfzam_9IC*eK;GU=9_O-Ubj)SfJJEeOgy<t1leQhI;Uq-{6dqqFFDdP)M"
+        "lp)pqsL<(u3?XZvu7R_e9Nc7Dq0Fj-qn+LKgjXB{qn?*NX<M>qh4oE8M!oC?fsnD)V;`1yv*2(KzZ>icyZ&>*p?Wm#I}1yqu?_m%"
+        "N%+c&WiLMq7>g>?mgrC8L^!621wNEWgotnw6&8IP-qD00Tm+*Hk={QiGufH^4+%}^2!hdWl0=^u%zLW<9?MVLyJykHyf^MRcIkY|"
+        "#(eVKH6nE3J$bXkiml~enlQT#j5x09ZP?9C5w!E7m#(`=BE=cp?(d^vd~A!eZ+}|{Z$-uPa6X=X4Ui$mzZDrme{nV_96uVAXdpOo"
+        "%Jq<)3l4?TX~@n6f%q^Rlt6-%4NE~}r(lj;g$3&&+6_!gf#6ekJMc+=LBQG2grKXEA;7w9mqT~{)TN=`#F1}*q2|dD_^tC~2x2ci"
+        "8N&QVdoqL)Fz{rE<|27AgeOC=0BcW%(40+AhS0o2o(zGTCqpoC08fTcztx@$p*c66455-Yo(!Ru2c8U}ysw@Np^`P84574VJsF}s"
+        "kDd%c=`)@T;mHu)vU)Ov`EBrIh-)@LhL~V7#Pm#tnEgIvh&+w!f1;tYEOaTtFQ;`iXy+nWK5Ufy@k9vmp$^xQc4(~z>HiTtw6i$`"
+        "*316RbND!%_Y-E)=-vO0c&MNe)r&v_&SD7^N|;Gw<Gd{Dv^Ve$>>Y1do2h}SAN`n=4S``D`Sz!6NgS=ax{7%|6d5Is^Ib?P4`s3F"
+        "+4obTcW}=GXTlCDZ=h+X`|I_6nS*6^lqXxKf51-}A16+P0_Fscp`+q|U^sgzLc!Vi3ct?b`OF6+)#Oe;jB8Gv@9k$IDU8PhHHMR="
+        "K@_SDhV)rZKd9^fb0zg{e1pY(Qaam30!lFFyg<3QMhYjJ07fu@0OBl==QCr@k)dDZ22j$LP$2X#>z&JfdL2F!f%ZJQl<PoF2(fne"
+        "yAfbAwv&=<fyaJw(}#{qfbDGvP#FU(K&L7gcY@Kqg0O+>oxA&P(HeA4TDT`+4@>Wps`-nF9KGzkkT@Uf!JJrlZ&Tvm_0xw4XWmkD"
+        "(z`dR-tv$RI0^hk#Gt-e;t~n8*VbR|Vc%Vx%-D(2HxNK_+z#s0#-Mi=4eZo@^bUWuG4N+z8$8x!WT**lEpWuK4ofiFjkIKld^mYi"
+        ">u9=q^|tLpmh0pGPTTg_$Z{Roe&vAj;IhuoBJpLQeXVV`<zQ=%?5i!MH;j)1-Pe|QiFE|`gQ@68s1@ui%2o;zwW(IRgRFs_Y)rM%"
+        "Iilu6ImSHfO+v=F3C3ad<ZXL<R#;zwY+-FT2sXTgAq&`tCB~d1XKX;&!Gg2Xrhl=Nz{a@mJS>UCHWcSh#8-HMviv&eg^1rwOjtrJ"
+        "IYxCh{9eYjqRgUi(>uDSSOR0hL7OHk%5iV<IqX$IN|WFmlviQidj;?q-r3$gi^eROyL`V^09S)WTX$Ys5%w2}Rp*7Z-yx2epme!&"
+        "B+6wZQAP+_?B_2z7H_J6%Xu+S5cx4bpY@BcuE^qJ{(A%*cVvYJOjdX}lNG|>fUFS5#o=qw4x(U6E)KJPmI4ISFSX6FV$;tM5d~mZ"
+        "-#zIMd^{44k4wGxd_MqVUBT2UPeim;Kd_8$>;CJ07M2<1@SF9Ds#>84o>;0E-;WHjl8ihQVcj>|$C)r7MwLA!WjPN<`@6`uKYuIo"
+        "r!KS2XF6C3p!_o<qsq&}q%VQ&OUCQP!Pd3bJ#jyktjDYMUC&`{xhA$w`I5gz`N2iEWr8=$4@bqE!}L|X9l@85Fgc(3RjFFInF#<P"
+        "8PMgITok`MZm8@LhH_Q1!4jw=aN}5JOY8cV^nt(#R!P}4)Xs3xC@wjKIVr=2!U-mV1?)FYJPYLcOjgbge-UW7HGqb;4u7G48N9?q"
+        "*OM(kC7g*ucOG3zt!bluFd4>)V7XM2A=az@`rJ}UhDb(3fWAoo2V^zm%yoARD+m=B)O3&V$7_&Ld(tOz@{x>yE69k!zD}Cvd^`>3"
+        "WI}uUo%naXG$Q;C<&rE2`Z*^PV(o`?kjYMg<50HU*@h88^<g8aB~l1-a{TDoz2sOO*6Cb`V;$BZpL>VA8Vvn2uT3FFtmC!m>yVGM"
+        "*$Mg*fU=R6tnfLYyt(LTgJy~;CAt3I->KRj8$zxh1|kHC^5C-0n0&PyZeQypJ;Sa2n9{vJ6pr*>_q8KN?nlF%d%7Qd?p=e9aK;Qs"
+        "a>hD+HiWE!y2i7dHOWD@DOF>{*#q44gu_UkT|!H)cCcrK^~Gced%FSK@KR<BDf6@4amUV5!U>v;ock98KF8*Lw}=`)idhp__zE*a"
+        "<3_+(#@|`C^jT(@u!Q{00v~#jajhb;=-c#;zEEEL`7tB(Br*cs6wLLa3?f>cgXSvC`z3IX@@M#@RJbndjaw|XE}gSUF>zu|hY0Qb"
+        "Jx8kuw28gnA!lY+2q%t2wuC0K2tkFtblqi^C<7wb$uN$XWqLX57hhfyZHDvl^lB}cVEQ|jfr#TMS8c!|?zw`sfkUOAPA?Zf9J}|v"
+        "R|<HbfV-x;f`U%~Qjx;ssH~op3NKbT+*s2ZfLj2kdjna5u^}jXzv0@TK30N4RSp>~C$SiTW5XT9t(lk)gs`ufZR5MXf>iw$<w@k*"
+        "pS<}p5co{{G7!XG`Z5son)@;k^qV1^MPCMj0z7>g2o=!m%Ru-t5W2JJ%Rp$}AzuapH(v%qBNTiY2({Adi5ARr<I6y(<c%)_p_T`}"
+        "421H&`Z5qIS>ww<DD7Ea2BJNWz6=DV&-gMBz6?aStiB9{`EBrJAg<X!8Hn&7|NPg(!?)?|=Hcd#hliWVwEEvLTnHN<Wi07Ue4O(|"
+        "z=~fi0>)khy!J)mGuG&KEtcHrdS%A^w#B(2LC}OBzsOiId>ggc_6w<ZLVR0|yT2%O)&*niFKT_)IQAE<uB;#Xi$TxUjs3-}qbtY$"
+        "!qV^QvA-~F18VFqe7iy#`-_!Lg2(=1Y0tp12lloQ8N|)EqvVY8Ha3{(H?_3imVIo$mmUGVFYJJ7^S3rWG@2aC8$0}VIx4NkE}TiW"
+        "jHK@oPe!Wl;DRaN759iWcJ&=Jk6m|vO=CCQeeKxIas!QhX(^wvoB=ukQ(nQbw>kk|*2z_lY~&;!dx2~phTQ1JUfb}EFP0~B>alnB"
+        "{~34S%B%C(A$IUJb_-dz{19*lJH>ez{T=GbGejB=$7j;;?e9}Aji+R{hWF|UhDZzkSeAZ38G&*YTl_@}Dv{$+WCYqC#$raG?qc!4"
+        "Omjw{-HEt}bH<~^&Ds;zKnx(|<U{pc&!GZi_Ux#8hm1hu1s5cB%Lt?aIgQFByBWZlJ{f_G1m&I?fkr+f5PD;l5>b=&cg&1HM>z^<"
+        "W^|@;mGqQK2Rm3sAiBKQP#J+*N91fY(m4&CG6Ho<)K*AoJ48mH&f!s=fuS=3Ww@_=(2PKxqog4z?G;2omyAGd`s{9;1$}m0G6GR="
+        "9$tgiP;kfy)RG`3DtXmL%-d%K>IfB>4EaHv5BrQjZ4`DWI3)+k2=t~J3q{zo%?Q*vm8EqYAR|x<x=`}8Z$_ZbsY-&@P<WmkNHqs7"
+        "A+Kjfp!SR@2rT_F0=4h3Dzdy!MxgE;R=ov%G6Hq)@Wy<Xt%+(aAx9%mor!9lGeP5AcPFZyID~80wQ1)V@MLuJ_Odbpb#vC2_;bq$"
+        "lzu?4hV!mB`^d=%l(64OmyAHI%rKI<9Wnwf7VH23hm1gNsSq>nKxG7yOI4xv$|XKT4jF;EcaxJ1$2KF774Bf05eVQ897nApBM{mT"
+        "xCT3$fE3$|K#vP6(xx&aP(}ubv^WT>WDh?hP>%Ik9x2f-BT#o2SO}_RMxcCUWkXnI1Ztf_C5Lokoe{`}r0kLrNVs===Or^E(1=&o"
+        "wns*w?Vmm)&~(6zK#IWKfieP#C9Z9nIU`W!-nls=kQ@NZ#&H>UufrYY(eN38FzzsPMj#1y7&0SJN@MK<Wdu^<4(H$Kn-S>E3Inlq"
+        "iXE-+8_U+>4iB>{487KGX7eJtLd()v?T`Dd8*tptE645ax7*px^qlPJVRrpwPtTn{vwsz+s1OMGJ%hXi0{g6I_S_WfF{hrTebcud"
+        "1Sg$cJH%WCa(H;^dw+51+`h?KP@;%n)?1n_mjlifRQ?)du3viDp)OfhPG^5Y8TB`7i)2(b`(>RSw(^lT-&Sv3+$$is6nu<%p8(xA"
+        "0UJpB1QRC$R^;dD=jrF^=jrF^=jrF^=jrF^=jrG9cbn&F$a#v1U=|BDADA%eBp#DJm#?$uB|rST9mfl{wX{Y_X~#zc?M3G1A>XML"
+        "=7o|5Z80{_<QXW|tl_DJmOj6xQ5-?nL^#=s;)LMwvd4yeX<&WcM@C+Y)E-rd*9CtvCz+%W2#PjN@Gl$jF2QGvxdV9JD&Ll2TzdcW"
+        "tK|FAtygK_#OGt#Cq)B*9RDwolz2QA;u+$&D4B5>RHER~JQy|D{9#5qzZ7@SCHaWvK0n$fVAjiq<<g?7z<8JQf?KoYfrY;ooEV;x"
+        "pTxD;>nB)Rg2MUwbwuvRVeA-CxQO%C?->SV@f2Ob!>DYX5A5H+zz3$sf{}l06Zh!r#VHntY^l)KzK1VMh!HCLB(W9xa!sm3^cAe4"
+        "q52B?C5J?Ph5h_FsIQ*Yf?;gn_%vK!hrWK&*G{f{M!x+in)iWujKI&+&(qJ-&(qJ-&(qJ-&(qJ-&(qJ-*t`$S`@lGB=6zs{=6zt^"
+        "2j+cX-Umj^_b=-M`w#MgP0v2C*-!R?#Z^3A{ZHQl-dINTi>DD{xW4X%dpseP@6ff7;4_^&aqn`1P}2M$lJpNN--{5FoG$DVQ^UT1"
+        "yefal{hus~H$mA4HxR_YvCj$cRc(a{bun;EpWm|eRn3p7d?${rU*i<{_8Ye4ThRHfZ0}wMzP<Ohv!AD*r=O>vr=O>vr=O>vr=O>v"
+        "r=RCvb)F~(cJFzLex+rf0^U+STkBlo5I>UqXJeI5zzmWV(i**Lv3IsV=i+O@`H!sf3%w(}_X3!%9C0qv--U2E3vM>f0iF_bA6a0^"
+        "2=_fw<K>U-puhpgT;B_5pEzHs5_9AnUZKb~`fp>Ce@27hjl^7{c-=<fEg!?H+D5mYhP(CoA@~)<nFz(et9_+&-N#ZcMJgW@QAcMh"
+        "7M4z*xCN_eKhwA>q<isOm1GXgdkb9J)b9Cf+o!JzQ?<$GX*xqyohNQztQeOhVfg5R5&O|d6h*>YU%6#0NgNl4fcAfF9Q`cI$0XXf"
+        "`Ne{0z4)1kE688C`E{{dRsKiC`<Umcl^?J6RR=^qzq%&boXxxG>WoQsbilb{zIUZkmLmDX@)03@OvuH4u=R%t@+wv7ZY<7+AWPAm"
+        "U$EbktISif1wey5l{ruE>+*Wbe!acLo8FxB^EW|2uIc!qk6Kw6xmu1K^EmSDcWpj)%iHySo_?Nwo_?Nwo_?Nwo_?Nwo_?Nwp2p^5"
+        "w|wjtXU%-<7NhytEg!q(W4C<l7BSzyZ0y#5|MAa%O>e)AXOo*h?#^DY>G<bIZz*<hlfi6;QU6M8&vuLf>zA>21+lX>vSmwP7cGTT"
+        "rP6lZgH(ya^WF?F#uRI3L)<V_9d!SFfF9xN9t=}$5VB@$qTF<ChrBGl{bgDTyl)R~cccJOY?la9q-8op&|+Ee*~da4wfoM>+v~Jp"
+        ")6%^ojkUcOsJeJyCmWR&(b3yw6<Lck)A3P-M)0c5Q{RbEtXgKAaxu~Tq{`bnm#F7={XV$t6WSl@ydZW7%ks?4Rykhp%<}%^jB{b!"
+        "r<8a8ij|3d2+b1S`lEYhV5_XTtl>xYKB4{5uM^s*QoT>f%HrM?A;lV&tz$T!mDM@EWgwrN`|&QLVPgBVIUh0tM$I0f3_N**tHV;v"
+        "IlKEN?~{~CA%PZs;PxKeYS5aw#XGZ9qc-`<66vD%3F(Mq&iOUVF|beZk$2C`_qnZ19=q*N(@-_!AB5dCcc@ZM?9<Y9e@Hnom%JrT"
+        "89<Oct8^=*tCfy6G1{jkItz1WTMoVt`|k^*yka%vAzHXc4k`DEIInItHpN~qdtw$6%4_GTh|KSVLv)gHpZe}kC)cf6zIOL%v`vTU"
+        "GjjHF`96K0zE9t$@6-3``}BSOc758n)&u&#fBf@b53_I6hw07i=8y39W-`AC?}l)IilHg?t?a8<zV&q^CZj$^v7dvV!?or>vtWYJ"
+        "ejM`+KuyT?IyM5l<`D2(hdGE8lOL{g=nVW#k2y4ef7)XXHNcXSb9k6{se9{x)>*Qp!uC7xkad=dwM2UgtnWkqE_88geIIg>Bw~Lb"
+        "1X9SY!<~K|$qqKVJB<Lj3k}rrPG>SmY$=!WkqB1W%B5G)NntCO5coWDk*&E%5w@L!1mfDuR?$Id{XU35wCx<?zH^8rCynhKBr3S="
+        "93+6>b`HqtP}-j*Ogr5;yweE0{b7Hnk%OuRX>I0!f!<nAwwObX)5UCUW$Q)&nscl7A&$g%s&$|+=CFL0(gcl8-^n*_RAjicb44Ew"
+        "sT4Nf`@Pes6tBIm0mkp9YZSfor9gHDTFfDQm=(@CUl5e**hOz;q`~p_gP((+!+>+>-8u^W_5vVHrjwiS=8y313?PlK$)Jy;O_r23"
+        "xU?-EBO8Wcv7ur?X7eM9MUm?Al?7W<A4{V!4*1Fj$IujXg@el@2);iNfWvN*M7wY#<@-y`->=Yvkt8TSkMejULvl{U=?MAhHacZX"
+        "6`KPYi~{QmF(w~oETsyKA>(@V6PlS3FW8JUsNB=cp@46o+>#2jkvS0(j1?IFXk^>G6M_;lfsG8h1;K`dV1kiVain5AOG)A8-Pv}%"
+        "KKP8i?1KV;z`Q1gIV@?$6#E>!Q1PnR0M<QXC<+Cg*#+wnOPA`nNX{Jc4^3PpV-ARUE#(q4&H>9jB2vgOha)sl!#h0?LCoQZ*t<Ur"
+        "cSN28VmGPSSGqYIh&XJUIpnN!rkMkHbHgJC5DL_Ca5`fFLWL5j(M2w(=K$B><T8hJ!HZRA&4JF*YutyG4wUDdB~kYZXl63=EU9%i"
+        "-F=|)%LY;|Q|+BzlE$;mou>6T6yax*OM<RN?5k0>(z$!PXeZ9ST@dTp%4pvEK;`^x?g;yhllrKExRr&WCe%8-L>euu3^knZ`?3zU"
+        "(KKRC6stLi;QCp|U055N2f^86Z7>5J{H!0@&H>7+&}|N#tZ<wIkhy!OIRIN`968P5#5haKm!SMKJ8HJ7`*6`u1JV{qCH<Y4!>c;_"
+        "H(ScUt~3Yuw$0}S7)M@w5YaZ$97GVh1)IfO4oca&wzSKMeK?Ly-$UJzI!lJ!?BRs*#%c1W?|(4gxFkLjI6-6?rBZxm$@UVJ8$_Rd"
+        "YueHnRtsYN@Ae=6{MTgmZ5rO+j4vS8-B2Lb5qd2wLQJ=Aw0bIZnB|Rhquj@0AsY5~Tk)Zbc#l)*6cPcyvni$m!X!hRbO%ohw~!+6"
+        "omJd)XJoG;r|&G0>`V^(=7P6_6si6jw`Ce%WD2)X!eg=$1af&W+=1+cPWV$ju$pglZAHqy%vd}{PM;tq@lt$;?@yeEOtx6208wj0"
+        "jaCjIl{a39iUZsytdzh|u?&HFxlS2^;gl^Xtw`~be$XMu7cg9X?>`klZJxziX9)y|E#$({={-mmBPY4Oa(P=J@Eh0^(Q*spdvi!5"
+        "fyX%d{l<8a|0mWM&yGG?5Yc1IKeLfmHpqplVn*^cVT`6CL(~{!<~L}Jw9Gn%!K!$^tRuD8J8>A(`7t-`HJ07w{>0g9%mmzh=bcCB"
+        "&`<-3;uyjD>58m~V_d17f$A~FIruI9oyiuwyC96QSn=*F9%B-*?km)@g)wS?WCS8rV}$RZO7<_`r8{#p0^d(m5>03u5c)=v(03+V"
+        "s6pAZJ3pfANk4?MKR(~Bynsm$!&$c`^?GlNT1fRqbido2iM`?ae<CNRB2|<4QEi;J=@G!0*nB9yxs@HY@Z6@E#Lg=*qd%_KL^`*}"
+        "O?HX=IZWbWh;)0R<=z_Zch@uAX;AM8<z%!sK6PF&C3<I}++^1Im(FO5Hg}7vz4F))k=m2A;sOm2Nj$L)aUdiu@{j?BLg|tdEVRh0"
+        "&?(s#m2p9?mbJy%Z4`shMp14I_Mcj%&>QaFaQBA0H{8A9?hSWuxO>Ch8}8n4_lEml%5cBOhWqW=aK9heaF5$Ckx^+8C*x#zi%K-h"
+        "2*iT;y#I`Z^`9$K+@S%4n6Mvz@Q{67Xr@;i(%9A)VZi`Dx(nAnF5tUQgHekfm+m{-fLHzZ?%z`kh@<lH>%Nl!jpax4m=llRV^YVk"
+        "S|v31&9yDgis_dT7&DnTalV^LN}1m7_);<z2J3dM`9>R4d@_JrDm_;I?s($pze3)Y&ktt&@DK7%w0EtXT!7P3t=#7#Jsa-R*Tbd&"
+        "Qc+SZ8B|O#yNLkOXpjRXMFs#}%?eT;gvSL9jHXGn(J^1%d7%nog9?qsqg`l~HT5NOi#>fahmrjGjN+d=#xoGR<c%?Z{<>!&!zgZ!"
+        "rVKWk4EL%mn1xY%IdglKBtc`$dEekMk}_*ng{#KL^Ey&{ok^f!xk*iXjb(R87Lk$n8W|xIg>yn2BTS;NF{Z^a?nfMlhB!uW&&T{b"
+        "19a1JaHII=8tx$UO&FslS$Zlat%vX652bFt74OW_7$zGRA#rEMdPk#N9`XXxAYGz}F__n$pP6tTWBeY65A*Zg`pgm_dV*26CiQwh"
+        "8=VK|H)5{`yX5PChi$6%OuT4iMjZtp8}47@q@5`t2%-BRLBmL-^M9=k)~S~Cxm`Zjc{5EpQ5;)qfRBHM0dC)p`}sLuK#0q$7lk&)"
+        "^PMVA;a!a&rb}gfM4^t8Ok~r0Hpl%DhImdRPOC$xqir*g=ds2^GMQJ8I%$Zc1Y(aF1F>AyfU369T;%WcUZ^Vi)dIMry^w*bqDet|"
+        "qT@LKGU$pd^35CI-T?OoxHrJP0qzZOZ-9FP+#BHD0QUy?Z)$)~kO4lOpAGQ4!3^-PgFxM1UF>aqSu`;j%_3<ODN;yw6cgmd>=I8="
+        "2??=cS5Sh2qLd?{-3bBgMVAb4AyG~H*x*Z$YlK$S1mkt20twK6Z|R;fR;+*MltHN2Lcv4{OOOE@3Pq5_g=Q2q!b?!r8$lQ<<GS-t"
+        "(%6op;yF4-zWp?ytWq#5V~$JBmnfE1#%6<ovJVuv)4k>!-3y_hIvW$463W(c$<bryqG8BOsEzU(;4Jg!>k$T*5TG};0-OqSLe$Jy"
+        "NWgVZuLVKPETEA9%GtL}os%MYEBw7r0I=u{Nhr6Vd_UiJjnTT;@~D^!K#|R$szv$AKD?@G4xv(537-7jY2l7zJXg8_ppb5iRoKj1"
+        "z@vrNfUpP}nhfytDJgA?TMSt94e*rt4H_dYvsUFKh&JbSr1n~JRFns?G8D1bd;C6Zmz=#u#zde9>669?jVHBHEROMoLqV6v2o$m-"
+        "`_91JKfent+|dAs;gfibntVYxx6=r}gG&7nCo-$XxL6p&MAsk0oq5-@aI-i1&LCZ4f|JANAWxF8-Z*6A>+GNJ)?*SKfaoc|cWXk0"
+        "Qjo2BBVP2N6`{A}$lmGh^;Rb{GQl1KAt}dD@lCftjhw;YU-2%1a@!p1R4ek_F5=_v!oDtxr)$^-Ac5Nh_GVAc#`N@;d$Vg#OpV6O"
+        "g@x0#M*)%g!TE?#R2fPXmA%mTU4w+q=9MvcY+@BohHc(Ah*YD*f9UDm=wN;q#~f%8&I^Kvg|HZd8L2$sI9uWh0SBanUC2n`I|dHO"
+        "&sLHU&P@nshcW`=CR-S3`K_>Ojj86m7~(eDSfpTEq@DNB=tWu(ipz`<hrf_Ba<cLSV54elVF=`(RlMRfh?bFW=ey%$)qSkGk5zBp"
+        "I{R?2s`*&;Uo=J^tIh`{e5^X~!unWs7f`~-s@IR8k5!kx`76Y#Pyg}He}%Je<MFft7aq<T<{rks4qV96xHv0_kFnWH`1QA+Y0U5Y"
+        "IVnY2%ZC2E*kA;1wfkXym=zD9Tn=bKBl6{~&T!P$szu0jnrWynibqEGjcD91-|Y<*jz_bJ^Iw`M!Ndc`qY+<}&L!h-MP`9y$b1>p"
+        "pEZhl5<&@3|MOr~FI=8uqi{ulC9Q$K5ol6~F1A#AtJBw!f<g-u1`?hEh=@<SE)K+b*(e^f^h2OMX^?sY{p?7i>KDZ#92)>G;!Nq3"
+        "hzvh;dK$HOj@4jd;p9mbQFmSP$rl$x5qp$1-VTJek8W*#0VxvtvAw$(gt*SI9t`Vbt&I_g7*Yn=-zlIr`<#r}ECNslD05mPlOYT4"
+        "&8^!SnE=x+Ol)pOENg)7>#;6@938d!Zm54|3_v1@i(NRfD?3kmy~s7p&*6Q8G#OM{z6>z#k;<5hqd_|t<zk{?AXIw?ypZG2u+Pmu"
+        "W8_dODHhW@Z9JrjTUdz-WS!2BOZ8pr+kaUk`n$Hb^*25`u^23#EEqbVPWD?8j8mqpj9B328|z&*fUdgzLx#20E-cBC)pA2u$mSQG"
+        "dEm(>|Ls@rf$n@{9R1Gpj%wbkSiI{Nb6^2Xa_A#pZ$Rf%InBlf4Vf|{`+5sg=^a%&mQO7>$OHG!wo_x@LFWtYOzuLaCKxPL*p_Wr"
+        "NK@jw)Sr)z1v>v46RM_0I6hIC)%s52@X%GR0-tL;QV3x$_xJI6z0)+#cXRqY3l72U?(PhF9Wgtv0pDcuf~vJ;&=(7angGDPrv<Bj"
+        "xZcLnjzURrMkz>vbuESwN$er<tuTZT2Xc6SqQ*t`is%4UIm&RNkR>S*c0HSGoOp3@5J{c$VEbv%!5h%8tilKxuvW#AuUJTX=HFkT"
+        "bwFZRv6Lp?X5;&t`!kR@xxbmtuL2|%XLPv&U$~QANO9riVI1injyP7<Ej?(Aq|Jxk6Skziuqzj%g9&;G3I|^pA@D>NFx#(#cR~7J"
+        "MmSCtd?$i!qGt@y7U6@2b9B(2`TAjjzyYQPE0vGRV1P<Yf)r$a!pav*_74TXSSYGHN5u-Rr3HX+RDqRzCCElehDM?VgCRn3%Wfc*"
+        "jlq*H+(IN$$J_=_j^9C}^3L(Q+n@ZM&HU1z{9WRBULvDHt@;i~iJ3*kTqpx=a&Mq;C>uZ-g@2|NA09?-EFx&cT9qz_4v6W@?G9?!"
+        "G>#5as6=89@LF%Y17JpQWYFidW!@Z)^cx`=Kar5<W~^~+%z{?G%AW-G4RlJxEH)u!NarWkSMqzz2{odfL?#wvpnM<2{6I+0FvvS1"
+        "mr2DSW!>q#0d^h&yVBB+QvNb4ou;$}8EZYSypOEPW<%rqWWhib&iR(hlE|}Udm6dvUlrSJ-02!tRm{7Ja(2LB_wLv^$iR0Tu$5rZ"
+        "GJfyvOZJ@i8|3j|0CL$%5lUoe6k~{!?`bVMp2InJ6_1;j#wec;nuo77oM&H#^TX}8@$IBCoU1aA)4|I;rWq*hnA(1g5m9UJ0}|GA"
+        ">sYD%$nmk49w+-s1SsLot@W})Bi6nO0;+0Zzvsa4F6|F)9JwjGvcmM~a9&%aac(JO1qFEL5}DTuz?oZIUwWYy`=p&$Z)YH|ie<H="
+        "NFK%97N-ewub&oM+pwPYOzXh9x%NRSjNW-wk~e194$YEc1BHY~S@<>xwx5gkeqfYemM=#^k<Z0Bjn#%D`fudCP$&W3_dVyGd!Y>)"
+        "q{yn@DPZ)>ks_sH9tv-QJiY}V(AZ0W0`i9CT;QZJWJ8N^o=`9zKUWr@<g4(G0x$E}cyodNauk3SMrr3yfw?rYVS0cys}>g}-kZR3"
+        "+vGo6q<f@`ky{I_K!34S_p4YretZ{kLKIb$<D-y#m&Xh`|8vnZ;kfPJaWHOcO#lKobL*dm=fqwCas)UfXMscIu2-9TDXp1X2qR%s"
+        "+UtElCIt36=f*J{vbIr1eSUjSu?Jj0ZKFJki&DswDC8s2-KCWTDha^hLGfmS<oPQ5=E9nbW!>j6QrT~^JS-=*9$6)Fe-+u5fd&w^"
+        "2Qb$k+;2&}l9gy(70z7ARFh6P)&X&e?)!j|ql{oja2)b*?;pS3$JYv!2`W6Jhz4&U|H}L)05mGJ5h?_!olse^JP-5^TO(|=7s(nd"
+        "LdJ?M(6k$|6ma8%Yx^xy-fh1Hw9W8j{cx1d-$KRz-uhrh?%x6hW9(q@uXNrW(;I&QX7b24572mk#sf4Spz#2W2WUJ%;{h5E(0G8x"
+        "12i6>`BMTk|Hc5#?HQoCUb)x&&^=_UKElA(02Uv48&F41#K;%mODc&j6X<}+%Jy1=gpf%~I9DJLIMm%YVV!_LFg`vn@)~#RXD}q6"
+        "7R3I5vFm`E#|6E&U7zY~@_;S0R_(niM5T$b41$s<XVhj1FMSQ1->+3wuO6$igO*vy<&e15jtL^J-yI&M`X1;Ww(+g@Q8T`$s@zu0"
+        "$~d%4;wlo<-4ebHALe;;fAeRoTuFBe$N!d6o-&j~J)rNiW?qOwe^LO$8UtfLqGI(?*n(QdL&Xy8IoKpEV{u7TWm~cpd@#T7vb;CF"
+        "Yq|6eK$fQIUF!b!0uDiEiJ3Ni5W<LdHtbSh<X;xd#?b=Cd24UL3b}t!QcDBC5*07l(9T_fj)|>NAQ~6ulGv*D*$1FG2>?xK0kVt*"
+        "aBXDI<jscyXzbb3$36f})W_h5VOtOOYj)_v`gW`m)|dz*3&2+vtUVl=2pqD{ft0TL{5E>CO53k9E=Y2I)05Huy8^s6oV81NZ5)n+"
+        "A`HI9u6Q$xJw3joP}xT&2|VK5Te()Z2}Vs(gsMn_1OiM9Hl?mf_sEbN1h#w9-eLXv>7;xQO*)~r$VR67K4gU5J|%Jm^{ON|Kg93&"
+        "`Sm_lSj29U*o6i%TMMxK2LUWqIp67!<$OE&lg1RwrO3?)(y^>BfZ$1NJeWGv7MAmcN@~gR_|cxu1YIf?DAVOGz{uwhvqD$3CGlXZ"
+        "!3sf{xs?Hks%;o(IvDqH#EGj!3A})T@rH~k4v+;6jBXFLz*gg#77__9+A?29lOkL^5ohtsnBH8Wp0;npw5+NdUsZgt+@qyfrDhha"
+        "cuW>$k|}fLrYG&gq^+_hmkpF&7^P9p$|W>2l}Wc}v8=`9Yj+Kh6-OJa9F4TVbTB`PbNhT(D=#P+H9fC<PsmphFi;x^$(Cf$K%+>L"
+        "GYBe%IrXjt%*4$Plza}@0C*}pE=oOkPp|_&EIhv-!rK7fBx4f(PT9S9w?QrxM(!0ck@LyM)BcE=Bz6X<kboJL6%9-*6tFk*h)RNP"
+        "!z5Yv0a%=wBvsN_cYtLn04${iNU{-isa{NyegKO#wP4W;U~w!FUbpuiDFI-vuetr2LH*OZI!fZ0zpHL1wj4BoJNC>U$gH>jZTMzQ"
+        "t>;~EL5}mA{wC<x8JERUS2n|pQ=BJgs(3R&V%GxS5u{Ir6PW=1iSqNz^}0<MG<xJQf0m8-LeK+k<d}4io)+x9?37-~DY`OJRhFza"
+        "-J}!hS=EK^`;rkkuzr=3-dEMw*r^p3U-nv-loe5<$gYx-p<|(J{_)R$-A}$fgwvZpE^$Kl_Z%8Z4qx(5tqW0xHaA-65@+pN>Ldb@"
+        "<U?CxBi8frQoVZ#K!0=URcn8mN`VgCf28H5MQz&kq+#Ng_oc{~c#a=Qqdz$jLZ1vsE2*_wt^RfM{rY}=zrJ7JubmapY8e0RG>oZ*"
+        "f`Q>{RY0*o_QsF4F0D3(8$=${Ndy0FGyz$t$gTL019e>rd`)%!^MxkpHPHpNYHPWb8Yr+0PNGcBzgR$OceY|L7<|9JU*E6q_jl=+"
+        "qhS0GKp2yAB+Yo-o9MA;N6TQiLhC3JnM=CrR+2+Q$tFA!j3heZ0y3;0^bSsC6bnIe*bBss^@qv<MQAGkHrXiFYE8`*KpkDk9tQT>"
+        "f8UWSItb@p3Ex~m>Q=K1s9dlu%gj3Mif{H>SPzNe|JMJl|6BjJ{%`%?`oHym%eE@Ez^WLZ>Eq+On=jkK+N#KCdU!6-!<({zn1awG"
+        "mFg(IkoKKZIB0_{()DT)CVIAPaGZSCC$cJtggeb2V(K;#b9PH$oVA^(sOy}|RuYOE?I@Kmh|--4^MUc0AYoZs>$@(MDU?rYVs=sT"
+        "v^XlB2?y#TKH66%@$GUkI!s@WCG#B*Y$?E|Ir`uBzwLk9|F-{a|J(kz-F{owx`bHU+bUjj{Oxu&YvMKMSBclG6ukYtjtv(_hNAaJ"
+        "ec<btl5NPi2Q$c>#0+J1U3IN1L39sH=Q)7ROJi~lD(h#>i-k#6bUgKt=GG$q?q2T>G4X^;QyI4OF<Ggz)&<<U;l+mH90zt~|FTTV"
+        ";=Hov`HSNS>@rqn#5`=WtZ!)UbIF_s$cz|_K9{m_X8JzF!Ux5&oj5f!SMA<4muYL2T%w7yfPDRzkyX6PdCX(t-_@~@Mtd<{lw+9$"
+        "w6aQGLwHdDIjMBBSwXUliKFaY_8tQ}i+`Hd#IeU%H3s#0NRyQi3%lxMJ#dFAV*6Cd#>)Eqq@Bz1NX>Dq5sHWNZ+5XrQWCB>*>dD+"
+        "7b7Cv&4iPrB0w=osDlMF{^McR&2xgzzc~K#FsVsr&&d|9&E}1YGDr;Z9&rTalq_Ea0E@249m($woeM!Je~Eoc3H?ATzr~v3_4z`e"
+        "o<U|ED4GH6*A#CSFNkC<;NLN1|EDxwm}HET6ey8mwP0lxjvkPU3N3iQcv+_xII}ubx|s=?O1uyD$%)?ZKG?@;CU_qll3|4i&~?aI"
+        "E+p@=o&$(4J@1?K9KhK-M;M_wuxy<!uJ>|wQ(I$6Oau$h5+@EamgCQ1qC%@RXkuNV1K`fw!$H2k$B{*BdPc>|zB6*n5VCPh%63E2"
+        "Ef{k<rpKi}Pl-bRMNSxvZVmqq-~aT3V<Vt<Owc=VjAwXnexE)KZ%=tE*>@&tTrR$$r%CNBOXFfMB=RB?`Nj)&<iColmA>)5FTZo{"
+        "ySf>2NE{7H)7C8e;z-%YY|h1KC|j7FWVc(?_}DmiHtAJk1v&uf?gAi<>qwK^o5}b(0Fu4YlArm4vp@*uO)ebMlNzXk0svg#T>GGk"
+        "3V6_gLygj}_)tE^;RQr$xRkUa6d%b$7Y5tXpa6}H*M=5uc~?^Hn33hP6ba0lN9?}+zr{PFFidM<2ogVJulRy4wMrcxPu>|WYCxcl"
+        "v=Nop?5Q$peMPuGdCRLZbL&(Q;NN)1h2&qKFQY9ojPKP*e+C|V>YjxY1@b>>L1N{zhB8!&q3!yFIzZuBpvOHmC4K;k4ph)N2_wee"
+        "W#a;sdI{^S&TmqQmaXJLnRj=79V3MYuh&WRsAv*Uyb!;+k^qxj2{<<GyD(NAP=<h(%b3vlxMcvXqq;oMiVHX+V8F^VwHJUAwsHI{"
+        "7=UbJ3>kj8%~(Y+fp5qQzhPlG;@_|c*Y#udWA$V8WA$V8WBui09RLWp?|^_yPOFMZGQI*3@C<SiJvkX<D0tH;m=I;Z4n{81K-uE%"
+        "TzWugqMK*e#^c0L5SLCpfDDf_w=qB?X5(lWo;n5DjadaeatFt(Um&Q~^>(ypd+Zt{yJ!rQ9)jU7magPa3Uox9$JnLZLm|~n4TBYX"
+        "FQ1eE#<noW8RJacL^JeJFlZ1OhFcu*N{y(z;}%&wNpM#F{`3$;n+vN(>VjbUNo8IT&=tqUNo14==LUgRQ%V-b_%{T=VrOJ=NMJbv"
+        "V-bsD%#oFXg7r3HdTnDmOYXv=hVvUWhGc7@TtN`O_0EPi@A{jpM?hu=qhy<03M#YHO`xa!;;eu&fWtyeq>wZ*WX{xf0vl#2f@Ma%"
+        "Qc$K-+YHPQxT@CCzRVRIa|O;q59cSV2Uz}XhCyK_lLYIvNiQaeIEVb#&w-_xWx^ajZJ8vgz(PuGSxJbAb(YJv_6A({Gn)mztDIGM"
+        "6+v|<*EkGm5p>2j4`UsV5^Dr9Y#7<#p>5J6v?)jY^N1K9-&_3#pHJ;UqW2xKDYaq|zLQ|hpB6l}I$~<zb5lC7B{TenBb{nZkAEeG"
+        "AH%l6Va(Egq=KVZW}`@K&Q()GK27D?^rTJn!q(W7>$KytVScFZJ4f%_>ukEj$Uru;SyD|Ob0(W5jwx1+HJfEwIow}^Q8_v1p1z_f"
+        "3BsYqKMTZCC=f8`sy&#3H_yHXJ7$zP0AqPyU~TUhLemal)$e;03gl2G1qu9nhwq`lcljQIX-<G1P+}jPz_`wUoVtN|t>QA9IbHfz"
+        "d7HX@A0;(-6-T~#5X*yD9>nq>mItvsh~+^n4`O)`%Y#@R#PT4P2eE!%5Nm=#tlKk)b$?wDYxCBo?ssA$AvTl)3kWIFBl|kD*@t8t"
+        "S$$82QP==D;GqH+zGQ=d8Jc@%+;G`UKp3CbZqW%n7Lb=Nq_ywXBrwN517iy8UB}9LFy=#8k$VsR{aQbOmFnzt^O$qM*A=ng`F`F5"
+        "l=SV_wfGDM9zRouny^WH6d&($!e{oaRUuaMATrC?IM;`H8u~~Q27WZpHS&O$k46PjKk@6sld@j^ezl*($NcdeZZ@LB&6MCy6}E@2"
+        "bt(dc6G<K+CFJmfG}eh6F6{=O{x_U=Z;n8U<A|rABOt6$DA!u>;gJTLAP^85-jI?S!^?;dUMwi1$}S&HDdk;22COl620C-~x!#Se"
+        "z>i!4(w2nr#s$)T2tWi&uY%`pP8+Z$T~IKP^FF{swT{oWAQl?42%hki@ZTE%`t=~znCFDSbC3Wb^Mw#V;CyAN<39>#C$<1SF84vo"
+        "Lj>Pd&KwS6gv5&+uB>f9#)n4<>}G7EoX1E8yCaTnJL+;VLH)pZ9uY8*5;mWStWc2qjzX!AZ2Rs++nqYy9NBm1+$4%Hd*OQo&|sSk"
+        "Ig0`spujms1Id|%5gutj^5Vmgrb7gfW<le0&GV<E6o4Hvea4=TK`GWL;pP=uW$OFR&^rTdKG4hrrp?XrH`nwrX5s?rGogde0^9ty"
+        "$90xOhcFnOi#}YD)X)M@55E9_>e2E`Ld!rze~)KC%gACusONSqDMBVshv+Q_36$Sh!ttmy?i$6(zyu<1Oc0cZInPtFG+)~-3%r`o"
+        "^K6lj>;)Eh(<u2#QnHLhN!bF7h*U7(OpoM>Q1ZJRN!zvAV5eC}>6gL!?5Ri|fbsy82cSFv<pC%UKzRVl15h4-@&J?vpgaKO0VoeZ"
+        "NdVLo0Z>=0Y8G8e4HJi<DmBb`9_ngKV%4k~1Tk+k%v*FM1*T!Mp@P^|W3k9Bg|19D-V-N;LR7Y(g0?aU3;>+ah7j&oC*V^&hgLTk"
+        "a|}i4fdXI`O3JHeVnLcNykI9j?YjvZ!b!2?TBrpq>f>>f5$86E3!nV@&)L#*1*cdnea@3@&*H-yjCSm>STRfsh=U2^EIlstRA56N"
+        "8Kc5Ps0j<oKX{ses=~yYT_b}w?4|E#!L|Z|KffN)k`aa{Fk;IBhfwAsxF;Tt6ooJbC8hA-%7t?p)Yr={1pXjuJEG=mWFG>`0)=9%"
+        "2M#`Ipy<ec1BpslqC#rAd`rq8`rrdtf<cr^#wR0W2cEghxkg|NqZo<|f}IG%iwlBff*!!BMv2bdEp2=nCLx5p#n#DEb737fwgA*Z"
+        "1AH)Zh5p4u;Cj!2l_xY2=J41noN_Dw-{vNU?WGo=g`|Vti=YJyfRe(uY;(TCP+%FTHh)iq!RBn|vIs8R6F~K?QLdG8C~#cx!x<BL"
+        "-`|-w($~=q$u-Az+LB`@isuHdgE|ZkRRtERz#;G_r0q?t3r-|Q6joNm{fGrp00Eqe;7?W6EUO);YcUnXoN~q(L(k0Xlrg`bscpee"
+        "j^6p8btV-iAZ&bVmRp)W7-WXanb{CJ_-SHST{~KQ*`8TamSGSTSsb}lFlMzbgf6TAq=#?Q+0FRokB6|rkG}qQbpq2e?K8i|;T~+="
+        "`T#P@DfJG<VM>P_*uo{Xw{=(jq5wrKisztF%R;Bz@WTDK&u5N7?C^*EJ|NrADGe2n_xH}{x!8xnXp=;~{T*78p!9ck|HOra16#II"
+        "aPC^Sa3;$St9Eu!{{`mYn{NzV=haG=)L>P?$VJ~lPH&e~g}4x@L+z6VkBG?Bw_NU?C@buBHgOL2%ZTj^huSMBy-cujI*T86m<+X)"
+        "6{&MPonQIZfHWU7<m7&s+&tXfJj{P>ltucSY|l{>-<`W?fr^c54{gc^<Avz*OD+_Ek&d-lv8(5zaXXg<)U8^<E!7UP0y;-jx5AWX"
+        "a`(fq7I9KqfF6bZ@-W&Ry$&`i2I+8nT!;+y)#v3^IOfmN982>&%z2!MaUhUQ0fgnHc0C|as08$Io+a^&CY-!liNwZN0;YEiV3~06"
+        "WDKSxrL4k3wiBH}L>CQ7WA`Ak6h-h^CEVNdu}Txt(Q*_4aH%x_=6SsVGrx7Zfqhlvd}|ew^SJ>|sP^v@lQXYfi+a6}^22J%PYu>W"
+        "a>CROz{KFlX~F$&txEBnK_la+xr<{89IE&6QQJp*7h&W;u@aOeaE8a~yle<i)Ab=KP{dl;_K|(i4g#A#PKqcBejhEUBss#RKAsf&"
+        "((ae6BuRZJ&PTfzgra#EY5MpfpCd}ymCk8Io%QxElcWHdv;gG6L<Ab=1`u&BJ11&TGX2mg-SADFQU5N7^Q9f@;N9$i&>S<dyS2z@"
+        "<(zbI9ia2Bb#^NV1{uAN&@sAs*BeogeU0t_p+Bie1_xE7lpN_ruLUL+jP&oZf~<#rOL~irCQ=Z-YxLPc`7Eh?i7AdeBiHLi)Mw|="
+        "p>q_7VKljBv7jOkM`bu#aUF8$lCM{uP8<VOs~{^#LfySHI_6ZmR!egFk|~b)E!(wd<i|6i`_J|4?mb0Dx;W^n)Q>B(gRYIhDcy?2"
+        "0)u}(JGyoeWnbs$A&5SsU)x$^e%=}LlS|>5$&iI-a)_4OO&S|#b{;i+Q0)wQ^lfPu`pjqkslfw_P(A9~xupjcqFA;l8e~A8+`qL("
+        "|G;BpjpBCS+UJXH*&+^TT^sW3g4ES18oWpHm$VGXFvI04I(ZirRt(NmQ1~qhDC7b|k{@;)3(Q78UO!$xUO!$xUO(O|k2i83Z{$2)"
+        "#OyCE$GZhAMZ597DjCcgpk^+CCc3$zsI6NGlu_%t0(1DH-$16mVx1%h-kj)<(vykwOt-S*MvhF5$#ii!;jlS_ZQ~0IJAX`8;P+N1"
+        "ndNCn7gaCdci>3roDWB1;gJWN#wBMvA1@$ocb1Udp!?khNI5E;CAk6&Dmy#5v&}?(H+vb0+pt<=hv-&q=TwDeFZDY1lQ_Q;qq<`%"
+        "{QJ7#hQh#v^gxTy<#@4j1uYH?^p$MLdu?UZqDy0Cz-K5glMPq_FU-p7@PKdtyFwV?k_L9D9}KIvL}XU36zGmxHn*fRb!Ts93C6Uj"
+        "y*&l%cm_4n$Ttsec;(uU*N@ka*N@ka*Ml1#-0<Lr2RA&pp#wMmgTam4Gq`b;Vi)Ha_)C>l%UGekYmAPNmw|5x69<oJ@KfOgtQcmP"
+        "qXSUE8P!VxZU4()e_HSX6+m-4AJC@-lPN=h3rse}ngSP|y16UaJqtzu9Rox~$?62bz0_w(QKZ}Vt)`rXR9w`e%`La`*u$To!T9Wy"
+        "4`yUuS@q-f<Mre9<Mre9<JEx$zXaUS7dDf}3k_Yn@uEC}1<RS$j5lM>6@|yl1!tTthpLeHzcyx}(XLph{6K;QxIfAkkVCg?9XSzl"
+        ";R&`+PUSVerGb{wbbdUumD4!ifl&3+Oa?d7cLqWc&hml)3(O(l=iHYhSYXPNyb;b)Zm<=_aGoU%ZU_Z2z!X84TBr(hO_Hq$j-2jk"
+        "0E%+v<yo>i+woNh%9RQtv;f5h0Tfj+gvrpw5RQ3DI4u(+RsML92mv+#<2v*sR0|2P@$g$%3_<ZNLLEs%UX}Fi6IDr};vrQaM-q{j"
+        "RY<f%GEIaS`<xKys)qw#td`+XkYf?fXGjV!6r-qMselSgkW~W0Thz>txE8oV9Ni)rapJx5EItxpLUcg`-+tEy*bOlskVw43>BsBG"
+        ">&NTI>&NTIdnGo5J3ukDWHY>*^Kq!g3k~v&>)gB*_4I)4+{^{%nl5MDjxzY6;jLJw^p!UFcP7R;QA8=H>;Tc$N~!AGa~dr9($_cX"
+        "g^Bu^jR1oM<mtF=owST3`@ty92!nrNuB^C6#a8ADV2Db*A)KXK(#a{eS#6UnXn>-%Wu+;Cf<_-SKvC_{J`jHoGs;^KiL&F;B-&jF"
+        "1KaBrZvzP_|ND=B{%bP-cK2|9^T*ve&g0?kX7-aaQhvg;&<iI&=hg(>85^?N-BKbWo|02Kew<GK<dl&U)=PHG*b<`}=x&yHW=|uL"
+        "5Tn(IMX%tk=e%(10YIRWnPV5-dhT6ujTfg_Bl^X5okw&jotmdtE$QLgHCxQ5gh1^Hp*FaNc5W*V#!@}<5$jB+ghm{W>|(_rZ#E_V"
+        "-GOmG#{`cR$$lgC4a#Vs#X&^dct;Z&{bp*llH2M|(YHx%O8ZJ`-1`0fP$TMN=KccYT;eouRy^I{^#8YaG(Bn~%m0$A$p8k%_}vW5"
+        "W*`v3VGii&o$?k-IdGT*>_*!EzA(Yv)m_z}c28!KDv2nH(q+4<yS}<UEcwZ>Cegy*v-P@k<&)BhyG9y$mQCIIo9s>puXPRleYAC1"
+        ")x9{wwelBtO|FZ-yRAD{eedA!vrnC_oxio$HMsT48+fX=5k+%6j+49z8~WPA8h<~z_)6_%%^qI++hx$6-O#qOvzgeFfxps|_81`m"
+        "J$7kVgIhC?F$Rwme}SCy8A$=prr_^l>$u(1`HLIgExh?k?CBeSSK;=y9=Ul4;42kLQlkL@qaikG%E%~$uT;cg2=;%_s1cabo(1xi"
+        "kQJqj$c(~#haDBf2=$|gnvme;e;br8l2yTgQfMN^j_4ByCNX}H77ZIjpit_$JVzuG{4M(J{bLY~JVl~_V|}9Cl2IGJ>T-Az>)*~>"
+        "@>Pwfe~<O`*X{WV^=m9oj{Vkrt^2L{I^VYDE7ZBMd|d{V7<t&3?MG<!5ADxdEMIX~`c`Kxmam3s0YLz6X}-nsRrdCH)vP5E#sBk~"
+        "E|}kyW!}5*eJt|cc+x8eEra;$TixR27ra@$uP%8lujRG8_6@IH%&OfZF>cPWcDbBujR%P9Txu<Ojek*2e>vBpx(0A{y|b?U!+uS#"
+        "1l6>)wQF`QRPM^!xldZbmRzf(eqTpeT$Jw`H6V}yMOaTF{-V<4Npmno-3k7_!_I0Df#A><(SkIVl$wYpXs@j`8YgP~%o(pOEk=pb"
+        "tmA;z+6^=1n>X58myrzjY8`lfpY-R1oPGFxp=;Ng;~%nisf}?9S^G%~Jcg`=M)H-PA!}hUx(Hlb@!D5eJ8QAF&EEK<#hzSh7mp!p"
+        "KWm94A!~u0EdtN}M!zHuSbNk1b^dFWAm2mKS|v3S$#&~S_X5{s`sxK`d{=YPwbkni>2H0e0;`%HJpM(>DY|x3*S~nw)~;6T5oJ#l"
+        "!mcUC<*sR>^n@B7fkY{=_Pa-krqZJY^4FCDsRxpjz2Rsim6cX|a%ZX2e0JHQrWDF)>198oW>Q&p*ag_$o5vq%l=X5}Z`jA-wY>Ii"
+        "uJv!AoF;I3P}869%a`=$B4PTop}_j#VODvj>fW?ucF+p2w@Pxm-C~qi%21MT0#fPLbn$iV)w$uu{4IT*J2GiTiWsV=+u%^Iz8$G_"
+        "PqepOhg=n_SKN{Z1u9tZr0Fz{rm*k<7HvbT%p;oL6!|MDJEFB`>6!Amm{(tksM+%Ibx%9P8vsr_=Corfs>Er>oOTR>(~b=hc1}Cy"
+        "v|~;?rf!co?f8WeoOW#W$vEwp(~fO+0H+;u+Oa{`aoRDb9UIQtZ=7~K91nk_9S`$qZ}>7sWisr#OX*E8$yDT19*JY?;{-Df#=$rk"
+        "2jl1h$9^?!hvU=5=_%UanAIa!;LCwyxA6#`*>F4<0_NU0wE1=sI8gifP#jcB`Y>dFP&4{6_r;0Qy_<*#3<CFQ-<b{;isP`4IWLeE"
+        "BmX0}q;O=Je=nxloP3Mgzn#6FF4q{+{!Z4CDmBOs%K#^UoXZ#@$Cd_ehT!<p0gi3AI8JSG6lJ__*n%_N0>^34Qb(;z*4d1MaWD>`"
+        "=Ry3y_WK@SJD6a=INk-0w!yFb!+-ue8r)5X_b<V(yqA}~ViXtr0-Mls^SJOc;5}>bjJNFkOnxRm)A`KhQqQ!;&)j{s3$N=l_h0BN"
+        "B$(wSovzaSoe=_aX?|wkl!dUTX4w^rBfZ;G&e249_nLAfi?QlRej{s$w40v?ng%*Q={j|N4}lDbsU=|2+{#T#>mIs3vlv&kec#S2"
+        "Ifu@&Z)bcy`I-Doe&!o`rWtM{Ci1~>BxhOP_dbqBz45TuV!*@>4vX;op>d90Fh!#rz2NN86NP}+e#iaV(<uhOc23h}FN`mHp_sln"
+        "O+WU+ebGxgY-AR^SA2fUDvrlqPHGH4olr)e0XOX4B`s!k=-&7FZPIOIafb5y%Ne>a?}{?-jd~x4moqf(4JT<Q_BhK^7p}R%*Qp_@"
+        "ZG21fJ3N^L{mqGZ{@Z?&bTP0Shu~Z|%1dCm4*5MG6}_3hGjc?clr-a#NJ~>E3mvrgpcSz;I}DexXt!v8tMA?jd8@OC6#GmQ5Z6-J"
+        "IdOPwP9y%7Crvn98FO+tqPoM13>w|(8)IQn;O{>;(y+CL880Ocwd-b16@Em63)NvhpgloOih>PI$e>_Nl^}|DDd_abhqWUGb0KJS"
+        "0_U>+`Z?==8`zApivS!|=3C%T^TTOU)(@{BAcxb7fXoMXqe=b}nVnpvV?K2YNMd&JxyZEcX}9`nxFJQ2o)lDKsJX1`6j$%EZeMI-"
+        "5J~!i>o6N(0c*cUICu1n>z%|iPk3X&gSx<ncTW7<gYDnIGeAwyh7dlomI@q5K|4@GCJv}lw<>5{5Q6L$G1|hkj0=BGNBwGN;VwZJ"
+        "8>*BW>Y{Ori@F{AY^bxk+b<>uJazN=wor>@&!|zr5-0U9i9+HdE{d+P#F7%FMw%%T%)>Lnq*kaA)8*k1>x7h$#U@CrNy#f1`=q~<"
+        "EJ75L?n%cZ7%vjTPmLxKEfqzcQd4{icyKGsQHnROlk1UYn7KBKba%gA?}f&9<#>FPK6&XSeJBx6h)bl@E+2Z*&4aI7%@!r3RzqlT"
+        "QpAZ`f=#QRc+p7$#Dy{Q327&)Au_xUoX%%d#nMO#pau!aNlD3*QR0xeYGl%Z_d25YBBd+dWJCg?z(2%hl;n{-Ks%dM7KgaRbfr48"
+        "<k;Mkrjqm#g=V3oxfD!9e^y!TEKMWHCtPs_%uaFe2rV#MU^5(6)}68GT<aPd&`p})vXca*J&M~m?ch1dvV-bATzFNMn!wi;fF8t;"
+        "h^75s3YQ<6C|<an-NHrFSVC)oOB$@juC|^o<*{Z1<yGRq650-C*)>d|G$1I+K2>I|C`|_0!hq0}AWQOW(Vo=&U_ztHZy*jRF!N5x"
+        "$0Rf_IG`JgHkR*U6VjBhCA79Q8MhWqF8LzyW9=^A|4^AVzNA@RnXLc{*JmvFmdFyo)&ls(LuIre<UW&=c?qkcF?HeOT*}f|6LAR2"
+        "`gmNN3N%5Nut;W6WnhhP$%ogBmdWJqe)<xdEqYfArsWWcxB%<Se6j6<aTS*xbUR~lE3<d_zCQ(;y*4bbrGrJ@8}vSw_r1$sE`NTg"
+        "7#J8B7~VIm$~q<bV~aipZn$}#c`Dl2FQ~epP1{}%PTKU5ao#a)($MJGL0=+o+H_5$mGL&aPDPvUXylmmlc%ChH#9nWnAH1Jv}sGD"
+        "m9J9}N26na+p$kYn^+pHLLH|t8XY5CvwbSsgwkl$j|4v&k+jJds4O^+Msvfu1<IZ~#?WYG`fiNh{C`7fQ&l8><G04>K?;9_-ZbiQ"
+        "8h^OnH`yTu{1J8wZAY2#N7!AY9cacMZZ}ePtOb9B-HYvT8~zBp9r+P<{O$b?2maQ;_!&RrXZ(zx@iTtL&-fWX<9|E&85kHC7=8wb"
+        "<e;3BgBTbX7#J8BehSPF`;_Qc36spK=0Y-6BA&cZ-KU~WswA^YztHZQM)*R0pNcjqXtat?>WHOJ*EBlznMO<_rqNrXQO7Nu>a_SV"
+        "jXLi_l_$op(I`dhuYF?tkVfwj|NcGmH-FFPt2-H*RtF@O&nu=4(}rpDo@kTYzf0|(Cikz?#|M(fH<HI^(#MyQ$Hy2L7#J8B7=C*Y"
+        "$w4Dd4q{+nVEBcAD-#$$<7fPgpYbz(#?SZ}KjZ&p@h9%=leRNa;?7EmJ42=IY?Zh(*QZ6&&SLv*+RkVc{w_PaVfu92nGTFjNYh!*"
+        "NTaSg1Da^mWl|YUqb|Ew?juG91YOn#(<n5NA&^E9i3}k$ib`bgrcrE?hbN6%BzgGIs8y1OlSXY5U>r1>w6}w7G&-KE_F$xu97U6a"
+        "Mw9MrM2be8(8frku4rSR(WLv%GLS}{(gx9}YuacunxyNxbEQ!d+6WrW4;2Fg0|Ub^10p$Sz{x=j3=9km3=FRT$HY}u$*aVYSGlFH"
+        "(o0@tn7m3deU)eOD%B40e@j{+Y`Vni2#l9--GKQLk!i!U`JHIf2BvP>bcR3jLf997=d@ArcTXD?f0E8VuZaJc7=QdIM&JDzIZ86%"
+        "d>s?x@190e4||Hc%`uIBLmDNvQ<B>f$!(#ZMWb$gU__&?eRz#V-8=A*Mro2F1dUQ9McinVE-B(lqbzAs#D2wNniv=u7#J8BUKc+6"
+        "@1KAE1&0pPtp"
+    )
+    _glyphs = None
+    _cache = {}
+
+    @classmethod
+    def glyphs(cls):
+        if cls._glyphs is None:
+            atlas = json.loads(zlib.decompress(base64.b85decode(cls.DATA)))
+            cls._glyphs = {char: (*values[:5], base64.b64decode(values[5]))
+                           for char, values in atlas["glyphs"].items()}
+        return cls._glyphs
+
+    @classmethod
+    def clean(cls, value):
+        # Preserve original name in JSON; unsupported/control glyphs are visible ?.
+        return "".join(c if c in cls.glyphs() else "?" for c in str(value))
+
+    @classmethod
+    def width(cls, value, size, bold=False):
+        return sum(cls.glyphs().get(c, cls.glyphs()["?"])[0] * size / 96
+                   + (size * .045 if bold and c != " " else 0) for c in str(value))
+
+    @classmethod
+    def glyph(cls, char, size, bold=False):
+        key = (char, size, bold)
+        if key in cls._cache:
+            return cls._cache[key]
+        advance, left, top, width, height, mask = cls.glyphs().get(char, cls.glyphs()["?"])
+        ratio = size / 96
+        x0, y0 = math.floor(left * ratio), math.floor(top * ratio)
+        w, h = math.ceil((left + width) * ratio) - x0, math.ceil((top + height) * ratio) - y0
+        dilation = max(1, round(size * .045)) if bold and width else 0
+        result = bytearray((w + dilation) * h)
+        for y in range(h):
+            sy = (y0 + y + .5) / ratio - top - .5
+            iy, fy = math.floor(sy), sy - math.floor(sy)
+            for x in range(w):
+                sx = (x0 + x + .5) / ratio - left - .5
+                ix, fx = math.floor(sx), sx - math.floor(sx)
+                alpha = 0
+                for dx, dy, weight in ((0,0,(1-fx)*(1-fy)), (1,0,fx*(1-fy)),
+                                       (0,1,(1-fx)*fy), (1,1,fx*fy)):
+                    if 0 <= ix+dx < width and 0 <= iy+dy < height:
+                        alpha += mask[(iy+dy)*width+ix+dx] * weight
+                for shift in range(dilation + 1):
+                    index = y * (w + dilation) + x + shift
+                    result[index] = max(result[index], round(alpha))
+        value = (advance * ratio + (size * .045 if bold and char != " " else 0),
+                 x0, y0, w + dilation, h, bytes(result))
+        if len(cls._cache) >= 4096:
+            cls._cache.clear()
+        cls._cache[key] = value
+        return value
+
+
+class RouteWeatherMap:
+    """Bounded, deterministic dark PNG pages; consumes briefs, never fetches.
+
+    Geometry is drawn at 2x resolution and box-filtered to RGB. Text uses the
+    embedded OFL atlas; no tiles, installed fonts, image libraries or subprocesses.
+    """
+    VERSION = 4
+    DIRECTORY = "maps/weather"
+    WIDTH, HEIGHT = 1080, 2300
+    ROWS_PER_PAGE, MAX_BANDS, MAX_PAGES = 8, 32, 4
+    MAX_BYTES = 500_000
+    MAX_EVENT_BYTES = MAX_BYTES * MAX_PAGES
+    MAX_TOTAL_BYTES = MAX_EVENT_BYTES * RouteWeather.MAX_EVENTS
+    BACKGROUND = (15, 23, 32)
+    CARD = (24, 34, 46)
+    DIVIDER = (42, 54, 68)
+    WHITE = (255, 255, 255)
+    SECONDARY = (159, 176, 192)
+    MUTED = (124, 139, 154)
+    CASING = (11, 17, 24)
+    CROSS = (233, 162, 59)
+    RAIN = (142, 197, 255)
+    STYLES = {"head": ((209, 73, 91), "solid"),
+              "cross": (CROSS, "solid"), "tail": ((27, 138, 154), "solid"),
+              "calm": ((154, 160, 166), "solid"), "unknown": ((154, 160, 166), "solid")}
+
+    @classmethod
+    def outlook_wind(cls, directions):
+        """Label the narrowest <=45-degree compass arc holding >=75% of samples."""
+        counts = [0] * 16
+        for value in directions:
+            number = RouteWeather.number(value)
+            if number is not None:
+                counts[int((number % 360 + 11.25) / 22.5) % 16] += 1
+        total = sum(counts)
+        if not total:
+            return "UNKNOWN"
+        for width in range(3):
+            candidates = [(sum(counts[(start + step) % 16] for step in range(width + 1)), start)
+                          for start in range(16)]
+            support, start = min(candidates, key=lambda item: (-item[0], item[1]))
+            if support * 4 >= total * 3:
+                first, last = cls.compass(start * 22.5), cls.compass(((start + width) % 16) * 22.5)
+                return "MOSTLY " + first + ("-" + last if width else "")
+        return "VARIABLE"
+
+    @staticmethod
+    def central_sample(section, record, wind_factor, wind_unit):
+        """Nearest native instant to the section envelope midpoint, never interpolate.
+
+        The ETA producer has bounds, not a central per-section trajectory. Keep
+        that distinction explicit rather than inventing a new timing model.
+        """
+        lo = RouteWeather.parse_time(section["arrival_window_utc"][0])
+        hi = RouteWeather.parse_time(section["end_window_utc"][1])
+        center = (lo + hi) / 2
+        rows = record.get("forecast", {}).get("instants", [])
+        rows = [r for r in rows if RouteWeather.number(r.get("at")) is not None]
+        row = min(rows, key=lambda r: (abs(r["at"] - center), r["at"])) if rows else None
+        if row is None or abs(row["at"] - center) > 3600:
+            return None
+        speed, direction = row.get("speed"), row.get("direction")
+        wind = RouteWeather.wind(speed, direction, section["bearing_deg"])
+        return {"eta_midpoint_utc": RouteWeather.iso(center),
+                "forecast_at_utc": RouteWeather.iso(row["at"]),
+                "basis": "nearest_native_instant_to_section_eta_window_midpoint",
+                "wind_from_deg": direction, "display_wind_from": RouteWeatherMap.compass(direction),
+                "wind_speed_mps": speed, "wind_class": wind["class"],
+                "display_wind_speed": {"value": round(speed * wind_factor, 1), "unit": wind_unit}
+                if RouteWeather.number(speed) is not None else None}
+
+    @staticmethod
+    def label(value):
+        if not isinstance(value, dict) or value.get("value") is None:
+            return "UNKNOWN"
+        raw = value["value"]
+        number = lambda v: f"{v:g}" if isinstance(v, (int, float)) else str(v)
+        return ("-".join(number(v) for v in raw) if isinstance(raw, list) else number(raw)) + " " + str(value.get("unit", ""))
+
+    @staticmethod
+    def compass(degrees):
+        if RouteWeather.number(degrees) is None:
+            return "UNKNOWN"
+        return ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")[int((degrees % 360 + 11.25) / 22.5) % 16]
+
+    @staticmethod
+    def time_context(event, athlete):
+        for source, name in (("event_timezone", event.get("timezone")),
+                             ("athlete_timezone", athlete.get("timezone"))):
+            if isinstance(name, str):
+                try:
+                    ZoneInfo(name)
+                    return {"zone": name, "source": source, "fallback": False}
+                except (ZoneInfoNotFoundError, ValueError):
+                    pass
+        return {"zone": "UTC", "source": "unknown_timezone_utc_fallback", "fallback": True}
+
+    @staticmethod
+    def local_time(value, context, short=False):
+        epoch = RouteWeather.parse_time(value)
+        if epoch is None:
+            return "UNKNOWN"
+        zone = ZoneInfo(context["zone"])
+        local = datetime.fromtimestamp(epoch, zone)
+        # Numeric offset disambiguates repeated hours at a DST transition.
+        return local.strftime("%m-%d %H:%M %Z%z" if short else "%Y-%m-%d %H:%M %Z%z")
+
+    @staticmethod
+    def band_letter(index):
+        return chr(65 + index) if index < 26 else "A" + chr(65 + index - 26)
+
+    @staticmethod
+    def display_span(values, decimals=None):
+        """Compare the rendered endpoints, after the producer's display rounding."""
+        labels = [(f"{v:.{decimals}f}" if decimals is not None else f"{v:g}")
+                  if isinstance(v, (int, float)) else str(v) for v in values]
+        if labels and len(set(labels)) == 1:
+            return labels[0]
+        if values and all(isinstance(v, (int, float)) for v in values):
+            places = max(len(label.partition(".")[2]) for label in labels)
+            labels = [f"{v:.{places}f}" for v in values]
+        return "–".join(labels)
+
+    @classmethod
+    def display_label(cls, value):
+        """Band/PNG formatting; retain existing canonical brief/overview values."""
+        if not isinstance(value, dict) or value.get("value") is None:
+            return "UNKNOWN"
+        raw = value["value"]
+        unit = str(value.get("unit", ""))
+        if unit in ("C", "F"):
+            unit = "°" + unit
+        decimals = 1 if unit in ("m/s", "km/h", "mph", "°C", "°F", "mm", "in") else None
+        return cls.display_span(raw if isinstance(raw, list) else [raw], decimals) + " " + unit
+
+    @staticmethod
+    def zone_label(local):
+        name = local.tzname()
+        if name and re.search(r"[A-Za-z]", name) and not name.startswith(("UTC+", "UTC-")):
+            return name
+        minutes = int((local.utcoffset() or timedelta()).total_seconds() / 60)
+        return f"UTC{'+' if minutes >= 0 else '-'}{abs(minutes)//60:02d}:{abs(minutes)%60:02d}"
+
+    @staticmethod
+    def short_date(local):
+        return ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[local.weekday()] + local.strftime(" %d ") + (
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[local.month-1]
+
+    @classmethod
+    def clock(cls, value, brief):
+        stamp = RouteWeather.parse_time(value)
+        if stamp is None:
+            return "unknown"
+        zone = ZoneInfo(brief.get("display_time", {"zone":"UTC"})["zone"])
+        local = datetime.fromtimestamp(stamp,zone)
+        departure = datetime.fromtimestamp(RouteWeather.parse_time(brief["departure"]["at_utc"]),zone)
+        suffix = " " + cls.zone_label(local) if local.utcoffset() != departure.utcoffset() else ""
+        return local.strftime("%H:%M" if local.date() == departure.date() else "%d/%m %H:%M") + suffix
+
+    @classmethod
+    def start_label_position(cls, point, label, scene, extra=0):
+        """Try only positions adjacent to the ring; omit when none is clear."""
+        width, height = RouteMapFont.width(label, 20), 26
+        x,y = point
+        candidates = [(x+33,y-13),(x-width-33,y-13),(x-width/2,y-52),
+                      (x-width/2,y+30),(x+27,y-52),(x-width-27,y-52),
+                      (x+27,y+30),(x-width-27,y+30)]
+        def overlaps(a,b):
+            return a[0]<b[0]+b[2] and a[0]+a[2]>b[0] and a[1]<b[1]+b[3] and a[1]+a[3]>b[1]
+        def segment_hits(a,b,box,pad):
+            # Clip the segment to the label box expanded by stroke + clearance.
+            lo,hi = 0.0,1.0
+            for origin,delta,left,right in (
+                    (a[0],b[0]-a[0],box[0]-pad,box[0]+box[2]+pad),
+                    (a[1],b[1]-a[1],box[1]-pad,box[1]+box[3]+pad)):
+                if delta == 0:
+                    if not left <= origin <= right:
+                        return False
+                else:
+                    first,last = sorted(((left-origin)/delta,(right-origin)/delta))
+                    lo,hi = max(lo,first),min(hi,last)
+                    if lo>hi:
+                        return False
+            return True
+        def blocked(box):
+            for op in scene:
+                if op[0] == "line" and segment_hits(op[1],op[2],box,op[4]/2+6):
+                    return True
+                if op[0] == "circle":
+                    near = (max(box[0],min(op[1],box[0]+width)),
+                            max(box[1],min(op[2],box[1]+height)))
+                    if math.dist(near,(op[1],op[2])) < op[3]+6:
+                        return True
+                if op[0] == "text":
+                    other = (op[1]-6,op[2]-op[4]-6,RouteMapFont.width(op[3],op[4],op[6])+12,op[4]*1.3+12)
+                    if overlaps(box,other):
+                        return True
+                if op[0] == "rect" and overlaps(box,(op[1]-6,op[2]-6,op[3]+12,op[4]+12)):
+                    return True
+            return False
+        for left,top in candidates:
+            box = (left,top,width,height)
+            if 40<=left and left+width<=1040 and 294+extra<=top and top+height<=866+extra and not blocked(box):
+                return left,top+20
+        return None
+
+
+    @classmethod
+    def name_layout(cls, name, width=464):
+        name = " ".join(RouteMapFont.clean(name).split()) or "Planned ride"
+        for size in range(44, 39, -1):
+            if RouteMapFont.width(name, size, True) <= width:
+                return [name], size
+        # Break at a word boundary when possible; long unbroken names still fit.
+        cut = 0
+        while cut < len(name) and RouteMapFont.width(name[:cut+1], 40, True) <= width:
+            cut += 1
+        space = name.rfind(" ", 0, cut+1)
+        if space > 0:
+            cut = space
+        first, rest = name[:cut].rstrip(), name[cut:].lstrip()
+        if RouteMapFont.width(rest, 40, True) > width:
+            while rest and RouteMapFont.width(rest + "…", 40, True) > width:
+                rest = rest[:-1]
+            rest = rest.rstrip() + "…"
+        return [first, rest], 40
+
+    @staticmethod
+    def sample_kind(section):
+        sample = section.get("weather", {}).get("map_sample") or {}
+        return RouteWeather.wind(sample.get("wind_speed_mps"), sample.get("wind_from_deg"),
+                                 section["bearing_deg"])["class"]
+
+    @classmethod
+    def dominant(cls, sections):
+        lengths = {kind: 0 for kind in ("head", "cross", "tail", "calm", "unknown")}
+        for section in sections:
+            lengths[cls.sample_kind(section)] += section["end_km"] - section["start_km"]
+        # Stable tie order, independent of which sample happens to come first.
+        return max(lengths, key=lambda kind: lengths[kind]) if sections else "unknown"
+
+    @classmethod
+    def direction(cls, sections):
+        distances = {}
+        for section in sections:
+            sample = section.get("weather", {}).get("map_sample") or {}
+            if (RouteWeather.number(sample.get("wind_speed_mps")) or 0) <= 0:
+                continue
+            compass = cls.compass(sample.get("wind_from_deg"))
+            if compass != "UNKNOWN":
+                distances[compass] = distances.get(compass, 0) + section["end_km"] - section["start_km"]
+        return min(distances, key=lambda key: (-distances[key], key)) if distances else "UNKNOWN"
+
+    @classmethod
+    def bands(cls, brief):
+        """Read the producer's exact array, never re-aggregate forecast sections."""
+        if brief["tier"] != "forecast":
+            return []
+        points = brief["sampling"]["points"]
+        if not 2 <= len(points) <= cls.MAX_BANDS or len({p["point_id"] for p in points}) != len(points):
+            raise ValueError("map_band_count_or_identity")
+        bands = brief.get("bands")
+        if not isinstance(bands,list) or len(bands) != len(points):
+            raise ValueError("map_bands_missing_or_invalid")
+        if any(b["letter"] != cls.band_letter(i) or b["point_id"] != p["point_id"]
+               for i,(b,p) in enumerate(zip(bands,points))):
+            raise ValueError("map_band_count_or_identity")
+        if len(json.dumps(bands,separators=(",",":")).encode()) > RouteWeather.MAX_BANDS_BYTES:
+            raise ValueError("forecast_bands_too_large")
+        return bands
+
+    @staticmethod
+    def display_range(sections, key):
+        fields = [s["weather"].get("display", {}).get(key) for s in sections]
+        values = [v for field in fields if field for v in (field["value"] if isinstance(field["value"], list) else [field["value"]])]
+        return {"value":[min(values), max(values)], "unit":next(f["unit"] for f in fields if f)} if values else None
+
+    @classmethod
+    def rain(cls, sections):
+        periods = [p for s in sections for p in s["weather"]["precipitation_intervals"]]
+        amounts = [p for p in periods if p.get("display_amount") is not None]
+        wettest = max(amounts, key=lambda p: p["amount_mm"]) if amounts else {}
+        probability = max((p["probability_pct"] for p in periods if RouteWeather.number(p.get("probability_pct")) is not None), default=None)
+        chance = f"{probability:g}%" if probability is not None else "chance unknown"
+        all_known = bool(periods) and len(amounts) == len(periods)
+        amount = wettest.get("display_amount")
+        dry = all_known and wettest.get("amount_mm") == 0 and (probability is None or probability == 0)
+        period = RouteWeather.number(wettest.get("period_hours"))
+        suffix = ("/h" if period == 1 else f"/{period:g}h" if period else " per native period") if amount else ""
+        trace = amount and 0 <= wettest["amount_mm"] < .05 and probability is not None and probability > 0
+        amount_label = ("<0.1 " + amount["unit"]) if trace else cls.display_label(amount).replace("UNKNOWN", "Rain unknown")
+        label = "Dry" if dry else amount_label + suffix
+        if dry and not all(s["weather"].get("coverage", {}).get("precipitation", False) for s in sections):
+            label = "Rain incomplete"
+        return label + " · " + chance, probability, wettest
+
+    @classmethod
+    def scenes(cls, row):
+        count = len(cls.bands(row["route_weather"])) if row["route_weather"]["tier"] == "forecast" else 0
+        return [cls.scene(row, page) for page in range(1, max(1, math.ceil(count / cls.ROWS_PER_PAGE)) + 1)]
+
+    @classmethod
+    def scene(cls, row, page=1):
+        brief, terrain = row["route_weather"], row["terrain_summary"]
+        poly = RouteWeather.checked_polyline(terrain)
+        forecast = brief["tier"] == "forecast"
+        sections = brief.get("sections", [])
+        if forecast and (len(sections) != len(poly)-1 or any(s["start_km"] != a[0] or s["end_km"] != b[0]
+                          for s,a,b in zip(sections,poly,poly[1:]))):
+            raise ValueError("map_section_geometry_mismatch")
+        if not forecast and sections:
+            raise ValueError("outlook_has_sections")
+        bands = cls.bands(brief) if forecast else [
+            {"letter":cls.band_letter(i), "point_id":p["point_id"], "representative_section_index":None}
+            for i,p in enumerate(brief["sampling"]["points"])]
+        pages = max(1, math.ceil(len(bands) / cls.ROWS_PER_PAGE)) if forecast else 1
+        if not 1 <= page <= pages:
+            raise ValueError("map_page_number")
+        shown = bands[(page-1)*cls.ROWS_PER_PAGE:page*cls.ROWS_PER_PAGE] if forecast else []
+        name = brief.get("name") or row.get("name") or "Planned ride"
+        names, name_size = cls.name_layout(name, 464 if page == 1 else 968)
+        extra = 48 * (len(names)-1)
+        row_y = (1222 if page == 1 else 166) + extra
+        height = row_y + len(shown)*108 + 100 if forecast else 1470 + extra
+        scene = [("canvas", cls.WIDTH, height)]
+        def line(a,b,color=cls.WHITE,width=2,pattern="solid"):
+            scene.append(("line",a,b,color,width,pattern))
+        def rect(x,y,w,h,color,radius=0):
+            scene.append(("rect",x,y,w,h,color,radius))
+        def circle(x,y,radius,color):
+            scene.append(("circle",x,y,radius,color))
+        def text(x,y,message,size=22,color=cls.WHITE,bold=False,align="left",limit=None):
+            message = RouteMapFont.clean(message)
+            if limit is not None:
+                while size > 16 and RouteMapFont.width(message,size,bold) > limit:
+                    size -= 1
+                if RouteMapFont.width(message,size,bold) > limit:
+                    raise ValueError("map_text_overflow")
+            width = RouteMapFont.width(message,size,bold)
+            x -= width if align == "right" else width/2 if align == "center" else 0
+            if x < 0 or x+width > cls.WIDTH or y-size < 0 or y+size*.3 > height:
+                raise ValueError("map_text_overflow")
+            scene.append(("text",x,y,message,size,color,bold))
+        def arrow(x,y,toward,length=42):
+            angle = math.radians(toward)
+            dx,dy = math.sin(angle), -math.cos(angle)
+            a,b = (x-dx*length/2,y-dy*length/2),(x+dx*length/2,y+dy*length/2)
+            line(a,b,cls.CASING,8); line(a,b,cls.WHITE,4)
+            for sign in (-1,1):
+                end = (b[0]-dx*12+sign*dy*8,b[1]-dy*12-sign*dx*8)
+                line(b,end,cls.CASING,8); line(b,end,cls.WHITE,4)
+        context = brief.get("display_time", {"zone":"UTC","fallback":True})
+        zone = ZoneInfo(context["zone"])
+        def local(value):
+            stamp = RouteWeather.parse_time(value)
+            return datetime.fromtimestamp(stamp,zone) if stamp is not None else None
+        departure = local(brief["departure"]["at_utc"])
+        def clock(value):
+            return cls.clock(value,brief)
+        display = brief["summary"]["display"]
+        date = cls.short_date(departure)
+        tz = cls.zone_label(departure) + (" fallback" if context.get("fallback") else "")
+        distance = terrain.get("display",{}).get("total_distance") or {"value":terrain["total_distance_km"],"unit":"km"}
+        ascent = terrain.get("display",{}).get("total_elevation") or {"value":terrain["total_elevation_m"],"unit":"m"}
+        for index,name_line in enumerate(names):
+            text(56,82+index*48,name_line,name_size,bold=True)
+        if page > 1:
+            text(56,130+extra,f"{date} · {tz} · Sections continued · {page}/{pages}",24,cls.SECONDARY,limit=968)
+        else:
+            subtitle = f"{date} · {cls.label(distance)} · {cls.label(ascent)} · {tz}"
+            if not forecast:
+                subtitle += " · outlook"
+            text(56,130+extra,subtitle,24,cls.SECONDARY,limit=464)
+            rect(540,40,500,112,cls.CARD,16)
+            line((800,58),(800,134),cls.DIVIDER)
+            text(562,78,"START",19,cls.MUTED,True)
+            if brief["departure"].get("source") == "assumed":
+                rect(652,57,104,28,cls.CROSS,14)
+                rect(653,58,102,26,(58,47,18),13)
+                text(704,78,"assumed",17,cls.CROSS,True,"center")
+            text(562,126,clock(brief["departure"]["at_utc"]),34,bold=True,limit=216)
+            text(822,78,"FINISH",19,cls.MUTED,True)
+            arrival = [RouteWeather.iso(RouteWeather.parse_time(brief["departure"]["at_utc"])+v) for v in brief["eta"]["duration_range_s"]]
+            finish = [clock(v) for v in arrival]
+            if RouteMapFont.width(cls.display_span(finish),16,True) <= 196:
+                text(822,126,cls.display_span(finish),34,bold=True,limit=196)
+            else:
+                # Cross-date/DST endpoints retain their dates and offsets in
+                # two lines inside the same fixed card, without clipping.
+                text(822,105,finish[0],21,bold=True,limit=196)
+                text(822,136,"–"+finish[1],21,bold=True,limit=196)
+            wind = cls.display_range(sections,"wind_speed_range_mps") if forecast else brief["outlook"].get("display_wind_speed_range")
+            wind_from = cls.direction(sections) if forecast else brief["outlook"].get("display_wind_from","UNKNOWN")
+            rain_label, probability, wettest = cls.rain(sections) if forecast else (
+                display.get("rain", cls.display_label(display.get("period_precipitation_max"))),brief["summary"].get("precipitation_probability_max_pct"),{})
+            if not forecast and "rain" not in display:
+                rain_label += f" · {probability:g}%" if probability is not None else " · chance unknown"
+            cards = [("RIDING",cls.display_span(display["moving_duration_range"]),"moving window",cls.WHITE),
+                     ("WIND",wind_from,cls.display_label(wind),cls.WHITE),
+                     ("GUSTS",cls.display_label(display.get("gust_max")),"maximum",cls.WHITE),
+                     ("RAIN",rain_label,clock(wettest.get("from_utc"))+"–"+clock(wettest.get("to_utc")) if wettest else "native-period max",
+                      cls.RAIN if probability is not None and probability >= 30 else cls.WHITE)]
+            for i,(label,value,note,color) in enumerate(cards):
+                x,y = 40+i*253,166+extra
+                rect(x,y,241,112,cls.CARD,16)
+                text(x+22,y+38,label,19,cls.MUTED,True)
+                text(x+22,y+76,value,30,color,True,limit=197)
+                text(x+22,y+100,note,17,cls.SECONDARY,limit=197)
+            # Same local projection as v4, with a larger 860 x 540 map viewport.
+            lons = [poly[0][2]]
+            for p in poly[1:]:
+                lons.append(lons[-1]+(p[2]-lons[-1]+180)%360-180)
+            lat0 = sum(p[1] for p in poly)/len(poly)
+            coslat = max(1e-6,math.cos(math.radians(lat0)))
+            coords = [(math.radians(lon-lons[0])*6371*coslat,math.radians(p[1]-lat0)*6371) for p,lon in zip(poly,lons)]
+            xmin,xmax = min(x for x,y in coords),max(x for x,y in coords)
+            ymin,ymax = min(y for x,y in coords),max(y for x,y in coords)
+            if max(xmax-xmin,ymax-ymin) <= 0:
+                raise ValueError("map_stationary_geometry")
+            scale = min(860/max(xmax-xmin,.001),540/max(ymax-ymin,.001))
+            xy = [(540+(x-(xmin+xmax)/2)*scale,580+extra-(y-(ymin+ymax)/2)*scale) for x,y in coords]
+            for a,b in zip(xy,xy[1:]):
+                line(a,b,cls.CASING,22)
+            for i,(a,b) in enumerate(zip(xy,xy[1:])):
+                line(a,b,cls.STYLES[cls.sample_kind(sections[i]) if forecast else "unknown"][0],12)
+            text(1010,330+extra,"N ↑",26,cls.SECONDARY,True,"right")
+            # Place letter circles outside one another and the endpoint ring.
+            occupied = [(xy[0][0]-23,xy[0][1]-23,46,46),(xy[-1][0]-23,xy[-1][1]-23,46,46)]
+            arrows = []
+            def collision(box):
+                return any(box[0]<b[0]+b[2]+8 and box[0]+box[2]+8>b[0] and box[1]<b[1]+b[3]+8 and box[1]+box[3]+8>b[1] for b in occupied)
+            for band in bands:
+                point = next(p for p in brief["sampling"]["points"] if p["point_id"] == band["point_id"])
+                i = min(range(len(poly)),key=lambda k:abs(poly[k][0]-point["km"]))
+                x,y = xy[i]
+                positions = [(x+dx,y+dy) for dx,dy in ((0,0),(58,0),(-58,0),(0,58),(0,-58),(58,58),(-58,-58),(95,0),(-95,0))]
+                positions += [(x0,y0+extra) for y0 in range(330,851,55) for x0 in range(70,1011,55)]
+                spot = next(((a,b) for a,b in positions if 62<=a<=1018 and 320+extra<=b<=850+extra and not collision((a-21,b-21,42,42))),None)
+                if spot is None:
+                    raise ValueError("map_marker_layout")
+                a,b = spot
+                occupied.append((a-21,b-21,42,42))
+                if math.hypot(a-x,b-y)>5:
+                    line((x,y),(a,b),cls.SECONDARY,1)
+                circle(a,b,20,cls.WHITE)
+                text(a,b+8,band["letter"],24,cls.BACKGROUND,True,"center")
+                representative = band["representative_section_index"]
+                section = sections[representative] if representative is not None else None
+                if forecast and section and band["wind_class"] not in ("calm","unknown"):
+                    midpoint = (section["start_km"]+section["end_km"])/2
+                    si = min(range(len(poly)),key=lambda k:abs(poly[k][0]-midpoint))
+                    ax,ay = xy[si]
+                    arrows.append((ax,ay,(section["weather"]["map_sample"]["wind_from_deg"]+180)%360))
+            for ax,ay,toward in arrows:
+                # Place after all letters, within the map, clear of labels and legend.
+                candidates = [(ax+dx,ay+dy) for radius in (0,48,80,112) for dx,dy in
+                              ((0,radius),(radius,0),(-radius,0),(0,-radius),(radius,radius),(-radius,-radius))]
+                candidates += sorted(((x,y+extra) for y in range(340,825,55) for x in range(70,1011,55)),
+                                     key=lambda p: (math.dist(p,(ax,ay)),p))
+                spot = next(((x,y) for x,y in candidates if 70<=x<=1010 and 340+extra<=y<=824+extra
+                             and not collision((x-25,y-25,50,50))),None)
+                if spot is None:
+                    raise ValueError("map_arrow_layout")
+                if math.dist(spot,(ax,ay)) > 60:
+                    line((ax,ay),spot,cls.MUTED,1)
+                arrow(*spot,toward)
+                occupied.append((spot[0]-25,spot[1]-25,50,50))
+            for i in (0,-1):
+                x,y = xy[i]
+                circle(x,y,19,cls.WHITE); circle(x,y,13,cls.BACKGROUND)
+            endpoints = [(xy[0],"Start / finish")] if math.dist(xy[0],xy[-1])<25 else [(xy[0],"Start"),(xy[-1],"Finish")]
+            for point,label in endpoints:
+                spot = cls.start_label_position(point,label,scene,extra)
+                if spot is not None:
+                    text(*spot,label,20,cls.SECONDARY)
+            if forecast:
+                for x,kind,label in ((66,"head","Headwind"),(296,"cross","Crosswind"),(526,"tail","Tailwind")):
+                    circle(x,885+extra,11,cls.STYLES[kind][0])
+                    text(x+22,894+extra,label,24,cls.SECONDARY,True)
+                text(1024,894+extra,"arrows: wind direction",20,cls.MUTED,align="right")
+            else:
+                text(56,894+extra,"Outlook only · no section forecast",28,cls.SECONDARY,True)
+            chart_y = 915+extra
+            rect(40,chart_y,1000,290,cls.CARD,16)
+            text(64,chart_y+44,"WIND ALONG THE ROUTE" if forecast else "ROUTE ELEVATION · OUTLOOK",20,cls.MUTED,True)
+            low,high = min(p[3] for p in poly),max(p[3] for p in poly)
+            text(1016,chart_y+44,"elevation " + cls.display_span([low,high]) + " m",20,cls.MUTED,align="right",limit=330)
+            chart_left,chart_width,base = 66,950,chart_y+240
+            total = poly[-1][0]
+            for i,(a,b) in enumerate(zip(poly,poly[1:])):
+                x0,x1 = chart_left+a[0]/total*chart_width,chart_left+b[0]/total*chart_width
+                y0 = base-12-(a[3]-low)/max(1,high-low)*138
+                y1 = base-12-(b[3]-low)/max(1,high-low)*138
+                color = cls.STYLES[cls.sample_kind(sections[i]) if forecast else "unknown"][0]
+                scene.append(("polygon",[(x0,base),(x0,y0),(x1,y1),(x1,base)],color))
+            last_time_right = -1
+            if forecast:
+                end_time = clock(sections[-1]["end_window_utc"][1])
+                end_left = 1016-RouteMapFont.width(end_time,18)
+                for band in bands:
+                    if not band["section_count"]:
+                        continue
+                    start,end = band["start_km"],band["end_km"]
+                    x = chart_left+start/total*chart_width
+                    line((x,chart_y+92),(x,base),cls.DIVIDER,1)
+                    text(chart_left+(start+end)/2/total*chart_width,chart_y+86,band["letter"],24 if len(bands)<=16 else 16,bold=True,align="center")
+                    message = band["display"]["start_time"]
+                    tw = RouteMapFont.width(message,18)
+                    tx = max(chart_left,min(x,1016-tw))
+                    if tx>last_time_right+12 and tx+tw+12<end_left:
+                        text(tx,chart_y+274,message,18,cls.SECONDARY)
+                        last_time_right=tx+tw
+                text(1016,chart_y+274,end_time,18,cls.SECONDARY,align="right")
+            else:
+                text(64,chart_y+274,"Wind direction and rain timing uncertain",22,cls.SECONDARY)
+        if forecast:
+            for n,band in enumerate(shown):
+                y = row_y+n*108
+                kind = band["wind_class"]
+                color = cls.STYLES[kind][0]
+                rect(40,y,1000,98,cls.CARD,14); rect(40,y,10,98,color,5)
+                text(86,y+46,band["letter"],36,bold=True,align="center")
+                if not band["section_count"]:
+                    text(132,y+42,"No forecast segment assigned",26,cls.SECONDARY)
+                    text(132,y+78,"Use adjacent bands; no invented arrow or weather",22,cls.MUTED)
+                    continue
+                detail = band["display"]
+                text(118,y+42,detail["distance"],25,bold=True,limit=265)
+                text(118,y+78,detail["time"],22,cls.SECONDARY,limit=265)
+                text(400,y+42,detail["wind_class"],27,color,True)
+                text(400,y+78,detail["wind"],22,cls.SECONDARY,limit=405)
+                text(1016,y+42,detail["temperature"],26,bold=True,align="right",limit=210)
+                probability = band["rain"]["max_probability_pct"]
+                text(1016,y+78,detail["rain"],22,cls.RAIN if probability is not None and probability>=30 else cls.SECONDARY,align="right",limit=200)
+        elif page == 1:
+            outlook = brief["outlook"]
+            window = [local(t) for t in outlook["window_utc"]]
+            changed_offset = window[0].utcoffset() != window[-1].utcoffset()
+            labels = [cls.short_date(t) + t.strftime(" %H:%M") + (" " + cls.zone_label(t) if changed_offset else "") for t in window]
+            text(56,1255+extra," – ".join(labels),23,cls.SECONDARY,limit=968)
+            direction = outlook.get("display_wind_from","UNKNOWN")
+            wind_text = "Wind " + direction.lower() if direction in ("VARIABLE","UNKNOWN") else "Wind from " + direction.removeprefix("MOSTLY ").replace("-","/")
+            text(56,1295+extra,cls.display_label(display.get("temperature_range")) + " · " + wind_text,26,limit=968)
+            text(56,1335+extra,"Rain native periods " + "/".join(f"{h:g}h" for h in outlook["precipitation_period_hours"]) + " · maxima, not a ride total",22,cls.SECONDARY,limit=968)
+        footer = height-76
+        line((40,footer),(1040,footer),cls.DIVIDER)
+        text(56,footer+36,"section11.net",22,bold=True)
+        provider = "Open-Meteo" if brief["provenance"]["provider"] == "open_meteo" else "MET Norway (fallback)"
+        text(1024,footer+36,f"{provider} (CC BY 4.0) · fetched {clock(brief['fetched_at'])} · not a safety assessment",19,cls.MUTED,align="right",limit=770)
+        source = "open-meteo.com" if brief["provenance"]["provider"] == "open_meteo" else "api.met.no"
+        text(1024,footer+60,f"{source} · sampled and summarized by Section 11 · {tz}",16,cls.MUTED,align="right",limit=968)
+        return scene
+
+    @classmethod
+    def png(cls, scene):
+        out_width,out_height = scene[0][1:] if scene and scene[0][0]=="canvas" else (cls.WIDTH,cls.HEIGHT)
+        if out_width != cls.WIDTH or not 1 <= out_height <= cls.HEIGHT:
+            raise ValueError("map_dimensions")
+        width,height = out_width*2,out_height*2
+        pixels = bytearray(bytes(cls.BACKGROUND)*(width*height))
+        def rect(x,y,w,h,color,radius=0):
+            x0,y0 = max(0,round(x*2)),max(0,round(y*2))
+            x1,y1 = min(width,round((x+w)*2)),min(height,round((y+h)*2))
+            for row in range(y0,y1):
+                inset = 0
+                if radius:
+                    dy = max(y+radius-(row+.5)/2,(row+.5)/2-(y+h-radius),0)
+                    inset = radius-math.sqrt(max(0,radius*radius-dy*dy))
+                left,right = max(x0,round((x+inset)*2)),min(x1,round((x+w-inset)*2))
+                if right>left:
+                    start=(row*width+left)*3
+                    pixels[start:start+(right-left)*3]=bytes(color)*(right-left)
+        def circle(x,y,radius,color):
+            for row in range(math.floor((y-radius)*2),math.ceil((y+radius)*2)):
+                half=math.sqrt(max(0,radius*radius-((row+.5)/2-y)**2))
+                rect(x-half,row/2,half*2,.5,color)
+        def line(a,b,color,thickness,pattern="solid"):
+            dx,dy=b[0]-a[0],b[1]-a[1]
+            steps=max(1,math.ceil(math.hypot(dx,dy)*2))
+            for i in range(steps+1):
+                circle(a[0]+dx*i/steps,a[1]+dy*i/steps,thickness/2,color)
+        def polygon(points,color):
+            for row in range(max(0,math.floor(min(p[1] for p in points)*2)),min(height,math.ceil(max(p[1] for p in points)*2))):
+                y=(row+.5)/2
+                crossings=sorted(a[0]+(y-a[1])*(b[0]-a[0])/(b[1]-a[1]) for a,b in zip(points,points[1:]+points[:1]) if min(a[1],b[1])<=y<max(a[1],b[1]))
+                for a,b in zip(crossings[::2],crossings[1::2]):
+                    rect(a,row/2,b-a,.5,color)
+        def text(x,y,message,size,color,bold):
+            cursor=x*2
+            for char in message:
+                advance,left,top,w,h,mask=RouteMapFont.glyph(char,size*2,bold)
+                x0,y0=round(cursor)+left,round(y*2)+top
+                for gy in range(h):
+                    if not 0<=y0+gy<height:
+                        continue
+                    for gx in range(w):
+                        alpha=mask[gy*w+gx]
+                        if not alpha or not 0<=x0+gx<width:
+                            continue
+                        offset=((y0+gy)*width+x0+gx)*3
+                        for c in range(3):
+                            pixels[offset+c]=(pixels[offset+c]*(255-alpha)+color[c]*alpha+127)//255
+                cursor+=advance
+        for kind,*args in scene:
+            if kind=="rect": rect(*args)
+            elif kind=="circle": circle(*args)
+            elif kind=="line": line(*args)
+            elif kind=="polygon": polygon(*args)
+            elif kind=="text": text(*args)
+        raw=bytearray()
+        stride=width*3
+        for y in range(out_height):
+            raw.append(0)
+            offset=y*2*stride
+            for x in range(out_width):
+                i=offset+x*6
+                for c in range(3):
+                    j=i+c
+                    raw.append((pixels[j]+pixels[j+3]+pixels[j+stride]+pixels[j+stride+3]+2)//4)
+        def chunk(kind,content):
+            return struct.pack(">I",len(content))+kind+content+struct.pack(">I",zlib.crc32(kind+content)&0xffffffff)
+        data=b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">IIBBBBB",out_width,out_height,8,2,0,0,0))+chunk(b"IDAT",zlib.compress(raw,9))+chunk(b"IEND",b"")
+        if len(data)>=cls.MAX_BYTES:
+            raise ValueError("map_size_limit")
+        return data
+
+    @classmethod
+    def generate(cls, sync, events, athlete, now=None):
+        """Refresh only managed images; a failed image never invalidates a brief."""
+        now = now or getattr(sync, "_route_weather_now", None) or datetime.now(timezone.utc)
+        rows = getattr(sync, "_routes_data", {}).get("events", [])
+        by_id = {e.get("id"): e for e in events if e.get("category") in sync.TRAINING_EVENT_CATEGORIES}
+        directory = sync.data_dir / cls.DIRECTORY
+        retained = set()
+        retained_events, total_bytes = 0, 0
+        for row in rows:
+            row.pop("route_weather_map", None)
+            row.pop("route_weather_map_status", None)
+        # Never follow an externally supplied directory or filename symlink.
+        if directory.is_symlink() or directory.parent.is_symlink():
+            for row in rows:
+                row["route_weather_map_status"] = "unsafe_directory"
+            return
+        for row in sorted(rows, key=lambda r: str(r.get("event_id"))):
+            brief = row.get("route_weather", {})
+            event = by_id.get(row.get("event_id"), {})
+            if not getattr(sync, "route_weather_enabled", True) or not RouteWeather.outdoor(event):
+                continue
+            if row.get("route_status") != "ok" or brief.get("status") != "ok":
+                continue
+            try:
+                departure = RouteWeather.effective_departure(
+                    event, athlete, now, getattr(sync, "_overview_activities", ()),
+                    getattr(sync, "route_weather_default_start", "10:00"))
+                delta = RouteWeather.parse_time(departure["at_utc"]) - now.timestamp()
+                expiry = RouteWeather.parse_time(brief.get("expires_at"))
+                if (brief.get("schema_version") != RouteWeather.VERSION or not brief.get("brief_id")
+                        or not brief.get("cache_key") or brief.get("event_id") != row.get("event_id")
+                        or brief.get("route_ref") != row.get("route_ref") or brief.get("departure") != departure
+                        or not 0 < delta <= RouteWeather.HORIZON_HOURS * 3600
+                        or expiry is None or expiry <= now.timestamp()
+                        or brief.get("tier") not in ("forecast", "outlook")):
+                    raise ValueError("ineligible_or_mismatched_brief")
+                if retained_events >= RouteWeather.MAX_EVENTS:
+                    continue
+                scenes = cls.scenes(row)
+                images = [cls.png(scene) for scene in scenes]
+                event_bytes = sum(map(len, images))
+                if (len(images) > cls.MAX_PAGES or event_bytes >= cls.MAX_EVENT_BYTES
+                        or total_bytes + event_bytes >= cls.MAX_TOTAL_BYTES):
+                    raise ValueError("map_total_size_limit")
+                stem = "weather-" + RouteWeather.digest(str(row["event_id"]))[:32]
+                names = [stem + ("" if i == 0 else f"-p{i+1:02d}") + ".png" for i in range(len(images))]
+                directory.mkdir(parents=True, exist_ok=True)
+                paths = [directory / name for name in names]
+                # Check the whole set before writing any page. Only publish the
+                # descriptor after every atomic replacement succeeds.
+                if any(path.is_symlink() or path.exists() and not path.is_file() for path in paths):
+                    raise ValueError("unsafe_image_path")
+                pages = []
+                for i, (name, path, data, scene) in enumerate(zip(names, paths, images, scenes)):
+                    if not path.exists() or path.read_bytes() != data:
+                        with tempfile.NamedTemporaryFile(dir=directory, prefix=".weather-", suffix=".tmp", delete=False) as handle:
+                            temporary = Path(handle.name)
+                            try:
+                                handle.write(data)
+                                handle.close()
+                                os.replace(temporary, path)
+                            finally:
+                                temporary.unlink(missing_ok=True)
+                    pages.append({"page": i + 1, "path": f"{cls.DIRECTORY}/{name}", "format": "png",
+                                  "width_px": cls.WIDTH, "height_px": scene[0][2],
+                                  "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+                row["route_weather_map"] = {**pages[0], "pages": pages, "page_count": len(pages), "total_bytes": event_bytes,
+                    "renderer_version": cls.VERSION, "brief_id": brief["brief_id"], "cache_key": brief["cache_key"],
+                    "tier": brief["tier"], "expires_at": brief["expires_at"]}
+                retained.update(names)
+                retained_events += 1
+                total_bytes += event_bytes
+            except (ValueError, TypeError, KeyError, IndexError, OverflowError):
+                row["route_weather_map_status"] = "invalid_map_data"
+            except OSError:
+                row["route_weather_map_status"] = "image_write_failed"
+        sync._routes_data.pop("route_weather_map_cleanup_status", None)
+        try:
+            if directory.is_dir():
+                for path in directory.iterdir():
+                    if (re.fullmatch(r"weather-[0-9a-f]{32}(?:-p0[2-4])?\.png", path.name) and path.name not in retained
+                            and not path.is_symlink() and path.is_file()):
+                        path.unlink()
+        except OSError:
+            sync._routes_data["route_weather_map_cleanup_status"] = "cleanup_failed"
+
+
+class DataOverview:
+    """One bounded registry drives discovery and the workflow file declaration.
+
+    Locations are relative to the latest export's directory. Presence describes
+    local files, not connector reach or forecast freshness. No directory crawl.
+    """
+    MAX_RIDES = 64
+    COMPANIONS = (
+        ("routes.json", "Planned route validity, terrain, weather and compact snapshots", "$.events", "_routes_data"),
+        ("intervals.json", "Completed session interval, structure and DFA detail", "$.activities", "_intervals_data"),
+        ("history.json", "Longitudinal training history", "$", None),
+        ("ftp_history.json", "FTP progression", "$", None),
+        ("saved_workouts.json", "Read-only saved workout inventory", "$", "_saved_workouts_data"),
+        ("route_eta_history.json", "Rolling 180-day outdoor ETA calibration record", "$.activities", None),
+    )
+
+    @staticmethod
+    def map_pages(descriptor):
+        first = descriptor.get("path", "")
+        if not isinstance(first, str) or not re.fullmatch(r"maps/weather/weather-[0-9a-f]{32}\.png", first):
+            return []
+        pages = descriptor.get("pages", [descriptor])
+        if not isinstance(pages, list) or not 1 <= len(pages) <= RouteWeatherMap.MAX_PAGES:
+            return []
+        if "pages" in descriptor and descriptor.get("page_count") != len(pages):
+            return []
+        for i, page in enumerate(pages):
+            expected = first if i == 0 else first[:-4] + f"-p{i+1:02d}.png"
+            if (not isinstance(page, dict) or page.get("path") != expected
+                    or "pages" in descriptor and page.get("page") != i+1):
+                return []
+        return pages
+
+    @staticmethod
+    def file_state(root, relative):
+        path = root
+        for part in relative.split("/"):
+            path = path / part
+            if path.is_symlink():
+                return False, None
+        try:
+            if path.is_file():
+                return True, RouteWeather.iso(path.stat().st_mtime)
+        except OSError:
+            pass
+        return False, None
+
+    @classmethod
+    def build(cls, sync, data, filename="latest.json", now=None):
+        now = now or getattr(sync, "_route_weather_now", None) or datetime.now(timezone.utc)
+        files = [{"path": filename, "json_path": "$", "present": True,
+                  "updated_at": now.isoformat(), "holds": "Current training data and companion overview"}]
+        for path, holds, pointer, _ in cls.COMPANIONS:
+            present, updated = cls.file_state(sync.data_dir, path)
+            files.append({"path": path, "json_path": pointer, "present": present,
+                          "updated_at": updated, "holds": holds})
+        routes = getattr(sync, "_routes_data", {}).get("events", [])
+        by_id = {str(row.get("event_id")): (index, row) for index, row in enumerate(routes)}
+        athlete = getattr(sync, "_overview_athlete", {})
+        raw = getattr(sync, "_overview_events", [])
+        upcoming, departures, departure_states = {}, {}, {}
+        for event in raw:
+            if (event.get("category") not in sync.TRAINING_EVENT_CATEGORIES
+                    or event.get("type") not in ("Ride", "GravelRide", "MountainBikeRide", "VirtualRide")):
+                continue
+            try:
+                departure = RouteWeather.departure(event, athlete, getattr(sync, "route_weather_default_start", "10:00"))
+                departures[str(event.get("id"))] = departure
+                departures[str(event.get("id"))] = RouteWeather.effective_departure(
+                    event, athlete, now, getattr(sync, "_overview_activities", ()),
+                    getattr(sync, "route_weather_default_start", "10:00"))
+            except ValueError as error:
+                if str(error) == "missed":
+                    departure_states[str(event.get("id"))] = "missed"
+                    continue
+                if str(error) == "completed":
+                    departure_states[str(event.get("id"))] = "completed"
+                if str(event.get("start_date_local", ""))[:10] < now.date().isoformat():
+                    if str(error) != "completed":
+                        continue
+            upcoming[str(event.get("id"))] = event
+        ordered = sorted(upcoming.values(), key=lambda e: (
+            RouteWeather.parse_time(departures.get(str(e.get("id")), {}).get("at_utc")) or float("inf"), str(e.get("id"))))
+        horizon = now.timestamp() + RouteWeather.HORIZON_HOURS * 3600
+        beyond = set()
+        for event in ordered:
+            identity = str(event.get("id"))
+            at = RouteWeather.parse_time(departures.get(identity, {}).get("at_utc"))
+            # An unresolved time never supplies a forecast; a clearly later
+            # calendar date can still be excluded from the discovery list.
+            try:
+                local_date = datetime.strptime(str(event.get("start_date_local", ""))[:10], "%Y-%m-%d").date()
+                context = RouteWeatherMap.time_context(event, athlete)
+                horizon_date = datetime.fromtimestamp(horizon, ZoneInfo(context["zone"])).date()
+                later_date = local_date > horizon_date
+            except ValueError:
+                later_date = False
+            if (at is not None and at > horizon) or (at is None and later_date):
+                beyond.add(identity)
+        without_route_beyond = sum(str(e.get("id")) in beyond and str(e.get("id")) not in by_id for e in ordered)
+        ordered = [e for e in ordered if str(e.get("id")) not in beyond or str(e.get("id")) in by_id]
+        rides, maps, map_events = [], [], set()
+        def image_for(row, status):
+            descriptor = row.get("route_weather_map") or {}
+            brief = row.get("route_weather") or {}
+            pages = cls.map_pages(descriptor)
+            identity = str(row.get("event_id"))
+            if (not pages or status != "ok" or not getattr(sync, "route_weather_enabled", True)
+                    or (RouteWeather.parse_time(brief.get("expires_at")) or 0) <= now.timestamp()
+                    or descriptor.get("brief_id") != brief.get("brief_id")
+                    or descriptor.get("cache_key") != brief.get("cache_key")
+                    or identity not in map_events and len(map_events) >= RouteWeather.MAX_EVENTS):
+                return {"present": False, "reason": ("weather_" + status if status != "ok" else
+                        str(row.get("route_weather_map_status") or "image_missing"))[:100]}
+            map_events.add(identity)
+            listed = []
+            for i, page in enumerate(pages):
+                path = page["path"]
+                present, updated = cls.file_state(sync.data_dir, path)
+                listed.append({"page": i+1, "path": path, "present": present})
+                if present and path not in {m["path"] for m in maps}:
+                    maps.append({"path": path, "present": True, "updated_at": updated,
+                                 "holds": f"Route weather PNG page {i+1}/{len(pages)} for chat"})
+            result = {"present": all(p["present"] for p in listed), "pages": listed, "page_count": len(listed)}
+            if result["present"]:
+                result["path"] = listed[0]["path"]
+            else:
+                result["reason"] = "page_missing"
+            return result
+        for event in ordered[:cls.MAX_RIDES]:
+            index, row = by_id.get(str(event.get("id")), (None, {}))
+            outside_weather = str(event.get("id")) in beyond
+            brief = row.get("route_weather") or {}
+            reasons = brief.get("reason_codes") or []
+            status = brief.get("status", "missing")
+            if not getattr(sync, "route_weather_enabled", True) or "disabled" in reasons:
+                status = "off"
+            elif brief.get("expires_at") and (RouteWeather.parse_time(brief["expires_at"]) or 0) <= now.timestamp():
+                status = "expired"
+            if status != "off" and str(event.get("id")) in departure_states:
+                status, reasons = "unavailable", [departure_states[str(event.get("id"))]]
+            terrain = row.get("terrain_summary") or {}
+            climbs = terrain.get("climbs")
+            image = {"present": False, "reason": "beyond_horizon"} if outside_weather else image_for(row, status)
+            display = brief.get("summary", {}).get("display", {})
+            wind = brief.get("outlook", {}).get("display_wind_speed_range")
+            if brief.get("tier") == "forecast":
+                ranges = [s.get("weather", {}).get("display", {}).get("wind_speed_range_mps") for s in brief.get("sections", [])]
+                values = [v for r in ranges if r for v in r["value"]]
+                if values:
+                    wind = {"value": [min(values), max(values)], "unit": next(r["unit"] for r in ranges if r)}
+            summary = None
+            if status in ("ok", "partial"):
+                rain = display.get("hourly_precipitation_max", display.get("period_precipitation_max"))
+                summary = ("Wind " + RouteWeatherMap.display_label(wind) + "; gust max " + RouteWeatherMap.display_label(display.get("gust_max"))
+                           + "; rain native-period max " + display.get("rain", RouteWeatherMap.display_label(rain))
+                           + "; temp " + RouteWeatherMap.display_label(display.get("temperature_range")))[:300]
+            departure = departures.get(str(event.get("id")))
+            departure_assumed = departure.get("source") == "assumed" if departure else None
+            departure_display = (RouteWeatherMap.local_time(departure["at_utc"], RouteWeatherMap.time_context(event, athlete))
+                                 + (" (ASSUMED)" if departure_assumed else "")) if departure else None
+            rides.append({"event_id": event.get("id"), "name": event.get("name") if isinstance(event.get("name"), str) else "Planned ride",
+                          "path": "routes.json", "json_path": f"$.events[{index}]" if index is not None else None,
+                          "departure_assumed": departure_assumed, "departure_display": departure_display,
+                          "start_time_status": ("passed_not_completed" if departure and
+                                               departure.get("assumed_reason") == "start_passed" else
+                                               sync._event_start_fields(event)["start_time_status"]),
+                          "has_route": bool(row), "route_status": row.get("route_status", "absent"),
+                          "climbs_present": isinstance(climbs, list), "climb_count": len(climbs) if isinstance(climbs, list) else None,
+                          "weather": {"status": "beyond_horizon"} if outside_weather else {"status": status, "tier": brief.get("tier"), "fetched_at": brief.get("fetched_at"),
+                                      "expires_at": brief.get("expires_at"), "summary": summary,
+                                      "reason": str(reasons[0])[:100] if reasons else ("no_route" if not row else None)},
+                          "map": image})
+        # Include all current maps even if the ride overview is truncated.
+        for row in routes:
+            brief = row.get("route_weather") or {}
+            if str(row.get("event_id")) not in beyond and str(row.get("event_id")) not in departure_states:
+                image_for(row, brief.get("status", "missing"))
+        files.extend(maps)
+        folder = sync.data_dir / RouteWeatherMap.DIRECTORY
+        folder_present = folder.is_dir() and not folder.is_symlink() and not folder.parent.is_symlink()
+        return {"version": 1, "base": "latest_file_directory", "files": files,
+                "folders": [{"path": "maps/weather/", "present": folder_present,
+                             "updated_at": max((m["updated_at"] for m in maps), default=None),
+                             "holds": "Up to four ordered PNG pages per ride, six rides; at most 24 pages for chat", "managed_count": len(maps)}],
+                "rides": rides, "rides_total": len(ordered), "rides_omitted": max(0, len(ordered) - cls.MAX_RIDES),
+                "rides_without_route_beyond_horizon": without_route_beyond,
+                "managed_files": sorted({f["path"] for f in files if f["present"]})}
 
 
 class IntervalsSync:
@@ -2449,7 +4545,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.145"
+    VERSION = "3.146"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -5397,11 +7493,13 @@ class IntervalsSync:
 
     @staticmethod
     def _event_start_fields(evt: Dict) -> Dict:
-        """Retain an explicit midnight; a date without a time supplies no time."""
+        """Upstream midnight is an unset-time placeholder, not a known start."""
         raw = evt.get("start_date_local")
         if isinstance(raw, str) and "T" in raw:
             try:
                 parsed = datetime.fromisoformat(raw)
+                if (parsed.hour, parsed.minute, parsed.second, parsed.microsecond) == (0, 0, 0, 0):
+                    return {"start_time_status": "midnight_treated_as_unset"}
                 return {"start_time": parsed.strftime("%H:%M"),
                         "start_time_status": "provided"}
             except ValueError:
@@ -5440,6 +7538,8 @@ class IntervalsSync:
         return fields
 
     def _generate_route_weather(self, events, activities, previous, athlete, power_inputs=None):
+        self._overview_events = events
+        self._overview_athlete = athlete
         """Optional enrichment; never let a weather failure stop the training output."""
         try:
             RouteWeather(self).generate(events, activities, previous, athlete, power_inputs)
@@ -5450,6 +7550,12 @@ class IntervalsSync:
                                             "event_id": row.get("event_id"), "route_ref": row.get("route_ref"),
                                             "status": "unavailable", "brief_id": None,
                                             "reason_codes": ["weather_processing_failed"]}
+        try:
+            RouteWeatherMap.generate(self, events, athlete)
+        except Exception:
+            for row in getattr(self, "_routes_data", {}).get("events", []):
+                row.pop("route_weather_map", None)
+                row["route_weather_map_status"] = "image_processing_failed"
 
     def _update_route_eta_history(self, activities, previous=None, full_history=False, now=None):
         """Non-critical local record; no additional API calls or training payload changes."""
@@ -14720,6 +16826,30 @@ class IntervalsSync:
             f"{filepath}: write outcome UNKNOWN after {cause}; remote content does "
             f"not match the intended content. No write retry was issued.")
     
+    def save_local_outputs(self, data, filepath):
+        """Write companions first, then describe the actual output set in latest."""
+        for name, _, _, attribute in DataOverview.COMPANIONS:
+            value = getattr(self, attribute, None) if attribute else None
+            if value is None:
+                continue
+            if attribute == "_saved_workouts_data":
+                self._sw_write(value)
+            else:
+                with open(self.data_dir / name, "w") as handle:
+                    json.dump(value, handle, indent=2, default=str)
+        overview = DataOverview.build(self, data, Path(filepath).name)
+        remaining = dict(data)
+        remaining.pop("data_overview", None)
+        data.clear()
+        if "READ_THIS_FIRST" in remaining:
+            first = remaining.pop("READ_THIS_FIRST")
+            if isinstance(first, dict):
+                first["data_overview"] = "Read data_overview immediately below for companion files and route/weather/map status."
+            data["READ_THIS_FIRST"] = first
+        data["data_overview"] = overview
+        data.update(remaining)
+        return self.save_to_file(data, filepath)
+
     def save_to_file(self, data: Dict, filepath: str = "latest.json"):
         """Save data to local JSON file"""
         with open(filepath, 'w') as f:
@@ -15677,9 +17807,14 @@ def main():
     sync = IntervalsSync(athlete_id, intervals_key, github_token, github_repo, 
                          debug=args.debug, week_start_day=week_start_day,
                          zone_preference=zone_preference)
+    if args.output:
+        # Set before history, cache or forecast work; every companion uses this root.
+        sync.data_dir = Path(args.output).absolute().parent
+        sync.data_dir.mkdir(parents=True, exist_ok=True)
     sync._force_saved_workouts = args.refresh_saved_workouts
     # Default-on; either off switch disables forecast requests. See privacy/setup docs.
     sync.route_weather_enabled = RouteWeather.enabled(config)
+    sync.route_weather_default_start = RouteWeather.default_start(config)
     
     # Manual history generation
     if args.generate_history:
@@ -15776,33 +17911,12 @@ def main():
             print(f"\n📚 History: not available (will auto-generate on this run)")
     
     if args.output:
-        filepath = sync.save_to_file(data, args.output)
+        filepath = sync.save_local_outputs(data, args.output)
         print(f"   🔒 Athlete ID: REDACTED")
         print(f"\n✅ Data saved to {filepath}")
         print_summary()
         print(f"\n💡 Tip: Paste contents to AI, or upload the file directly")
         
-        # === SAVE INTERVALS.JSON (local mode) ===
-        intervals_data = getattr(sync, '_intervals_data', None)
-        if intervals_data is not None:
-            intervals_path = sync.data_dir / sync.INTERVALS_FILE
-            with open(intervals_path, 'w') as f:
-                json.dump(intervals_data, f, indent=2, default=str)
-            print(f"   📊 intervals.json saved ({len(intervals_data['activities'])} activities)")
-        
-        # === SAVE ROUTES.JSON (local mode) ===
-        routes_data = getattr(sync, '_routes_data', None)
-        if routes_data is not None:
-            routes_path = sync.data_dir / sync.ROUTES_FILE
-            with open(routes_path, 'w') as f:
-                json.dump(routes_data, f, indent=2, default=str)
-            print(f"   🗺️  routes.json saved ({len(routes_data.get('events', []))} event(s))")
-
-        # === SAVE SAVED_WORKOUTS.JSON (local mode) ===
-        saved_workouts_data = getattr(sync, '_saved_workouts_data', None)
-        if saved_workouts_data is not None:
-            sync._sw_write(saved_workouts_data)
-            print(f"   📑 saved_workouts.json saved ({sync._sw_status_line(saved_workouts_data)})")
     else:
         raw_url = sync.publish_to_github(data)
         

@@ -13,7 +13,7 @@ See templates and examples below for annotated reference.
 - Readiness assessment (HRV, RHR, Sleep vs baselines)
 - Load context (TSB, ACWR, Load/Recovery, Monotony if elevated)
 - Capability snapshot (Durability 7d mean + trend; TID drift if not consistent)
-- Today's planned workout (or rest day + next session preview)
+- One Today block per planned session in calendar order (or rest day + next session preview)
 - Go/Modify/Skip recommendation with rationale
 
 **Post-Workout Reports must include:**
@@ -46,7 +46,13 @@ See templates and examples below for annotated reference.
 See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference and rounding conventions.  
 See `REPORT_HIERARCHY.md` for how data flows between report levels.
 
+**Weather Reports are on request only:** cover all relevant planned outdoor rides in the next five days using matching current route-weather briefs. Use the route name followed by separate Date, Distance and Ascent lines. Give Start, Moving time, Total time, Wind, Gusts, Rain, Temperature and Feels like one labelled line each. Strongest gusts at and the dominant wind effect by distance require the template's supplied-band evidence; omit unsupported claims. Put the assumed-start question on its own line, followed by a blank line. Separate identity, facts, maps and rides with blank lines, including before optional Prepare and material Note lines. Use no middle-dot separators or hyphen continuation lines. Weather times use local HH:MM, adding a zone only when different from the athlete's or a UTC fallback; maps/data retain zones. Check expiry even when omitted from text; preserve outlook uncertainty. End report text with one linked line, "Weather data by Open-Meteo, CC BY 4.0." No transformation note, safety tagline, GeoNames line or fetched timestamp belongs in report text; PNG footers stay unchanged. Comparison, Coach note and No route each take one line. Read and show accessible matching PNG pages in order; never describe an unseen map. Only JSON-only, partial or missing/unreadable-map paths add forecast band detail after Feels like, one line per supplied `bands` entry, never aggregated from raw sections. Pre-workout uses the same weather layout directly under each outdoor ride or run only. No forecast report data or maps when route weather is disabled.
+
+**When no planned ride has a usable route within 120 h**, replace the single No route line with the [template's explicit no-route case](WEATHER_REPORT_TEMPLATE.md#no-planned-ride-has-a-usable-route-within-120-h): clear message, ride list and GPX/TCX hint. Only an AI with actual weather-fetch capability and a location resolved under the [shared point-weather rule](../../SECTION_11.md#point-weather-location) may add a separate **Weather at home** block with Place/source and Time lines, never route detail or a replacement inside a ride block. Without fetch capability, say "A home forecast isn't available in this setup." No planned rides at all gets a single no-rides line; the optional home block follows the template's same gates and planned-day rule.
+
 ---
+
+For fallback data, the single final attribution names the actual provider: "Weather data by MET Norway, CC BY 4.0." Name both providers on that same line only when separate report blocks use both. Link each provider and the licence.
 
 ## Files
 
@@ -54,26 +60,30 @@ See `REPORT_HIERARCHY.md` for how data flows between report levels.
 |------|-------------|
 | [REPORT_HIERARCHY.md](REPORT_HIERARCHY.md) | Overview of all report types, length norms, and data flow |
 | [PRE_WORKOUT_REPORT_TEMPLATE.md](PRE_WORKOUT_REPORT_TEMPLATE.md) | Template structure for pre-workout briefings (no data) |
-| [PRE_WORKOUT_REPORT_EXAMPLES.md](PRE_WORKOUT_REPORT_EXAMPLES.md) | 4 anonymized example pre-workout reports |
+| [PRE_WORKOUT_REPORT_EXAMPLES.md](PRE_WORKOUT_REPORT_EXAMPLES.md) | Fictional route, rest-day, indoor, multi-session and outdoor-run examples |
 | [POST_WORKOUT_REPORT_TEMPLATE.md](POST_WORKOUT_REPORT_TEMPLATE.md) | Template structure for post-workout analysis (no data) |
 | [POST_WORKOUT_REPORT_EXAMPLES.md](POST_WORKOUT_REPORT_EXAMPLES.md) | 4 anonymized example post-workout reports |
 | [WEEKLY_REPORT_TEMPLATE.md](WEEKLY_REPORT_TEMPLATE.md) | Template structure for weekly summaries (no data) |
 | [WEEKLY_REPORT_EXAMPLES.md](WEEKLY_REPORT_EXAMPLES.md) | 2 anonymized example weekly reports |
 | [BLOCK_REPORT_TEMPLATE.md](BLOCK_REPORT_TEMPLATE.md) | Template structure for block reports (no data) |
 | [BLOCK_REPORT_EXAMPLES.md](BLOCK_REPORT_EXAMPLES.md) | 2 anonymized example block reports |
+| [WEATHER_REPORT_TEMPLATE.md](WEATHER_REPORT_TEMPLATE.md) | On-request five-day planned-route weather |
+| [WEATHER_REPORT_EXAMPLES.md](WEATHER_REPORT_EXAMPLES.md) | Synthetic forecast, outlook and missing-data examples |
 
 ---
 
 ## Report Types
 
-### Pre-Workout Briefing (~15-20 lines)
+### Pre-Workout Briefing (grouped status and session blocks)
 Generated **before** a planned session. Includes:
-- Weather and coach note (optional, if location known)
+- Bold Pre-workout date and zone-labelled Data updated header
 - Current readiness (HRV, RHR, Sleep vs baselines)
 - Load context (TSB, ACWR, Load/Recovery, Monotony if > 2.3)
 - Capability snapshot (Durability 7d mean + trend; TID drift if not consistent)
-- Planned workout summary (target power/HR, duration, TSS)
-- Go/Modify/Skip recommendation with rationale
+- Four blank-separated status groups without subgroup headings; preserve all template fields and conditionals
+- A Today block per session with available type, route facts, duration, TSS and condensed main set; omit an absent structure rather than printing a no-structure line
+- Weather directly under outdoor rides and runs only, with labelled home location/source when no route is supplied
+- Go/Modify/Skip Recommendation followed immediately by two-to-three-sentence interpretation without a separate heading; expand Modify/Skip
 
 ### Post-Workout Analysis (~25-30 lines)
 Generated **after** a completed session. Includes:
@@ -121,7 +131,7 @@ These templates follow Section 11's brevity principle:
 ## Conditional Fields
 
 Some fields appear only when relevant:
-- **Weather:** Include only when the session location is known: route data for the planned session (`routes.json`), an explicit current athlete statement, or a stored home location (the current official dossier's Home region, `athlete_profile.location` in current JSON, or a configured heartbeat `Location`) when nothing suggests the athlete is elsewhere. Never infer location from memory or earlier chat. If travel is possible, sources disagree, or no source applies, omit weather or ask
+- **Weather:** Route data for the session takes precedence over any home location for that session's weather. For point forecasts use an explicit current-chat statement first `(you said)`, then `athlete_profile.location` in current `latest.json` `(from Intervals.icu)`, then the current official dossier's Home region `(from dossier)` only when the profile location is null/empty. Show the place and source under the [shared rule](../../SECTION_11.md#point-weather-location). Chat overrides last only for that conversation, never from memory or earlier chats; heartbeat configuration is not a weather-location source. If something indicates the athlete is elsewhere and the location is unresolved, omit weather or ask. City-level text needs [geocoding](../agentic/EXTERNAL_APIS.md#geocoding-for-point-weather); ambiguity or failure means unavailable with the reason. If all three sources lack a location, say "A home forecast isn't available: no home location. Add your city/country to your Intervals.icu athlete profile, or a Home region in your dossier."
 - **Monotony:** Include only if > 2.3; omit entirely when normal
 - **Load/Recovery tolerance note:** Include only when within 0.2 of threshold
 - **Coach notes** (brief contextual tips) are encouraged to humanize recommendations
