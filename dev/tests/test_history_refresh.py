@@ -505,8 +505,11 @@ class RetentionTests(TempDirCase):
         self.assertIs(json.dump, real_dump)
         self.assertEqual((self.dir / "history.json").read_bytes(), original,
                          "a failed history write truncated the existing file")
-        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["history.json"],
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["history.json", "route_eta_history.json"],
                          "a temp file was left behind after a failed write")
+        # The already-successful activity read independently persists calibration,
+        # even if the later history write fails. It must be valid, not a temp file.
+        self.assertEqual(json.loads((self.dir / "route_eta_history.json").read_text())["activities"], [])
 
     def test_state_write_failure_is_non_critical(self):
         original = (self.dir / "history.json").read_bytes()

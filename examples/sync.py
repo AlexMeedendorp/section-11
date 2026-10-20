@@ -4,6 +4,22 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.145 - Compact first/latest pre-departure snapshots with 14-day retention.
+  GitHub/On-demand workflows retain the 180-day route ETA record between runs.
+  Pairs with protocol/skill v11.79; forecast and ETA calculations are unchanged.
+Version 3.144 - Default-on route forecasts with personal ETA windows, bounded provider
+  reads, hourly caches, failure backoff and immutable pre-departure snapshots.
+  Open-Meteo primary; MET Norway fallback. Pairs with protocol/skill v11.78.
+Version 3.143 - Planned routes carry explicit validity, content-bound identity and
+  deterministic attachment selection. Reuse validated attachments without requests;
+  retry failures no more often than every 15 minutes. GPS-only routes retain geometry without
+  invented elevation. TCX dispatch, event IDs and explicit midnight are preserved.
+  Pairs with SECTION_11.md / SKILL.md v11.77.
+Version 3.142 - Native climb/descent segmentation with persistent valley splits
+  and bounded exit extension. Removes the independent 50 m gain floor;
+  retains admission, categories and display. Boundaries and admissions may change.
+  Planned routes refresh on script change; completed terrain is not backfilled.
+
 Version 3.141 - Completed-session structure from exact paired Intervals plans and
   recording-time plan alignment and repeated sets: compact latest.json summaries survive for 28 days, while
   detailed metrics and cache state share intervals.json's 14-day retention.
@@ -595,6 +611,9 @@ import json
 import os
 import argparse
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from email.utils import parsedate_to_datetime
+from urllib.parse import urljoin, urlsplit
 from typing import Dict, List, Optional, Tuple
 import base64
 import math
@@ -629,6 +648,1798 @@ class PublishOutcomeUnknown(PublishError):
     """A PUT was issued and its outcome could not be established. Not a failure."""
 
 
+class RouteWeather:
+    """Default-on forecasts from bounded, cached provider reads; no training credentials.
+
+    Activity-level inverse pace fitting is an estimate, not observed segment speed.
+    Provider fixtures follow the official documentation snapshot of 2026-10-19.
+    """
+    VERSION = 2
+    HORIZON_HOURS = 120
+    OUTLOOK_AFTER_HOURS = 72
+    REFRESH_SECONDS = 3600
+    OUTLOOK_REFRESH_SECONDS = 6 * 3600
+    FAILURE_BACKOFF_SECONDS = 900
+    MAX_POINTS = 6
+    MAX_EVENTS = 6
+    MAX_REQUESTS = 8
+    ADMISSION_SECONDS = 20
+    PASS_SECONDS = 25
+    CONNECT_SECONDS = 2
+    READ_SECONDS = 5
+    MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+    MAX_SECTIONS = 512
+    SNAPSHOT_DAYS = 14
+    SNAPSHOT_LEAD_HOURS = 24
+    MAX_SNAPSHOTS = 64
+    MAX_SNAPSHOT_SEGMENTS = 10
+    MAX_SNAPSHOT_BYTES = 16000
+    ETA_HISTORY_FILE = "route_eta_history.json"
+    ETA_HISTORY_DAYS = 180
+    PHYSICS_FULL_WEIGHT_RIDES = 20
+    PHYSICS_MIN_VALIDATION_RIDES = 12
+    PHYSICS_WIDTH_TOLERANCE = 1.10
+    ROUTE_CONSISTENCY_BOUNDS = (.75, 1.25)
+    ROUTE_CONSISTENCY_FULL_RIDES = 20
+    ROUTE_CONSISTENCY_TRANSFER_WEIGHT = .5
+    ROUTE_CONSISTENCY_MAX_AGE_SECONDS = 30 * 86400
+    UNITS = {"temperature": "C", "wind": "m/s", "precipitation": "mm",
+             "probability": "%", "distance": "km", "time": "s"}
+    OM_URL = "https://api.open-meteo.com/v1/forecast"
+    MET_URL = "https://api.met.no/weatherapi/locationforecast/2.0/complete"
+    OM_FIELDS = ("temperature_2m", "apparent_temperature", "wind_speed_10m",
+                 "wind_direction_10m", "wind_gusts_10m",
+                 "precipitation_probability", "precipitation")
+
+    def __init__(self, sync, now=None):
+        self.sync = sync
+        self.now = now or datetime.now(timezone.utc)
+        self.epoch = self.now.timestamp()
+        self.started = time.monotonic()
+        self.requests_made = 0
+        self.failures = False
+        self.tier = "forecast"
+        self.refresh_seconds = self.REFRESH_SECONDS
+        self.request_window = None
+        self.provider_errors = set()
+        # Stable per-installation spread, without exporting the athlete identifier.
+        seed = str(getattr(sync, "athlete_id", "section11"))
+        self.jitter = int(hashlib.sha256(seed.encode()).hexdigest()[:8], 16) % 301
+        try:
+            old = json.loads((sync.data_dir / sync.ROUTES_FILE).read_text())
+        except (OSError, ValueError):
+            old = {}
+        if not isinstance(old, dict):
+            old = {}
+        state = old.get("route_weather_cache", {}) if isinstance(old, dict) else {}
+        self.state = state if isinstance(state, dict) and state.get("version") == self.VERSION else {}
+        self.cache = self.state.setdefault("points", {})
+        if not isinstance(self.cache, dict):
+            self.cache = {}
+            self.state["points"] = self.cache
+        self.state["version"] = self.VERSION
+        due = self.number(self.state.get("next_attempt_at"))
+        self.can_fetch = due is None or self.epoch >= due
+        self.snapshots = self.restore_snapshots(old.get("brief_snapshots", []))
+
+    @staticmethod
+    def number(value):
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+
+    @staticmethod
+    def iso(epoch):
+        return datetime.fromtimestamp(epoch, timezone.utc).isoformat()
+
+    @staticmethod
+    def parse_time(value):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.timestamp() if parsed.tzinfo is not None else None
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                         allow_nan=False).encode()).hexdigest()
+
+    @classmethod
+    def snapshot_segments(cls, sections):
+        """Bounded contiguous segment envelopes, never raw point/time series.
+
+        Rain amounts are native-period extrema, not sums. Wet windows enclose
+        known nonzero amounts and can include dry or unknown gaps.
+        """
+        if not isinstance(sections, list) or not sections:
+            return []
+        width = max(1, math.ceil(len(sections) / cls.MAX_SNAPSHOT_SEGMENTS))
+        result = []
+        def extent(values):
+            values = [v for v in values if cls.number(v) is not None]
+            return [min(values), max(values)] if values else None
+        def window(rows, first, last):
+            starts = [cls.parse_time(r.get(first)) for r in rows]
+            ends = [cls.parse_time(r.get(last)) for r in rows]
+            starts, ends = [v for v in starts if v is not None], [v for v in ends if v is not None]
+            return [cls.iso(min(starts)), cls.iso(max(ends))] if starts and ends else None
+        for offset in range(0, len(sections), width):
+            legs = sections[offset:offset + width]
+            weather = [leg["weather"] for leg in legs]
+            periods = [p for w in weather for p in w.get("precipitation_intervals", [])]
+            wet = [p for p in periods if (cls.number(p.get("amount_mm")) or 0) > 0]
+            segment = {"start_km": legs[0]["start_km"], "end_km": legs[-1]["end_km"],
+                       "arrival_window_utc": legs[0]["arrival_window_utc"],
+                       "end_window_utc": legs[-1]["end_window_utc"],
+                       "wind_classes": sorted({c for w in weather for c in w.get("wind_classes", ["unknown"])}),
+                       "gust_max_range_mps": extent(w.get("gust_max_mps") for w in weather),
+                       "coverage": {k: all(w.get("coverage", {}).get(k) is True for w in weather)
+                                    for k in ("temperature", "wind", "gust", "precipitation", "probability")},
+                       "precipitation": {"window_utc": window(periods, "from_utc", "to_utc"),
+                                         "wet_window_utc": window(wet, "from_utc", "to_utc"),
+                                         "amount_range_mm": extent(p.get("amount_mm") for p in periods),
+                                         "probability_range_pct": extent(p.get("probability_pct") for p in periods),
+                                         "period_hours": sorted({p["period_hours"] for p in periods
+                                                                 if cls.number(p.get("period_hours")) is not None})}}
+            for key in ("temperature_range_c", "wind_speed_range_mps"):
+                segment[key] = extent(v for w in weather for v in (w.get(key) or []))
+            result.append(segment)
+        return result
+
+    @classmethod
+    def compact_snapshot(cls, snapshot):
+        """Migrate known old briefs; malformed or oversized records are not saved."""
+        try:
+            brief = snapshot["brief"]
+            if (brief.get("status") not in ("ok", "partial")
+                    or not isinstance(brief.get("event_id"), (str, int))
+                    or isinstance(brief["event_id"], bool)
+                    or not isinstance(brief.get("route_ref"), dict)
+                    or not all(isinstance(brief.get(k, {}), dict)
+                               for k in ("departure", "eta", "summary", "provenance"))
+                    or not all(brief.get(k) for k in ("brief_id", "cache_key", "departure"))):
+                return None
+            # Already compact records are copied without changing the first record.
+            if snapshot.get("snapshot_version") == 1:
+                compact = snapshot
+            else:
+                def pick(value, keys):
+                    return {k: value[k] for k in keys if k in value}
+                saved = pick(brief, ("schema_version", "event_id", "route_ref", "brief_id", "cache_key",
+                                     "departure", "tier", "status", "fetched_at", "expires_at", "units"))
+                saved["provenance"] = pick(brief.get("provenance", {}),
+                    ("provider", "fallback", "attribution", "source_url", "licence", "licence_url", "transformations"))
+                saved["eta"] = pick(brief.get("eta", {}),
+                    ("method", "status", "duration_range_s", "moving_duration_range_s", "moving_duration_central_s"))
+                saved["summary"] = pick(brief.get("summary", {}),
+                    ("temperature_range_c", "gust_max_mps", "precipitation_probability_max_pct",
+                     "hourly_precipitation_max_mm", "period_precipitation_max_mm", "complete_distance_pct", "aggregation"))
+                saved["segments"] = cls.snapshot_segments(brief.get("sections", []))
+                if brief.get("outlook"):
+                    saved["outlook"] = pick(brief["outlook"], ("window_utc", "precipitation_period_hours",
+                        "wind_from_sectors", "wind_speed_range_mps", "interpretation"))
+                compact = {"snapshot_version": 1, "saved_at": snapshot["saved_at"],
+                           "departure_basis": "scheduled; actual departure not known",
+                           "aggregation": "Contiguous segment extrema; gust range is of section maxima. "
+                                          "Rain amounts are native-period extrema, not totals; wet windows "
+                                          "may contain dry or unknown gaps. Missing coverage is not dry weather.",
+                           "brief": saved}
+            encoded = json.dumps(compact, separators=(",", ":"), allow_nan=False)
+            return json.loads(encoded) if len(encoded.encode()) <= cls.MAX_SNAPSHOT_BYTES else None
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return None
+
+    def restore_snapshots(self, snapshots):
+        """One first and one latest per event, including after route/time edits.
+
+        Departures, not save dates or calendar presence, determine expiry. This
+        also preserves removed events until their scheduled departure + 14 days.
+        """
+        groups = {}
+        for value in snapshots if isinstance(snapshots, list) else []:
+            compact = self.compact_snapshot(value)
+            if compact is None:
+                continue
+            brief = compact["brief"]
+            departure = brief.get("departure")
+            start = self.parse_time(departure.get("at_utc")) if isinstance(departure, dict) else None
+            saved = self.parse_time(compact.get("saved_at"))
+            if (start is None or saved is None or saved > self.epoch
+                    or not 0 < start - saved <= self.SNAPSHOT_LEAD_HOURS * 3600
+                    or self.epoch >= start + self.SNAPSHOT_DAYS * 86400):
+                continue
+            groups.setdefault(str(brief["event_id"]), []).append(compact)
+        selected = []
+        for group in groups.values():
+            group.sort(key=lambda s: self.parse_time(s["saved_at"]))
+            first, latest = group[0], group[-1]
+            selected.append(first)
+            if latest != first:
+                selected.append(latest)
+        selected.sort(key=lambda s: self.parse_time(s["saved_at"]))
+        return selected[:self.MAX_SNAPSHOTS]
+
+    def save_snapshot(self, brief):
+        if brief.get("status") not in ("ok", "partial"):
+            return
+        start = self.parse_time((brief.get("departure") or {}).get("at_utc"))
+        reason = None
+        if start is None or not 0 < start - self.epoch <= self.SNAPSHOT_LEAD_HOURS * 3600:
+            reason = "outside_snapshot_window"
+        else:
+            ride = [i for i, s in enumerate(self.snapshots)
+                    if str(s["brief"]["event_id"]) == str(brief["event_id"])]
+            if ride and self.snapshots[ride[-1]]["brief"]["brief_id"] == brief["brief_id"]:
+                return
+            compact = self.compact_snapshot({"saved_at": self.iso(self.epoch), "brief": brief})
+            if compact is None:
+                reason = "snapshot_not_saved"
+            elif len(ride) == 2:
+                self.snapshots[ride[-1]] = compact
+            elif len(self.snapshots) < self.MAX_SNAPSHOTS:
+                self.snapshots.append(compact)
+            else:
+                reason = "capacity_reached"
+        if reason:
+            brief["snapshot_status"] = reason
+            brief["snapshot_context"] = "now"
+
+    @staticmethod
+    def enabled(config, environ=None):
+        environ = os.environ if environ is None else environ
+        # Either explicit off switch wins, even when the other says on.
+        return config.get("route_weather") is not False and environ.get("SECTION11_ROUTE_WEATHER") != "0"
+
+    @staticmethod
+    def outdoor(act):
+        return (act.get("type") in ("Ride", "GravelRide", "MountainBikeRide")
+                and not any(act.get(key) for key in ("trainer", "indoor", "virtual", "is_virtual"))
+                and "virtual" not in str(act.get("sub_type", "")).lower())
+
+    @classmethod
+    def update_history(cls, sync, activities, previous, full_history=False, now=None):
+        """Retain only already-fetched 180-day pace facts, outside updater-cleared caches.
+
+        Recorded ascent stays distinct from producer-derived ascent. Optional
+        elapsed/ascent facts migrate in place from normal existing fetches.
+        """
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=cls.ETA_HISTORY_DAYS)).date().isoformat()
+        today = now.date().isoformat()
+        path = sync.data_dir / cls.ETA_HISTORY_FILE
+        owner = cls.digest(str(getattr(sync, "athlete_id", "")))
+        try:
+            old = json.loads(path.read_text())
+        except (OSError, ValueError):
+            old = {}
+        if not isinstance(old, dict) or old.get("version") != 1 or old.get("owner_key") != owner:
+            old = {}
+        rows = {str(r["id"]): r for r in old.get("activities", [])
+                if isinstance(r, dict) and r.get("id") is not None
+                and cutoff <= str(r.get("start_date_local", ""))[:10] <= today}
+        if full_history:
+            present = {str(a.get("id")) for a in activities}
+            rows = {key: row for key, row in rows.items() if key in present}
+        for act in activities:
+            aid = act.get("id")
+            if aid is None:
+                continue
+            key = str(aid)
+            date = str(act.get("start_date_local", ""))[:10]
+            distance, seconds = cls.number(act.get("distance")), cls.number(act.get("moving_time"))
+            if (not cls.outdoor(act) or not cutoff <= date <= today or distance is None or seconds is None
+                    or seconds < 1200 or distance <= 0 or not 3 <= distance / seconds * 3.6 <= 65):
+                rows.pop(key, None)
+                continue
+            terrain = previous.get(key, {}).get("terrain_summary") or rows.get(key, {}).get("terrain_summary", {})
+            features = cls.terrain_distances(terrain)
+            row = {"id": aid, "type": act["type"], "start_date_local": date,
+                   "distance": distance, "moving_time": seconds}
+            elapsed = cls.number(act.get("elapsed_time", rows.get(key, {}).get("elapsed_time")))
+            if elapsed is not None and seconds <= elapsed <= 4 * seconds:
+                row["elapsed_time"] = elapsed
+            ascent = cls.number(act.get("total_elevation_gain", rows.get(key, {}).get("recorded_ascent_m")))
+            if ascent is not None and 0 <= ascent <= distance * 0.3:
+                row["recorded_ascent_m"] = ascent
+            route_ascent = cls.number(terrain.get("total_elevation_m", rows.get(key, {}).get("producer_ascent_m")))
+            if route_ascent is not None and 0 <= route_ascent <= distance * 0.3:
+                row["producer_ascent_m"] = route_ascent
+            for field, aliases in (
+                    ("average_power_w", ("average_watts", "avg_watts", "average_power", "avgWatts", "icu_average_watts")),
+                    ("weighted_power_w", ("weighted_average_watts", "np", "icu_pm_np", "normalizedPower", "icu_weighted_avg_watts"))):
+                raw = next((act[k] for k in aliases if act.get(k) is not None),
+                           None if any(k in act for k in aliases) else rows.get(key, {}).get(field))
+                value = cls.number(raw)
+                if value is not None and 40 <= value <= 600:
+                    row[field] = value
+            row["power_availability"] = ("average" if "average_power_w" in row else
+                                         "weighted_proxy" if "weighted_power_w" in row else "unavailable")
+            if features is not None and abs(sum(features) - distance / 1000) <= distance / 10000:
+                row["terrain_summary"] = {"total_distance_km": sum(features),
+                                           "climbs": [{"distance_km": features[1]}],
+                                           "descents": [{"distance_km": features[2]}]}
+            rows[key] = row
+        record = {"version": 1, "owner_key": owner, "window_days": cls.ETA_HISTORY_DAYS,
+                  "last_full_fetch_at": cls.iso(now.timestamp()) if full_history else old.get("last_full_fetch_at"),
+                  "activities": sorted(rows.values(), key=lambda r: (r["start_date_local"], str(r["id"])))}
+        status = "persisted"
+        if record != old:
+            tmp = path.with_name(path.name + ".tmp")
+            try:
+                tmp.write_text(json.dumps(record, allow_nan=False))
+                os.replace(tmp, path)
+            except OSError:
+                status = "persistence_failed"
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return {**record, "persistence_status": status}
+
+    @classmethod
+    def departure(cls, event, athlete):
+        raw = event.get("start_date_local")
+        if not isinstance(raw, str) or "T" not in raw:
+            raise ValueError("missing_start_time")
+        try:
+            local = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("invalid_start_time")
+        if local.tzinfo is not None:
+            return {"at_utc": cls.iso(local.timestamp()), "timezone": str(local.tzinfo),
+                    "source": "event_explicit_offset"}
+        name = event.get("timezone") or athlete.get("timezone")
+        if not isinstance(name, str):
+            raise ValueError("missing_timezone")
+        try:
+            zone = ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError("invalid_timezone")
+        candidates = {local.replace(tzinfo=zone, fold=fold).timestamp() for fold in (0, 1)
+                      if local.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc)
+                      .astimezone(zone).replace(tzinfo=None) == local}
+        if len(candidates) != 1:
+            raise ValueError("ambiguous_or_nonexistent_local_time")
+        return {"at_utc": cls.iso(candidates.pop()), "timezone": name,
+                "source": "event_timezone" if event.get("timezone") else "athlete_timezone"}
+
+    @classmethod
+    def terrain_distances(cls, terrain):
+        total = cls.number(terrain.get("total_distance_km"))
+        if total is None or total <= 0:
+            return None
+        distances = []
+        for key in ("climbs", "descents"):
+            segments = terrain.get(key)
+            if not isinstance(segments, list):
+                return None
+            values = [cls.number(s.get("distance_km")) for s in segments if isinstance(s, dict)]
+            if len(values) != len(segments) or any(v is None or v < 0 for v in values):
+                return None
+            distances.append(sum(values))
+        if sum(distances) > total:
+            return None
+        return [total - sum(distances), *distances]
+
+    @classmethod
+    def calibrate(cls, activities, previous):
+        """Fit moving seconds = sum(class km * class seconds/km), using existing data."""
+        rows, ids, dates, pace_rows = [], [], [], []
+        eligible = 0
+        for act in activities:
+            if not cls.outdoor(act):
+                continue
+            eligible += 1
+            terrain = previous.get(str(act.get("id")), {}).get("terrain_summary", {})
+            features = cls.terrain_distances(terrain)
+            seconds = cls.number(act.get("moving_time"))
+            distance = cls.number(act.get("distance"))
+            if (seconds is None or seconds < 1200 or distance is None or distance <= 0
+                    or not 3 <= distance / seconds * 3.6 <= 65):
+                continue
+            pace_rows.append((distance / seconds * 3.6, act.get("id"), str(act.get("start_date_local", ""))[:10]))
+            if features is None or abs(sum(features) - distance / 1000) > distance / 10000:
+                continue
+            rows.append((features, seconds))
+            ids.append(act.get("id"))
+            dates.append(str(act.get("start_date_local", ""))[:10])
+        # Generic speeds are only returned when no personal mode qualifies.
+        speeds = {"flat": [12, 28], "climb": [5, 14], "descent": [15, 40]}
+        result = {"method": "activity_terrain_inverse_pace_v1", "status": "default",
+                  "source": "rolling_180d_record_from_existing_activity_fetches",
+                  "eligible_outdoor_rides": eligible, "sample_count": len(rows),
+                  "terrain_sample_count": len(rows), "window_days": cls.ETA_HISTORY_DAYS,
+                  "sample_activity_ids": ids, "date_range": [min(dates), max(dates)] if dates else None,
+                  "speed_ranges_kmh": speeds, "reason": "insufficient_terrain_history",
+                  "uncertainty": "Planning ranges, not statistical confidence intervals; no observed segment speeds.",
+                  "stops": cls.stop_model(activities)}
+        if len(rows) < 8:
+            return cls.pace_prior(result, pace_rows)
+        # Test independent terrain mixtures; correlated climb/descent distance cannot
+        # identify separate speeds and must not masquerade as rich calibration.
+        gram = [[sum(x[i] * x[j] for x, _ in rows) for j in range(3)] for i in range(3)]
+        det = (gram[0][0] * (gram[1][1] * gram[2][2] - gram[1][2] ** 2)
+               - gram[0][1] * (gram[0][1] * gram[2][2] - gram[1][2] * gram[0][2])
+               + gram[0][2] * (gram[0][1] * gram[1][2] - gram[1][1] * gram[0][2]))
+        if any(gram[i][i] <= 0 for i in range(3)) or det / math.prod(gram[i][i] for i in range(3)) < 0.005:
+            result["reason"] = "terrain_mixtures_not_identifiable"
+            return cls.pace_prior(result, pace_rows)
+        paces = [180.0, 360.0, 120.0]
+        # Bounded least squares, coordinate descent. No scientific library dependency.
+        bounds = [(72, 600), (120, 1200), (55.4, 450)]
+        for _ in range(200):
+            for i in range(3):
+                value = sum(x[i] * (y - sum(x[j] * paces[j] for j in range(3) if j != i))
+                            for x, y in rows) / gram[i][i]
+                paces[i] = min(bounds[i][1], max(bounds[i][0], value))
+        residuals = [abs(sum(x[i] * paces[i] for i in range(3)) - y) / y for x, y in rows]
+        error = statistics.median(residuals)
+        if error > 0.25 or any(abs(paces[i] - edge) < 0.01 for i in range(3) for edge in bounds[i]):
+            result["reason"] = "pace_fit_unreliable"
+            return cls.pace_prior(result, pace_rows)
+        ratios = [y / sum(x[i] * paces[i] for i in range(3)) for x, y in rows]
+        lower, upper = cls.observed_interval(ratios)
+        result.update(status="calibrated", reason=None, median_relative_residual=round(error, 3),
+                      method="activity_terrain_inverse_pace_v2",
+                      class_paces_s_per_km=dict(zip(speeds, paces)), residual_ratio_range=[lower, upper],
+                      residual_ratio_median=statistics.median(ratios),
+                      interval_basis="observed_fit_residuals_central_80pct; thin samples use full range plus 10%",
+                      speed_ranges_kmh={kind: [3600 / pace / upper, 3600 / pace / lower]
+                                        for kind, pace in zip(speeds, paces)})
+        return result
+
+    @staticmethod
+    def quantile(values, fraction):
+        values = sorted(values)
+        index = (len(values) - 1) * fraction
+        lo = math.floor(index)
+        hi = math.ceil(index)
+        return values[lo] + (values[hi] - values[lo]) * (index - lo)
+
+    @classmethod
+    def observed_interval(cls, values):
+        """Central 80% of observations; <12 samples retain extremes plus 10%."""
+        if len(values) < 12:
+            return min(values) * 0.9, max(values) * 1.1
+        return cls.quantile(values, 0.1), cls.quantile(values, 0.9)
+
+    @classmethod
+    def stop_model(cls, activities):
+        ratios = []
+        for act in activities:
+            moving, elapsed = cls.number(act.get("moving_time")), cls.number(act.get("elapsed_time"))
+            if (cls.outdoor(act) and moving is not None and moving >= 1200 and elapsed is not None
+                    and moving <= elapsed <= 4 * moving):
+                ratios.append(elapsed / moving)
+        if not ratios:
+            return {"status": "default", "sample_count": 0, "ratio_range": [1.0, 1.25],
+                    "reason": "elapsed_time_unavailable", "median_ratio": None}
+        bounds = ([min(ratios), max(ratios)] if len(ratios) < 12 else
+                  [cls.quantile(ratios, 0.1), cls.quantile(ratios, 0.9)])
+        return {"status": "history" if len(ratios) >= 12 else "history_thin", "sample_count": len(ratios),
+                "ratio_range": bounds, "median_ratio": statistics.median(ratios),
+                "reason": "whole_ride_elapsed_over_moving; stop locations unknown"}
+
+    @classmethod
+    def pace_prior(cls, result, rows):
+        """Observed whole-ride pace dispersion, with no generic class multipliers."""
+        dates = [r[2] for r in rows]
+        result.update(sample_count=len(rows), sample_activity_ids=[r[1] for r in rows],
+                      date_range=[min(dates), max(dates)] if dates else None)
+        if len(rows) < 3:
+            result["reason"] = "insufficient_outdoor_history"
+            return result
+        paces = [3600 / r[0] for r in rows]
+        low, high = cls.observed_interval(paces)
+        result.update(status="history_prior", method="outdoor_moving_pace_quantiles_v2",
+                      median_moving_speed_kmh=3600 / statistics.median(paces),
+                      pace_range_s_per_km=[low, high], median_pace_s_per_km=statistics.median(paces),
+                      speed_ranges_kmh={kind: [3600 / high, 3600 / low] for kind in ("flat", "climb", "descent")},
+                      interval_basis="observed_moving_pace_central_80pct; thin samples use full range plus 10%",
+                      speed_basis="whole_ride_equivalent_not_measured_class_speeds",
+                      uncertainty="Observed whole-ride variability; class speeds are not measured. "
+                                  "Without a supported terrain model, timing assumes the historical terrain mix. "
+                                  "The empirical 80% target is not guaranteed future coverage.")
+        return result
+
+    @classmethod
+    def ascent_model(cls, result, activities):
+        """Robust pace = intercept + slope * recorded ascent/km; sources stay explicit."""
+        rows, pairs = [], []
+        for act in activities:
+            km = cls.number(act.get("distance"))
+            seconds, gain = cls.number(act.get("moving_time")), cls.number(act.get("recorded_ascent_m"))
+            if (not cls.outdoor(act) or km is None or km <= 0 or seconds is None or seconds < 1200
+                    or not 3 <= km / seconds * 3.6 <= 65 or gain is None or not 0 <= gain <= km * .3):
+                continue
+            km /= 1000
+            rows.append((gain / km, seconds / km, act.get("id")))
+            producer = cls.number(act.get("producer_ascent_m"))
+            if producer is not None and producer >= 50 and 0.5 <= gain / producer <= 3:
+                pairs.append(gain / producer)
+        if len(rows) < 12 or cls.quantile([r[0] for r in rows], .9) - cls.quantile([r[0] for r in rows], .1) < 5:
+            return result
+        # Bound pair count deterministically without discarding the full residual sample.
+        ordered = sorted(rows)
+        fit = [ordered[round(i * (len(rows) - 1) / 199)] for i in range(200)] if len(rows) > 200 else ordered
+        slopes = [(b[1] - a[1]) / (b[0] - a[0]) for i, a in enumerate(fit) for b in fit[i + 1:] if b[0] - a[0] >= .5]
+        slope = statistics.median(slopes) if slopes else 0
+        intercept = statistics.median(y - slope * x for x, y, _ in rows)
+        if not 0 < slope <= 20 or not 55.4 <= intercept <= 1200:
+            return result
+        median_pace = statistics.median(y for _, y, _ in rows)
+        null_error = statistics.median(abs(y - median_pace) for _, y, _ in rows)
+        error = statistics.median(abs(y - (intercept + slope * x)) for x, y, _ in rows)
+        if null_error <= 0 or error > .8 * null_error:
+            return result
+        # Paired same-producer ascent estimates the source ratio. Without pairs,
+        # propagate a labelled 1.0..1.5 device/route allowance, never assume equality.
+        bias = [cls.quantile(pairs, .1), cls.quantile(pairs, .9)] if len(pairs) >= 5 else [1.0, 1.5]
+        residuals = [y / (intercept + slope * x) for x, y, _ in rows]
+        used_ids = {r[2] for r in rows}
+        dates = [str(a.get("start_date_local", ""))[:10] for a in activities if a.get("id") in used_ids]
+        result.update(status="calibrated", method="personal_ascent_pace_v1", reason=None,
+                      sample_count=len(rows), sample_activity_ids=[r[2] for r in rows],
+                      date_range=[min(dates), max(dates)] if dates else None,
+                      ascent_model={"intercept_s_per_km": intercept, "slope_s_per_recorded_m": slope,
+                                    "residual_ratio_range": list(cls.observed_interval(residuals)),
+                                    "residual_ratio_median": statistics.median(residuals),
+                                    "recorded_ascent_per_km_range": [min(x for x, _, _ in rows), max(x for x, _, _ in rows)],
+                                    "sample_count": len(rows), "sample_activity_ids": [r[2] for r in rows],
+                                    "device_over_route_ascent_range": bias, "paired_source_samples": len(pairs),
+                                    "source_bias_status": "paired_producer_ratio" if len(pairs) >= 5 else "assumed_1_to_1_5"},
+                      interval_basis="observed_ascent_model_residuals_central_80pct_plus_source_bias",
+                      uncertainty="Personal pace/ascent association, not a causal power or measured segment model. "
+                                  "Recorded and route ascent differ; the source ratio is explicit and uncertain. "
+                                  "Device changes, road surface and terrain extrapolation can invalidate coverage.")
+        return result
+
+    @classmethod
+    def moving_window(cls, eta, distance_km, features=None, ascent_m=None, ascent_source="route"):
+        """Unrounded moving seconds, shared by production sections and offline evaluation."""
+        model = eta.get("ascent_model")
+        if model is not None and cls.number(ascent_m) is not None and ascent_m >= 0:
+            bias = [1, 1] if ascent_source == "recorded" else model["device_over_route_ascent_range"]
+            base = distance_km * model["intercept_s_per_km"]
+            gain = ascent_m * model["slope_s_per_recorded_m"]
+            low, high = model["residual_ratio_range"]
+            return [(base + gain * bias[0]) * low, (base + gain * bias[1]) * high,
+                    (base + gain * statistics.mean(bias)) * model["residual_ratio_median"]]
+        if eta.get("pace_range_s_per_km") is not None:
+            low, high = eta["pace_range_s_per_km"]
+            return [distance_km * low, distance_km * high, distance_km * eta["median_pace_s_per_km"]]
+        features = features or [distance_km, 0, 0]
+        low = sum(km / eta["speed_ranges_kmh"][kind][1] * 3600 for km, kind in zip(features, ("flat", "climb", "descent")))
+        high = sum(km / eta["speed_ranges_kmh"][kind][0] * 3600 for km, kind in zip(features, ("flat", "climb", "descent")))
+        paces = eta.get("class_paces_s_per_km")
+        center = (sum(km * paces[kind] for km, kind in zip(features, ("flat", "climb", "descent")))
+                  * eta["residual_ratio_median"]) if paces else (low + high) / 2
+        return [low, high, center]
+
+    @classmethod
+    def eta_inputs(cls, cycling, wellness, athlete):
+        """Use already-fetched outdoor FTP and current wellness/profile weight in kg."""
+        wellness_weight = wellness.get("weight")
+        result = {"ftp_w": cycling.get("ftp"), "ftp_source": "cycling.ftp",
+                "body_weight_kg": wellness_weight if wellness_weight is not None else athlete.get("icu_weight"),
+                "weight_source": "latest_wellness.weight" if wellness_weight is not None else "athlete.icu_weight",
+                "weight_date": wellness.get("id") if wellness_weight is not None else None}
+        # Only an unambiguous outdoor sportSettings percentage-boundary array.
+        # Never infer zones from time-in-zone records or from indoor/eFTP fields.
+        zones = [s.get("power_zones") for s in athlete.get("sportSettings", []) or []
+                 if isinstance(s, dict) and "Ride" in (s.get("types") or [])
+                 and s.get("ftp") == cycling.get("ftp") and s.get("power_zones") is not None]
+        if zones and all(z == zones[0] for z in zones):
+            result["power_zone_upper_pct"] = zones[0]
+        return result
+
+    @classmethod
+    def physics_context(cls, inputs):
+        """Public road assumptions; main outdoor FTP only, never eFTP/indoor FTP.
+
+        Constants are planning choices, not fitted equipment measurements. Zone
+        upper boundaries are percentages: mid-Z2 flat, mid-Z3 long climb, top-Z3
+        short climb. Unsupported/ambiguous zone arrays keep the labelled defaults.
+        """
+        inputs = inputs or {}
+        ftp, weight = cls.number(inputs.get("ftp_w")), cls.number(inputs.get("body_weight_kg"))
+        reason = ("missing_or_invalid_main_ftp" if ftp is None or not 50 <= ftp <= 600 else
+                  "missing_or_invalid_weight" if weight is None or not 30 <= weight <= 200 else
+                  "implausible_ftp_per_kg" if not .75 <= ftp / weight <= 7 else None)
+        intensities = {"flat": .65, "long_climb": .825, "short_climb": .90}
+        zone_source = "public_default_55_75_90_percent_boundaries"
+        zones = inputs.get("power_zone_upper_pct")
+        if (isinstance(zones, list) and len(zones) >= 3
+                and all(cls.number(z) is not None for z in zones)
+                and all(a < b for a, b in zip(zones, zones[1:]))
+                and 40 <= zones[0] < zones[1] < zones[2] <= 110):
+            intensities = {"flat": (zones[0] + zones[1]) / 200,
+                           "long_climb": (zones[1] + zones[2]) / 200,
+                           "short_climb": zones[2] / 100}
+            zone_source = "outdoor_sportSettings.power_zones_percent_upper_bounds"
+        return {"available": reason is None, "unavailable_reason": reason,
+                "ftp_w": ftp, "body_weight_kg": weight,
+                "ftp_source": "thresholds.sports.cycling.ftp",
+                "weight_source": inputs.get("weight_source"), "weight_date": inputs.get("weight_date"),
+                "prior_intensities": intensities, "zone_source": zone_source,
+                "assumptions": {"cda_m2": .32, "crr": .005, "bike_kit_mass_kg": 10.0,
+                                "drivetrain_efficiency": .97, "gravity_m_s2": 9.80665,
+                                "sea_level_density_kg_m3": 1.225, "density_scale_height_m": 8500,
+                                "descent_cap_kmh": 50.0, "descent_floor_kmh": 15.0,
+                                "long_climb_km": 2.0, "history_proxy_gradient": .05}}
+
+    @classmethod
+    def physics_speed(cls, context, power_w, gradient, elevation_m, long_climb=False):
+        """Actual gradient; downhill uses the faster of flat-power and coasting speed.
+
+        Retain the -0.5% descent threshold and 50 km/h planning cap. Shallow
+        descents can be pedalled; gravity alone may reach the cap on steep ones.
+        The coasting floor and cap are assumptions, not safe-speed advice.
+        """
+        assumptions = context["assumptions"]
+        air = assumptions["sea_level_density_kg_m3"] * math.exp(-max(-500, min(6000, elevation_m)) / assumptions["density_scale_height_m"])
+        local = {**assumptions, "air_density_kg_m3": air}
+        mass = context["body_weight_kg"] + assumptions["bike_kit_mass_kg"]
+        if gradient < -.005:
+            theta = math.atan(gradient)
+            force = mass * assumptions["gravity_m_s2"] * (-math.sin(theta) - assumptions["crr"] * math.cos(theta))
+            coast = math.sqrt(max(0, 2 * force / (air * assumptions["cda_m2"]))) * 3.6
+            powered = cls.steady_speed(power_w, mass, gradient, local)
+            return min(assumptions["descent_cap_kmh"], max(powered, assumptions["descent_floor_kmh"], coast))
+        intensity = context["prior_intensities"]
+        multiplier = (intensity["long_climb" if long_climb else "short_climb"] / intensity["flat"]
+                      if gradient >= .02 else 1.0)
+        return cls.steady_speed(power_w * multiplier, mass, gradient, local)
+
+    @classmethod
+    def history_gain(cls, row):
+        for key in ("producer_ascent_m", "recorded_ascent_m"):
+            gain = cls.number(row.get(key))
+            distance = cls.number(row.get("distance"))
+            if gain is not None and distance is not None and 0 <= gain <= distance * .3:
+                return gain, key
+        return None, "unavailable"
+
+    @classmethod
+    def ride_power(cls, row):
+        for key in ("average_power_w", "weighted_power_w"):
+            value = cls.number(row.get(key))
+            if value is not None and 40 <= value <= 600:
+                return value, key
+        return None, "unavailable"
+
+    @classmethod
+    def proxy_seconds(cls, context, km, ascent, power_w, factor=1.0):
+        """Aggregate-history proxy only: symmetric 5% climb/descent, rest flat.
+
+        Short routes with more gain use the required steeper grade. Historical
+        elevation, grade sequence, braking and drafting are not available.
+        """
+        climb = min(km / 2, ascent / (1000 * context["assumptions"]["history_proxy_gradient"]))
+        grade = ascent / (1000 * climb) if climb else 0
+        total = 0.0
+        for distance, gradient in ((km - 2 * climb, 0), (climb, grade), (climb, -grade)):
+            if distance <= 0:
+                continue
+            speed = cls.physics_speed(context, power_w, gradient, 0, climb >= 2)
+            seconds = distance / speed * 3600 * factor
+            total += max(seconds, distance / 50 * 3600) if gradient < -.005 else seconds
+        return total
+
+    @classmethod
+    def physics_rows(cls, rows, context):
+        usable = []
+        if not context["available"]:
+            return usable
+        for row in rows:
+            power, source = cls.ride_power(row)
+            gain, gain_source = cls.history_gain(row)
+            if power is None or gain is None:
+                continue
+            # Own-power calibration must not import possibly stale zone settings.
+            observed_context = {**context, "prior_intensities": {"flat": .65, "long_climb": .825, "short_climb": .90}}
+            raw = cls.proxy_seconds(observed_context, row["distance"] / 1000, gain, power)
+            usable.append({**row, "_power": power, "_power_source": source, "_gain": gain,
+                           "_gain_source": gain_source, "_own_power_ratio": row["moving_time"] / raw})
+        return usable
+
+    @classmethod
+    def fit_physics(cls, rows, context, power_rows=None):
+        n = len(rows)
+        strength = min(1.0, n / cls.PHYSICS_FULL_WEIGHT_RIDES)
+        powers = ([r["_power"] for r in rows] if power_rows is None else
+                  [cls.ride_power(r)[0] for r in power_rows if cls.ride_power(r)[0] is not None])
+        power_strength = min(1.0, len(powers) / cls.PHYSICS_FULL_WEIGHT_RIDES)
+        prior = context["ftp_w"] * context["prior_intensities"]["flat"]
+        observed = statistics.median(powers) if powers else prior
+        power = min(500.0, max(40.0, prior * (1 - power_strength) + observed * power_strength))
+        raw_factor = statistics.median([r["_own_power_ratio"] for r in rows]) if rows else 1.0
+        factor = min(1.5, max(.7, 1 + strength * (raw_factor - 1)))
+        return {"flat_power_w": power, "time_factor": factor, "sample_count": n,
+                "history_weight": power_strength, "prior_weight": 1 - power_strength,
+                "factor_history_weight": strength, "power_sample_count": len(powers),
+                "observed_median_power_w": observed if powers else None,
+                "weighted_power_proxy_samples": sum(r["_power_source"] == "weighted_power_w" for r in rows),
+                "raw_time_factor": raw_factor, "time_factor_bounds": [.7, 1.5],
+                "flat_power_bounds_w": [40, 500]}
+
+    @staticmethod
+    def fitted_physics_context(context, fit):
+        # With enough ride power, both FTP and user zone boundaries drop out.
+        # Aggregate ride power cannot identify actual segment effort; retain
+        # explicitly assumed public terrain ratios, scaled by observed watts.
+        defaults = {"flat": .65, "long_climb": .825, "short_climb": .90}
+        prior = context["prior_intensities"]
+        weight = fit["prior_weight"]
+        ratios = {key: weight * prior[key] / prior["flat"] + (1 - weight) * value / defaults["flat"]
+                  for key, value in defaults.items()}
+        return {**context, "prior_intensities": ratios}
+
+    @classmethod
+    def physics_prediction(cls, row, context, fit):
+        return cls.proxy_seconds(cls.fitted_physics_context(context, fit), row["distance"] / 1000, row["_gain"],
+                                 fit["flat_power_w"], fit["time_factor"])
+
+    @classmethod
+    def physics_residuals(cls, rows, context):
+        # Each residual excludes its own ride's power AND moving time from fit.
+        return [row["moving_time"] / cls.physics_prediction(
+                    row, context, cls.fit_physics(rows[:i] + rows[i + 1:], context))
+                for i, row in enumerate(rows) if len(rows) >= 4]
+
+    @classmethod
+    def physics_interval(cls, residuals):
+        if not residuals:
+            return [.7, 1.4]
+        low, high = cls.observed_interval(residuals)
+        if len(residuals) < cls.PHYSICS_MIN_VALIDATION_RIDES:
+            low, high = min(low, .75), max(high, 1.35)
+        return [min(1, low), max(1, high)]
+
+    @classmethod
+    def pace_model(cls, rows):
+        result = {"status": "default", "method": "generic_default_v2",
+                  "source": "rolling_180d_record_from_existing_activity_fetches",
+                  "window_days": cls.ETA_HISTORY_DAYS,
+                  "terrain_sample_count": sum(cls.terrain_distances(r.get("terrain_summary", {})) is not None for r in rows),
+                  "speed_ranges_kmh": {"flat": [22, 32], "climb": [8, 18], "descent": [20, 50]},
+                  "stops": cls.stop_model(rows), "reason": "insufficient_terrain_history"}
+        return cls.pace_prior(result, [(r["distance"] / r["moving_time"] * 3.6, r["id"],
+                                       str(r.get("start_date_local", ""))[:10]) for r in rows])
+
+    @staticmethod
+    def score_windows(windows):
+        n = len(windows)
+        return {"evaluated_rides": n,
+                "coverage": sum(lo <= actual <= hi for lo, hi, center, actual in windows) / n if n else None,
+                "median_window_width_s": statistics.median([hi - lo for lo, hi, center, actual in windows]) if n else None,
+                "median_relative_window_width": statistics.median([(hi - lo) / center for lo, hi, center, actual in windows]) if n else None,
+                "median_absolute_relative_error": statistics.median([abs(center - actual) / actual for lo, hi, center, actual in windows]) if n else None}
+
+    @classmethod
+    def compare_physics(cls, rows, context, record_count=None):
+        """Same rides, nested LOO: held-out power/time never set its prediction or band."""
+        scores = {name: [] for name in ("pace", "ftp_zones_physics", "ride_power_physics")}
+        if len(rows) >= 4:
+            for i, held in enumerate(rows):
+                training = rows[:i] + rows[i + 1:]
+                pace = cls.moving_window(cls.pace_model(training), held["distance"] / 1000)
+                scores["pace"].append([*pace, held["moving_time"]])
+                default = cls.fit_physics([], context)
+                center = cls.physics_prediction(held, context, default)
+                scores["ftp_zones_physics"].append([center * .7, center * 1.4, center, held["moving_time"]])
+                fit = cls.fit_physics(training, context)
+                center = cls.physics_prediction(held, context, fit)
+                low, high = cls.physics_interval(cls.physics_residuals(training, context))
+                scores["ride_power_physics"].append([center * low, center * high, center, held["moving_time"]])
+        summary = {name: cls.score_windows(windows) for name, windows in scores.items()}
+        pace, physics = summary["pace"], summary["ride_power_physics"]
+        complete = record_count is None or len(rows) == record_count
+        passed = (complete and pace["evaluated_rides"] >= cls.PHYSICS_MIN_VALIDATION_RIDES
+                  and physics["coverage"] >= pace["coverage"]
+                  and physics["median_window_width_s"] <= pace["median_window_width_s"] * cls.PHYSICS_WIDTH_TOLERANCE
+                  and physics["median_relative_window_width"] <= pace["median_relative_window_width"] * cls.PHYSICS_WIDTH_TOLERANCE)
+        return {"methods": summary, "same_record_rides": len(rows), "safeguard_passed": passed,
+                "complete_record_comparison": complete, "record_rides": record_count if record_count is not None else len(rows),
+                "width_tolerance_factor": cls.PHYSICS_WIDTH_TOLERANCE,
+                "minimum_validation_rides": cls.PHYSICS_MIN_VALIDATION_RIDES,
+                "history_geometry": "aggregate_symmetric_grade_proxy_not_observed_profiles",
+                "includes_stops": False, "includes_rounding": False}
+
+    @classmethod
+    def prepare_eta(cls, activities, power_inputs=None):
+        """Prepare section physics and the pace safeguard once per pass, offline."""
+        # Production input is the filtered 180-day record; evaluator filters too.
+        rows = [r for r in activities if cls.outdoor(r) and cls.number(r.get("distance")) is not None
+                and cls.number(r.get("moving_time")) is not None and r["distance"] > 0
+                and r["moving_time"] >= 1200 and 3 <= r["distance"] / r["moving_time"] * 3.6 <= 65]
+        result = cls.pace_model(rows)
+        context = cls.physics_context(power_inputs)
+        training = cls.physics_rows(rows, context)
+        comparison = cls.compare_physics(training, context, len(rows))
+        densities = [cls.history_gain(r)[0] / (r["distance"] / 1000) for r in rows if cls.history_gain(r)[0] is not None]
+        powers = [cls.ride_power(r)[0] for r in rows if cls.ride_power(r)[0] is not None]
+        ftp = context["ftp_w"]
+        ratio = statistics.median(powers) / ftp if powers and ftp is not None and 50 <= ftp <= 600 else None
+        result.update(physics_context=context, physics_comparison=comparison,
+                      historical_ascent_density_range_m_per_km=[min(densities), max(densities)] if densities else None,
+                      historical_ascent_sample_count=len(densities),
+                      historical_ascent_sources={key: sum(cls.history_gain(r)[1] == key for r in rows)
+                                                for key in ("producer_ascent_m", "recorded_ascent_m")},
+                      ftp_consistency={"observed_power_over_main_ftp": ratio, "sample_count": len(powers),
+                                       "status": "likely_stale_ftp_or_zones" if ratio is not None and len(powers) >= 12 and ratio > .95 else
+                                                 "available_not_diagnostic" if ratio is not None else "unavailable",
+                                       "reason": "whole_ride_power_is_not_an_ftp_test; weighted_power_is_an_effort_proxy"},
+                      uncertainty="Section physics is an estimate, not measured segment speed; aggregate-history geometry is a proxy. "
+                                  "Residual coverage does not validate new terrain, surface, wind or segment timing.")
+        if context["available"]:
+            fit = cls.fit_physics(training, context, rows)
+            result["physics_model"] = {**fit, "residual_ratio_range": cls.physics_interval(cls.physics_residuals(training, context)),
+                                       "interval_basis": "leave_one_out_moving_residuals" if len(training) >= 4 else "wide_default_0.7_to_1.4"}
+        return result
+
+    @classmethod
+    def select_route_eta(cls, eta, terrain):
+        """Apply the in-range safeguard; no terrain bytes or producer outputs change."""
+        km = terrain["polyline"][-1][0]
+        gain = cls.number(terrain.get("total_elevation_m"))
+        density = gain / km if gain is not None and gain >= 0 else None
+        observed = eta["historical_ascent_density_range_m_per_km"]
+        extrapolation = density is None or observed is None or not observed[0] <= density <= observed[1]
+        eta.update(route_ascent_m=gain, route_ascent_density_m_per_km=density,
+                   terrain_extrapolation=extrapolation,
+                   terrain_support_status="unknown" if density is None or observed is None else "outside_history" if extrapolation else "in_range")
+        model = eta.get("physics_model")
+        context = eta["physics_context"]
+        use = model is not None and (extrapolation or eta["status"] == "default" or eta["physics_comparison"]["safeguard_passed"])
+        eta["model_inputs"] = {"ftp_used": bool(use and model["prior_weight"] > 0), "weight_used": bool(use),
+                               "ftp_available": context["available"] or context["unavailable_reason"] != "missing_or_invalid_main_ftp",
+                               "configured_main_ftp_w": context["ftp_w"], "body_weight_kg": context["body_weight_kg"],
+                               "prior_intensities": context["prior_intensities"],
+                               "sample_count": model["sample_count"] if model else 0,
+                               "power_sample_count": model["power_sample_count"] if model else 0,
+                               "calibration_factor": model["time_factor"] if model else None,
+                               "flat_power_w": model["flat_power_w"] if model else None}
+        if use:
+            eta.update(status="calibrated_physics" if model["sample_count"] else "uncalibrated_physics",
+                       method="ride_power_physics_v1" if model["power_sample_count"] else "ftp_zones_physics_v1",
+                       selection_reason="terrain_extrapolation" if extrapolation else "safeguard_passed" if eta["physics_comparison"]["safeguard_passed"] else "no_pace_history")
+            eta.update(sample_count=model["sample_count"], reason=eta["selection_reason"],
+                       interval_basis=model["interval_basis"] + ("; extrapolation_at_least_0.8_to_1.3" if extrapolation else ""))
+            # These described the pace comparator, not the selected physics fit.
+            for key in ("pace_range_s_per_km", "median_pace_s_per_km", "median_moving_speed_kmh", "sample_activity_ids", "date_range"):
+                eta.pop(key, None)
+            low, high = model["residual_ratio_range"]
+            eta["physics_interval_ratio"] = [min(low, .8), max(high, 1.3)] if extrapolation else [low, high]
+            eta["model_inputs"]["target_power_w"] = {
+                key: model["flat_power_w"] * value
+                for key, value in cls.fitted_physics_context(context, model)["prior_intensities"].items()}
+        else:
+            eta["selection_reason"] = "in_range_pace_safeguard" if model else context["unavailable_reason"]
+            # Missing historical gain cannot justify zero extra cost: use zero
+            # reference density and label the missing support explicitly.
+            excess = max(0, (density or 0) - (observed[1] if observed else 0)) * km
+            if extrapolation and eta["status"] != "default" and excess > 0:
+                eta.update(status="pace_with_climbing_allowance", method="pace_plus_excess_ascent_v1",
+                           excess_ascent_m=excess, climbing_allowance_s_per_100m=[180, 360],
+                           reason=eta["selection_reason"],
+                           interval_basis=eta["interval_basis"] + "; heuristic_excess_ascent_allowance")
+
+    @classmethod
+    def checked_polyline(cls, terrain):
+        """Shared geometry admission for prediction and route consistency."""
+        poly = terrain.get("polyline")
+        if not isinstance(poly, list) or not 2 <= len(poly) <= cls.MAX_SECTIONS + 1:
+            raise ValueError("invalid_or_oversized_geometry")
+        if any(not isinstance(p, list) or len(p) < 4 or
+               any(cls.number(v) is None for v in p[:4]) or
+               not -90 <= p[1] <= 90 or not -180 <= p[2] <= 180 for p in poly):
+            raise ValueError("invalid_geometry")
+        if poly[0][0] != 0 or any(b[0] <= a[0] for a, b in zip(poly, poly[1:])):
+            raise ValueError("nonmonotonic_geometry")
+        return poly
+
+    @classmethod
+    def route_physics_parts(cls, terrain, eta):
+        """The same actual legs feed both the consistency ratio and section ETA."""
+        poly = cls.checked_polyline(terrain)
+        model = eta["physics_model"]
+        context = cls.fitted_physics_context(eta["physics_context"], model)
+        parts = []
+        for a, b in zip(poly, poly[1:]):
+            km, mid = b[0] - a[0], (a[0] + b[0]) / 2
+            gradient = (b[3] - a[3]) / (km * 1000)
+            if a[1:3] == b[1:3]:
+                raise ValueError("stationary_geometry")
+            long_climb = any(s["position_km"] <= mid < s["position_km"] + s["distance_km"]
+                             and s["distance_km"] >= context["assumptions"]["long_climb_km"]
+                             for s in terrain.get("climbs", []))
+            speed = cls.physics_speed(context, model["flat_power_w"], gradient, (a[3] + b[3]) / 2, long_climb)
+            floor = km / context["assumptions"]["descent_cap_kmh"] * 3600 if gradient < -.005 else 0
+            parts.append((max(floor, km / speed * 3600 * model["time_factor"]), floor))
+        return parts
+
+    @classmethod
+    def route_consistency(cls, eta, terrain, base_seconds):
+        """Pace/actual-polyline agreement, not an observed route completion fit.
+
+        Local correction shrinks over 20 pace rides and is bounded to 0.75..1.25.
+        Transfer only half of that deviation to unfamiliar terrain. The wider
+        extrapolation interval and descent cap remain independent constraints.
+        """
+        gain = cls.number(terrain.get("total_elevation_m"))
+        density = gain / terrain["polyline"][-1][0] if gain is not None and gain >= 0 else None
+        observed = eta.get("historical_ascent_density_range_m_per_km")
+        pace = cls.number(eta.get("median_pace_s_per_km"))
+        if observed is not None and density is not None and observed[0] <= density <= observed[1] and pace is not None:
+            target = pace * terrain["polyline"][-1][0]
+            raw = target / base_seconds
+            low, high = cls.ROUTE_CONSISTENCY_BOUNDS
+            bounded = min(high, max(low, raw))
+            weight = min(1, eta["sample_count"] / cls.ROUTE_CONSISTENCY_FULL_RIDES)
+            return {"status": "local_in_range", "raw_ratio": raw, "bounded_ratio": bounded,
+                    "history_weight": weight, "factor": 1 + weight * (bounded - 1),
+                    "pace_central_s": target, "reference_count": 1,
+                    "limitation": "agreement_with_personal_pace_not_observed_route_validation"}
+        reference = eta.get("route_consistency_reference", {})
+        factor = cls.number(reference.get("factor"))
+        if observed is not None and density is not None and factor is not None:
+            return {"status": "transferred_in_range_reference", "reference_factor": factor,
+                    "transfer_weight": cls.ROUTE_CONSISTENCY_TRANSFER_WEIGHT,
+                    "factor": 1 + cls.ROUTE_CONSISTENCY_TRANSFER_WEIGHT * (factor - 1),
+                    "reference_count": reference["reference_count"], "reference_source": reference["source"],
+                    "limitation": "bounded_transfer_not_validated_on_new_terrain"}
+        return {"status": "no_in_range_reference", "factor": 1.0, "reference_count": 0}
+
+    @classmethod
+    def prepare_route_consistency(cls, eta, terrains, now, cached=None, owner_key=None):
+        """Order-independent local geometry references, optionally retained 30 days.
+
+        No activity record, network or terrain mutation. Binding uses only inputs
+        that affect prediction, so unused FTP/zones cannot invalidate a mature
+        ride-power model. A changed effective model/pace or owner rejects reuse.
+        """
+        model = eta.get("physics_model")
+        if not model or cls.number(eta.get("median_pace_s_per_km")) is None:
+            return None, None
+        context = cls.fitted_physics_context(eta["physics_context"], model)
+        key = cls.digest({"version": 1, "owner": owner_key,
+                          "weight": context["body_weight_kg"], "assumptions": context["assumptions"],
+                          "ratios": context["prior_intensities"], "power": model["flat_power_w"],
+                          "factor": model["time_factor"], "pace": eta["median_pace_s_per_km"],
+                          "pace_samples": eta["sample_count"],
+                          "density_range": eta["historical_ascent_density_range_m_per_km"]})
+        factors, seen = [], set()
+        for terrain in terrains:
+            if len(seen) >= cls.MAX_EVENTS:
+                break
+            try:
+                poly = cls.checked_polyline(terrain)
+                gain = cls.number(terrain.get("total_elevation_m"))
+                observed = eta.get("historical_ascent_density_range_m_per_km")
+                if gain is None or observed is None or not observed[0] <= gain / poly[-1][0] <= observed[1]:
+                    continue
+                identity = cls.digest([poly, terrain.get("total_elevation_m"), terrain.get("climbs", [])])
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                base = sum(seconds for seconds, floor in cls.route_physics_parts(terrain, eta))
+                match = cls.route_consistency(eta, terrain, base)
+                if match["status"] == "local_in_range":
+                    factors.append(match["factor"])
+            except (ValueError, TypeError, KeyError):
+                continue  # malformed optional route cannot supply a reference
+        if factors:
+            factor = statistics.median(factors)
+            saved = {"model_key": key, "updated_at": now, "factor": factor, "reference_count": len(factors)}
+            return {"factor": factor, "reference_count": len(factors), "source": "current_routes"}, saved
+        cached = cached if isinstance(cached, dict) else {}
+        stamp, factor = cls.number(cached.get("updated_at")), cls.number(cached.get("factor"))
+        count = cls.number(cached.get("reference_count"))
+        if (cached.get("model_key") == key and stamp is not None and 0 <= now - stamp < cls.ROUTE_CONSISTENCY_MAX_AGE_SECONDS
+                and factor is not None and cls.ROUTE_CONSISTENCY_BOUNDS[0] <= factor <= cls.ROUTE_CONSISTENCY_BOUNDS[1]
+                and count is not None and 1 <= count <= cls.MAX_EVENTS):
+            return {"factor": factor, "reference_count": count, "source": "cached_routes"}, cached
+        return None, None
+
+    @staticmethod
+    def steady_speed(power_w, mass_kg, gradient, assumptions):
+        """Solve eta*P = (rho*CdA*v^2/2 + m*g*(Crr*cos(theta)+sin(theta)))*v.
+
+        Still air, steady motion, no acceleration or drafting. Bisection brackets
+        the positive root for the admitted inputs and nonnegative model gradients.
+        """
+        theta = math.atan(gradient)
+        aero = 0.5 * assumptions["air_density_kg_m3"] * assumptions["cda_m2"]
+        force = mass_kg * assumptions["gravity_m_s2"] * (
+            assumptions["crr"] * math.cos(theta) + math.sin(theta))
+        wheel_power = power_w * assumptions["drivetrain_efficiency"]
+        low, high = 0.0, 50.0  # m/s, numerical bracket, not a descending-speed target
+        for _ in range(60):
+            mid = (low + high) / 2
+            if aero * mid ** 3 + force * mid < wheel_power:
+                low = mid
+            else:
+                high = mid
+        return (low + high) / 2 * 3.6
+
+    @classmethod
+    def estimate_eta(cls, activities, previous, power_inputs=None):
+        """History fit -> personal pace prior -> power estimate -> generic ranges."""
+        result = cls.calibrate(activities, previous)
+        if result["status"] == "history_prior":
+            result = cls.ascent_model(result, activities)
+        if result["status"] != "default":
+            return result
+        result.update(method="generic_default_v2", source="generic_planning_assumptions",
+                      speed_ranges_kmh={"flat": [22, 32], "climb": [8, 18], "descent": [20, 50]})
+        inputs = power_inputs or {}
+        ftp, weight = cls.number(inputs.get("ftp_w")), cls.number(inputs.get("body_weight_kg"))
+        reason = None
+        for key, value, low, high in (("ftp_w", ftp, 50, 600), ("body_weight_kg", weight, 30, 200)):
+            if value is None or not low <= value <= high:
+                reason = ("missing_" if inputs.get(key) is None else "implausible_") + key
+                break
+        if reason is None and not 0.75 <= ftp / weight <= 7.0:
+            reason = "implausible_ftp_per_kg"
+        if reason:
+            result["power_estimate_unavailable_reason"] = reason
+            return result
+        # Standard road-on-hoods planning assumptions, not measured personal values.
+        assumptions = {"air_density_kg_m3": 1.225, "cda_m2": 0.32, "crr": 0.005,
+                       "bike_kit_mass_kg": 10.0, "drivetrain_efficiency": 0.97,
+                       "gravity_m_s2": 9.80665, "flat_gradient": 0.0, "climb_gradient": 0.05,
+                       "wind_m_s": 0.0, "position": "road_hoods",
+                       "speed_bound_factors": [0.8, 1.2], "descent_range_kmh": [20, 50]}
+        band = [0.60, 0.75]
+        model, ranges = {}, {}
+        for kind in ("flat", "climb"):
+            speeds = [cls.steady_speed(ftp * effort, weight + assumptions["bike_kit_mass_kg"],
+                                      assumptions[kind + "_gradient"], assumptions) for effort in band]
+            model[kind] = [round(v, 3) for v in speeds]
+            ranges[kind] = [math.floor(speeds[0] * 0.8 * 10) / 10,
+                            math.ceil(speeds[1] * 1.2 * 10) / 10]
+        # Descending depends on braking/road geometry, not the power solution.
+        ranges["descent"] = list(assumptions["descent_range_kmh"])
+        result.update(status="power_estimate", method="power_estimate",
+                      source="existing_current_cycling_ftp_and_body_weight",
+                      speed_ranges_kmh=ranges,
+                      power_estimate={"ftp_w": ftp, "body_weight_kg": weight,
+                                      "ftp_source": inputs.get("ftp_source"),
+                                      "weight_source": inputs.get("weight_source"),
+                                      "weight_date": inputs.get("weight_date"),
+                                      "effort_fraction_ftp": band, "assumptions": assumptions,
+                                      "model_speed_ranges_kmh": model},
+                      uncertainty="Estimated from steady-state road power, not personal speed observations. "
+                                  "Representative 5% climb, still air, standard bike/hoods position; "
+                                  "speed bounds widened by 20%. Descent is a fixed planning range, not a safe speed. "
+                                  "Surface, wind, drafting, braking, fatigue and stops can exceed these bounds.")
+        return result
+
+    @classmethod
+    def sections(cls, terrain, eta, departure):
+        poly = cls.checked_polyline(terrain)
+        physics_parts = cls.route_physics_parts(terrain, eta) if eta.get("physics_model") else []
+        if physics_parts:
+            eta["route_consistency"] = cls.route_consistency(eta, terrain, sum(p[0] for p in physics_parts))
+        if "physics_context" in eta:
+            cls.select_route_eta(eta, terrain)
+            eta["model_inputs"]["route_consistency_factor"] = eta.get("route_consistency", {}).get("factor", 1.0)
+        legs, fast, slow = [], 0.0, 0.0
+        physics_total, adjusted_physics_total = 0.0, 0.0
+        moving_fast, moving_slow, moving_center = 0.0, 0.0, 0.0
+        stop_low, stop_high = eta.get("stops", {}).get("ratio_range", [1, 1.25])
+        ascent = cls.number(terrain.get("total_elevation_m"))
+        poly_ascent = sum(max(0, b[3] - a[3]) for a, b in zip(poly, poly[1:]))
+        if "physics_context" in eta:
+            eta["polyline_positive_rise_m"] = poly_ascent
+        if eta.get("ascent_model"):
+            eta["terrain_adjustment_status"] = "source_adjusted_ascent" if ascent is not None else "missing_ascent_uses_observed_pace"
+            eta["route_ascent_m"] = ascent
+            if ascent is not None:
+                model = eta["ascent_model"]
+                target = [ascent / poly[-1][0] * b for b in model["device_over_route_ascent_range"]]
+                observed = model["recorded_ascent_per_km_range"]
+                eta["terrain_extrapolation"] = target[0] < observed[0] or target[1] > observed[1]
+        start = cls.parse_time(departure["at_utc"])
+        for index, (a, b) in enumerate(zip(poly, poly[1:])):
+            mid = (a[0] + b[0]) / 2
+            kind = "flat"
+            for key, label in (("climbs", "climb"), ("descents", "descent")):
+                if any(s["position_km"] <= mid < s["position_km"] + s["distance_km"]
+                       for s in terrain.get(key, [])):
+                    kind = label
+                    break
+            lat1, lat2 = math.radians(a[1]), math.radians(b[1])
+            delta = math.radians(b[2] - a[2])
+            y = math.sin(delta) * math.cos(lat2)
+            x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(delta)
+            if abs(x) + abs(y) < 1e-12:
+                raise ValueError("stationary_geometry")
+            begin_fast, begin_slow = fast, slow
+            km = b[0] - a[0]
+            features = [km if label == kind else 0 for label in ("flat", "climb", "descent")]
+            leg_ascent = (ascent * max(0, b[3] - a[3]) / poly_ascent if poly_ascent > 0 else
+                          ascent * km / poly[-1][0]) if ascent is not None else None
+            move_low, move_high, center = cls.moving_window(eta, km, features, leg_ascent)
+            if eta.get("physics_model"):
+                predicted, floor = physics_parts[index]
+                physics_total += predicted
+                predicted = max(floor, predicted * eta["route_consistency"]["factor"])
+                adjusted_physics_total += predicted
+                if eta["method"] in ("ride_power_physics_v1", "ftp_zones_physics_v1"):
+                    low, high = eta["physics_interval_ratio"]
+                    move_low, move_high, center = max(floor, predicted * low), max(floor, predicted * high), predicted
+            if eta.get("climbing_allowance_s_per_100m"):
+                share = eta["excess_ascent_m"] / 100 * km / poly[-1][0]
+                low, high = eta["climbing_allowance_s_per_100m"]
+                move_low, move_high, center = move_low + share * low, move_high + share * high, center + share * (low + high) / 2
+            moving_fast += move_low
+            moving_slow += move_high
+            moving_center += center
+            fast += move_low * stop_low
+            slow += move_high * stop_high
+            legs.append({"section_id": len(legs), "start_km": a[0], "end_km": b[0],
+                         "terrain_class": kind, "bearing_deg": round(math.degrees(math.atan2(y, x)) % 360, 2),
+                         "arrival_window_utc": [cls.iso(start + math.floor(begin_fast / 300) * 300),
+                                                cls.iso(start + math.ceil(begin_slow / 300) * 300)],
+                         "end_window_utc": [cls.iso(start + math.floor(fast / 300) * 300),
+                                           cls.iso(start + math.ceil(slow / 300) * 300)]})
+        if slow > 86400:
+            raise ValueError("eta_exceeds_24_hours")
+        eta["duration_range_s"] = [math.floor(fast / 300) * 300, math.ceil(slow / 300) * 300]
+        eta["moving_duration_range_s"] = [math.floor(moving_fast / 300) * 300, math.ceil(moving_slow / 300) * 300]
+        eta["moving_duration_central_s"] = round(moving_center)
+        if eta.get("physics_model"):
+            eta["physics_base_moving_duration_central_s"] = round(physics_total)
+            eta["physics_adjusted_moving_duration_central_s"] = round(adjusted_physics_total)
+            if eta["route_consistency"].get("pace_central_s"):
+                eta["route_consistency"]["relative_difference_from_pace"] = adjusted_physics_total / eta["route_consistency"]["pace_central_s"] - 1
+        if eta.get("physics_context") and (eta["method"] in ("ride_power_physics_v1", "ftp_zones_physics_v1", "pace_plus_excess_ascent_v1")):
+            eta["speed_ranges_kmh"] = {kind: [poly[-1][0] / moving_slow * 3600, poly[-1][0] / moving_fast * 3600]
+                                       for kind in ("flat", "climb", "descent")}
+            eta["speed_basis"] = "whole_route_equivalents_not_measured_class_speeds"
+        if eta.get("ascent_model"):
+            eta["speed_ranges_kmh"] = {kind: [poly[-1][0] / moving_slow * 3600, poly[-1][0] / moving_fast * 3600]
+                                       for kind in ("flat", "climb", "descent")}
+        # Weather points evenly span the existing geometry, including both endpoints.
+        count = min(cls.MAX_POINTS, len(poly))
+        indices = sorted({min(range(len(poly)), key=lambda i: abs(poly[i][0] - poly[-1][0] * n / (count - 1)))
+                          for n in range(count)})
+        points = [{"point_id": i, "km": poly[index][0], "lat": round(poly[index][1], 4),
+                   "lon": round(poly[index][2], 4), "altitude": round(poly[index][3])}
+                  for i, index in enumerate(indices)]
+        for leg in legs:
+            mid = (leg["start_km"] + leg["end_km"]) / 2
+            leg["point_id"] = min(points, key=lambda p: abs(p["km"] - mid))["point_id"]
+        return legs, points
+
+    @classmethod
+    def evaluate_eta(cls, record, as_of=None, power_inputs=None):
+        """Read-only leave-one-out aggregates; no IDs or per-ride predictions returned.
+
+        A held-out recorded-ascent proxy tests within-source prediction only. A
+        held-out producer ascent also exercises the production source conversion.
+        Neither substitutes for route/actual-departure forecast evaluation.
+        """
+        today = (as_of or datetime.now(timezone.utc)).date()
+        cutoff = (today - timedelta(days=cls.ETA_HISTORY_DAYS)).isoformat()
+        raw = record.get("activities", [])
+        if not isinstance(raw, list):
+            raise ValueError("activities must be a list")
+        rows = {}
+        for row in raw:
+            if not isinstance(row, dict) or row.get("id") is None or not cls.outdoor(row):
+                continue
+            distance, seconds = cls.number(row.get("distance")), cls.number(row.get("moving_time"))
+            date = str(row.get("start_date_local", ""))[:10]
+            if (cutoff <= date <= today.isoformat() and distance is not None and distance > 0
+                    and seconds is not None and seconds >= 1200 and 3 <= distance / seconds * 3.6 <= 65):
+                rows[str(row["id"])] = row
+        values = list(rows.values())
+        widths, relative, errors, covered = [], [], [], 0
+        methods, sources = {}, {}
+        for held in values:
+            training = [r for r in values if str(r["id"]) != str(held["id"])]
+            if len(training) < 3:
+                continue
+            eta = cls.estimate_eta(training, {str(r["id"]): r for r in training})
+            gain = cls.number(held.get("producer_ascent_m"))
+            source = "route"
+            if gain is None:
+                gain, source = cls.number(held.get("recorded_ascent_m")), "recorded"
+            if gain is None:
+                source = "unavailable"
+            low, high, center = cls.moving_window(eta, held["distance"] / 1000,
+                                                 cls.terrain_distances(held.get("terrain_summary", {})), gain, source)
+            actual = held["moving_time"]
+            covered += low <= actual <= high
+            widths.append(high - low)
+            relative.append((high - low) / center)
+            errors.append(abs(center - actual) / actual)
+            methods[eta["method"]] = methods.get(eta["method"], 0) + 1
+            sources[source] = sources.get(source, 0) + 1
+        count = len(widths)
+        context = cls.physics_context(power_inputs)
+        comparison = cls.compare_physics(cls.physics_rows(values, context), context, len(values))
+        return {"evaluation": "leave_one_out_moving_time_v1", "as_of": today.isoformat(),
+                "physics_comparison": comparison, "physics_inputs": context,
+                "eligible_rides": len(values), "excluded_or_duplicate_rows": len(raw) - len(values),
+                "evaluated_rides": count, "skipped_insufficient_training": len(values) - count,
+                "coverage": covered / count if count else None,
+                "median_window_width_s": statistics.median(widths) if count else None,
+                "median_relative_window_width": statistics.median(relative) if count else None,
+                "median_absolute_relative_error": statistics.median(errors) if count else None,
+                "methods": methods, "held_out_ascent_sources": sources,
+                "target_coverage": 0.8, "includes_stops": False, "includes_five_minute_rounding": False,
+                "limitation": "Empirical leave-one-out, not a future coverage guarantee; recorded ascent proxies "
+                              "do not validate cross-source route conversion. No held-out moving/elapsed time is used in fitting."}
+
+    @classmethod
+    def wind(cls, speed, direction, bearing):
+        if cls.number(speed) is None or speed < 0:
+            return {"class": "unknown", "head_mps": None, "cross_mps": None}
+        if speed == 0:
+            return {"class": "calm", "head_mps": 0.0, "cross_mps": 0.0}
+        if cls.number(direction) is None or not 0 <= direction <= 360:
+            return {"class": "unknown", "head_mps": None, "cross_mps": None}
+        angle = (direction - bearing + 180) % 360 - 180
+        return {"class": "head" if abs(angle) < 45 else "cross" if abs(angle) < 135 else "tail",
+                "head_mps": round(speed * math.cos(math.radians(angle)), 3),
+                "cross_mps": round(abs(speed * math.sin(math.radians(angle))), 3)}
+
+
+    @classmethod
+    def read_value(cls, data, key, units, unit, low=None, high=None):
+        value = cls.number(data.get(key))
+        if units.get(key) != unit or value is None:
+            return None
+        if (low is not None and value < low) or (high is not None and value > high):
+            return None
+        return value
+
+    @classmethod
+    def parse_open_meteo(cls, payload):
+        if not isinstance(payload, dict) or payload.get("utc_offset_seconds") != 0:
+            return None
+        hourly, units = payload.get("hourly", {}), payload.get("hourly_units", {})
+        if not isinstance(hourly, dict) or not isinstance(units, dict):
+            return None
+        stamps = hourly.get("time")
+        if (not isinstance(stamps, list) or not stamps or len(stamps) > 256
+                or any(cls.number(t) is None for t in stamps)
+                or any(b - a != 3600 for a, b in zip(stamps, stamps[1:]))):
+            return None
+        instants, periods = [], []
+        for index, stamp in enumerate(stamps):
+            data = {key: values[index] for key, values in hourly.items()
+                    if isinstance(values, list) and len(values) == len(stamps)}
+            get = lambda key, unit, low=None, high=None: cls.read_value(data, key, units, unit, low, high)
+            instants.append({"at": stamp, "temperature": get("temperature_2m", "°C"),
+                             "apparent_temperature": get("apparent_temperature", "°C"),
+                             "speed": get("wind_speed_10m", "m/s", 0),
+                             "direction": get("wind_direction_10m", "°", 0, 360)})
+            periods.append({"start": stamp - 3600, "end": stamp,
+                            "precipitation": get("precipitation", "mm", 0),
+                            "probability": get("precipitation_probability", "%", 0, 100),
+                            "gust": get("wind_gusts_10m", "m/s", 0)})
+        return {"instants": instants, "periods": periods, "model": "best_match",
+                "model_run_at": None, "model_run_reason": "not_returned_by_forecast_api",
+                "grid_coordinates": [payload.get("latitude"), payload.get("longitude")]}
+
+    @classmethod
+    def parse_met(cls, payload):
+        if not isinstance(payload, dict):
+            return None
+        props = payload.get("properties", {})
+        if not isinstance(props, dict):
+            return None
+        meta, rows = props.get("meta", {}), props.get("timeseries")
+        if not isinstance(meta, dict) or not isinstance(rows, list) or not rows:
+            return None
+        units = meta.get("units", {})
+        if not isinstance(units, dict):
+            return None
+        # Swagger's example uses C; the data-model example uses celsius.
+        units = dict(units)
+        if units.get("air_temperature") == "C":
+            units["air_temperature"] = "celsius"
+        instants, periods = [], []
+        for row in rows[:256]:
+            if not isinstance(row, dict):
+                continue
+            stamp = cls.parse_time(row.get("time"))
+            data = row.get("data", {})
+            if stamp is None or not isinstance(data, dict):
+                continue
+            def details(key):
+                block = data.get(key)
+                values = block.get("details") if isinstance(block, dict) else None
+                return values if isinstance(values, dict) else {}
+            instant = details("instant")
+            hours = next((h for h in (1, 6, 12) if details(f"next_{h}_hours")), 1)
+            period = details(f"next_{hours}_hours")
+            get = lambda key, unit, low=None, high=None: cls.read_value(instant, key, units, unit, low, high)
+            instants.append({"at": stamp, "temperature": get("air_temperature", "celsius"),
+                             "apparent_temperature": None, "speed": get("wind_speed", "m/s", 0),
+                             "direction": get("wind_from_direction", "degrees", 0, 360),
+                             "gust": get("wind_speed_of_gust", "m/s", 0)})
+            # Never pretend a six-hour amount or probability is an hourly value.
+            periods.append({"start": stamp, "end": stamp + hours * 3600,
+                            "precipitation": cls.read_value(period, "precipitation_amount", units, "mm", 0),
+                            "probability": cls.read_value(period, "probability_of_precipitation", units, "%", 0, 100)})
+        if not instants or any(b["at"] <= a["at"] for a, b in zip(instants, instants[1:])):
+            return None
+        return {"instants": instants, "periods": periods, "model": "locationforecast_seamless",
+                "model_run_at": None, "provider_updated_at": meta.get("updated_at"),
+                "model_run_reason": "underlying_model_run_not_returned",
+                "gust_semantics": "provider_instant_field; exact_period_not_specified"}
+
+    @staticmethod
+    def http_time(value):
+        try:
+            dt = parsedate_to_datetime(value)
+            return dt.timestamp() if dt.tzinfo is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def point_key(self, provider, point):
+        location = self.digest([provider, self.tier, point["lat"], point["lon"], point["altitude"]])
+        if provider != "open_meteo" or self.request_window is None:
+            return location
+        # Narrow responses are reusable only when they cover the new time window.
+        # Keep separate windows at shared locations; reuse covering legacy caches.
+        start, end = self.request_window
+        covering = []
+        for key, record in self.cache.items():
+            if not isinstance(record, dict) or (key != location and record.get("location_key") != location):
+                continue
+            instants = record.get("forecast", {}).get("instants", [])
+            if instants and instants[0]["at"] <= start and instants[-1]["at"] >= end:
+                covering.append((record.get("expires_at", 0), key))
+        return max(covering)[1] if covering else self.digest([location, start, end])
+
+    def due_point(self, provider, point):
+        record = self.cache.get(self.point_key(provider, point), {})
+        return self.epoch >= (self.number(record.get("next_attempt_at")) or 0)
+
+    def request(self, provider, url, params, headers=None, redirects=0):
+        blocked_until = self.number(self.state.get(provider + "_blocked_until")) or 0
+        elapsed = time.monotonic() - self.started
+        reason = ("forecast_backoff" if not self.can_fetch else
+                  "request_budget_exhausted" if self.requests_made >= self.MAX_REQUESTS else
+                  "request_admission_cutoff" if elapsed >= self.ADMISSION_SECONDS else
+                  "provider_backoff" if self.epoch < blocked_until else None)
+        if reason:
+            self.provider_errors.add(reason)
+            return None
+        self.requests_made += 1
+        response = None
+        retry_at = self.epoch + self.FAILURE_BACKOFF_SECONDS
+        try:
+            response = requests.get(url, params=params, headers=headers or {},
+                                    timeout=(self.CONNECT_SECONDS, min(self.READ_SECONDS, self.PASS_SECONDS - elapsed)),
+                                    allow_redirects=False, stream=True)
+            if time.monotonic() - self.started >= self.PASS_SECONDS:
+                raise requests.exceptions.Timeout("route weather pass deadline")
+            if provider == "met_norway" and response.status_code in (301, 302, 303, 307, 308):
+                target = urljoin(url, response.headers.get("Location", ""))
+                parsed = urlsplit(target)
+                if (redirects < 2 and parsed.scheme == "https" and parsed.netloc == "api.met.no"
+                        and parsed.path.startswith("/weatherapi/locationforecast/2.0/") and target != url):
+                    response.close()
+                    return self.request(provider, target, None if parsed.query else params, headers, redirects + 1)
+            if response.status_code not in (200, 203, 304):
+                retry = response.headers.get("Retry-After", "")
+                try:
+                    retry_at = max(retry_at, self.epoch + max(0, int(retry)))
+                except (TypeError, ValueError):
+                    retry_at = max(retry_at, self.http_time(retry) or 0)
+                if response.status_code in (403, 429):
+                    self.state[provider + "_blocked_until"] = retry_at
+                error = "http_" + str(response.status_code)
+            else:
+                expires = max(self.epoch + self.refresh_seconds + self.jitter,
+                              self.http_time(response.headers.get("Expires")) or 0)
+                last_modified = response.headers.get("Last-Modified")
+                if (not isinstance(last_modified, str) or "\n" in last_modified or "\r" in last_modified
+                        or self.http_time(last_modified) is None):
+                    last_modified = None
+                payload = self.read_response(response) if response.status_code != 304 else None
+                return {"payload": payload, "expires_at": expires, "last_modified": last_modified,
+                        "not_modified": response.status_code == 304, "deprecated": response.status_code == 203}
+        except requests.exceptions.RequestException as exc:
+            # Requests wraps streaming urllib3 read timeouts in ConnectionError.
+            pending, seen, timed_out = [exc], set(), False
+            while pending:
+                cause = pending.pop()
+                if id(cause) in seen:
+                    continue
+                seen.add(id(cause))
+                timed_out |= isinstance(cause, requests.exceptions.Timeout) or type(cause).__name__ == "ReadTimeoutError"
+                pending.extend(v for v in (cause.__cause__, cause.__context__, *cause.args) if isinstance(v, BaseException))
+            error = ("provider_timeout" if timed_out else "connection_error"
+                     if isinstance(exc, requests.exceptions.ConnectionError) else "transport_failure")
+        except (ValueError, TypeError):
+            error = "invalid_json"
+        finally:
+            if response is not None:
+                response.close()
+        self.failures = True
+        self.provider_errors.add(error)
+        return {"error": error, "retry_at": retry_at}
+
+    def read_response(self, response):
+        """Portable deadline checks between streamed bytes; socket stalls use read timeout.
+
+        No signals or background requests. A byte-sized decoded chunk prevents a
+        slow trickle from filling a large application buffer before the next check.
+        This is not a preemptive DNS/decompression or whole-sync wall-clock limit.
+        """
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=1):
+            if time.monotonic() - self.started >= self.PASS_SECONDS:
+                raise requests.exceptions.Timeout("route weather pass deadline")
+            body.extend(chunk)
+            if len(body) > self.MAX_RESPONSE_BYTES:
+                raise ValueError("forecast response too large")
+        if time.monotonic() - self.started >= self.PASS_SECONDS:
+            raise requests.exceptions.Timeout("route weather pass deadline")
+        return json.loads(body)
+
+    def fetch_open_meteo(self, points):
+        start, end = self.request_window
+        hour = lambda stamp: datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%dT%H:00")
+        params = {"latitude": ",".join(str(p["lat"]) for p in points),
+                  "longitude": ",".join(str(p["lon"]) for p in points),
+                  "elevation": ",".join(str(p["altitude"]) for p in points),
+                  "hourly": ",".join(self.OM_FIELDS), "timezone": "GMT", "timeformat": "unixtime",
+                  "wind_speed_unit": "ms", "temperature_unit": "celsius", "precipitation_unit": "mm",
+                  "start_hour": hour(start), "end_hour": hour(end)}
+        response = self.request("open_meteo", self.OM_URL, params)
+        if response is None:
+            return
+        payload = response.get("payload")
+        rows = payload if isinstance(payload, list) else [payload]
+        for i, point in enumerate(points):
+            row = rows[i] if len(rows) == len(points) else None
+            if isinstance(row, dict):
+                lat, lon = self.number(row.get("latitude")), self.number(row.get("longitude"))
+                if (lat is None or lon is None or abs(lat - point["lat"]) > 0.5
+                        or abs((lon - point["lon"] + 180) % 360 - 180) > 0.5):
+                    row = None
+            self.store_point("open_meteo", point, response, self.parse_open_meteo(row))
+        # Only a slow batch is split, never HTTP rejection or invalid provider data.
+        # Every child is admitted through the same count/time gates; no sleeps.
+        if response.get("error") == "provider_timeout" and len(points) > 1:
+            middle = len(points) // 2
+            self.fetch_open_meteo(points[:middle])
+            self.fetch_open_meteo(points[middle:])
+
+    def store_point(self, provider, point, response, parsed=None):
+        if response is None:
+            return
+        key = self.point_key(provider, point)
+        old = self.cache.get(key, {})
+        if not isinstance(old, dict):
+            old = {}
+        if response.get("not_modified") and old.get("forecast"):
+            parsed = old["forecast"]
+        if not parsed or not any(self.number(r.get("temperature")) is not None or
+                                 self.number(r.get("speed")) is not None for r in parsed["instants"]):
+            self.failures = True
+            self.provider_errors.add(response.get("error", "invalid_or_empty_response"))
+            self.cache[key] = {**old, "last_attempt_at": self.epoch,
+                               "next_attempt_at": response.get("retry_at", self.epoch + self.FAILURE_BACKOFF_SECONDS),
+                               "error": response.get("error", "invalid_or_empty_response")}
+            return
+        self.cache[key] = {"forecast": parsed,
+                          "location_key": self.digest([provider, self.tier, point["lat"], point["lon"], point["altitude"]]),
+                          "fetched_at": old.get("fetched_at", self.epoch)
+                          if response.get("not_modified") else self.epoch,
+                          "validated_at": self.epoch, "expires_at": response["expires_at"],
+                          "next_attempt_at": response["expires_at"], "last_attempt_at": self.epoch,
+                          "last_modified": response.get("last_modified") or
+                          (old.get("last_modified") if response.get("not_modified") else None),
+                          "deprecated": response.get("deprecated", False)}
+
+    def fetch_provider(self, provider, points):
+        due = [p for p in points if self.due_point(provider, p)]
+        if provider == "open_meteo" and due:
+            self.fetch_open_meteo(due)
+        elif provider == "met_norway":
+            for point in due:
+                record = self.cache.get(self.point_key(provider, point), {})
+                headers = {"User-Agent": "Section11/" + self.sync.VERSION +
+                           " (https://github.com/CrankAddict/section-11)",
+                           "Accept-Encoding": "gzip, deflate"}
+                if record.get("last_modified"):
+                    headers["If-Modified-Since"] = record["last_modified"]
+                response = self.request(provider, self.MET_URL,
+                                        {"lat": f'{point["lat"]:.4f}', "lon": f'{point["lon"]:.4f}',
+                                         "altitude": point["altitude"]}, headers)
+                self.store_point(provider, point, response,
+                                 self.parse_met(response.get("payload")) if response else None)
+        records = [self.cache.get(self.point_key(provider, p), {}) for p in points]
+        self.provider_errors.update(r["error"] for r in records if r.get("error"))
+        if any(r.get("error") and r.get("next_attempt_at", 0) > self.epoch for r in records):
+            self.provider_errors.add("forecast_backoff")
+        return records
+
+    @classmethod
+    def covered(cls, rows, start, end, field):
+        """Full interval union, so isolated known rain values cannot hide gaps."""
+        cursor = start
+        for row in sorted(rows, key=lambda r: r["start"]):
+            if row["end"] <= cursor or cls.number(row.get(field)) is None:
+                continue
+            if row["start"] > cursor:
+                return False
+            cursor = max(cursor, row["end"])
+            if cursor >= end:
+                return True
+        return False
+
+    @classmethod
+    def section_weather(cls, section, record, provider, coarse=False):
+        forecast = record.get("forecast", {})
+        start = cls.parse_time(section["arrival_window_utc"][0])
+        end = cls.parse_time(section["end_window_utc"][1])
+        # Hourly endpoint envelope, no fake interpolation of wind angles or rain.
+        step = 21600 if coarse else 3600
+        lo, hi = math.floor(start / step) * step, math.ceil(end / step) * step
+        instants = [r for r in forecast.get("instants", []) if lo <= r["at"] <= hi]
+        periods = [r for r in forecast.get("periods", []) if r["end"] > start and r["start"] < end
+                   and (coarse or r["end"] - r["start"] == 3600)]
+        times = {r["at"] for r in instants}
+        required_times = set(range(int(lo), int(hi) + 1, step))
+        def complete(key):
+            return required_times <= times and all(cls.number(r.get(key)) is not None for r in instants)
+        def extent(key, rows=instants):
+            values = [r[key] for r in rows if cls.number(r.get(key)) is not None]
+            return [min(values), max(values)] if values else None
+        winds = [cls.wind(r.get("speed"), r.get("direction"), section["bearing_deg"]) for r in instants]
+        wind_ok = required_times <= times and bool(winds) and all(w["class"] != "unknown" for w in winds)
+        gust_rows = periods if provider == "open_meteo" else instants
+        gust_ok = cls.covered(periods, start, end, "gust") if provider == "open_meteo" else complete("gust")
+        availability = {"temperature": complete("temperature"), "wind": wind_ok, "gust": gust_ok,
+                        "precipitation": cls.covered(periods, start, end, "precipitation"),
+                        "probability": cls.covered(periods, start, end, "probability")}
+        precipitation = [{"from_utc": cls.iso(r["start"]), "to_utc": cls.iso(r["end"]),
+                          "period_hours": (r["end"] - r["start"]) / 3600,
+                          "amount_mm": r.get("precipitation"), "probability_pct": r.get("probability")}
+                         for r in periods]
+        return {"temperature_range_c": extent("temperature"),
+                "apparent_temperature_range_c": extent("apparent_temperature"),
+                "wind_speed_range_mps": extent("speed"),
+                "head_component_range_mps": extent("head_mps", winds),
+                "cross_component_range_mps": extent("cross_mps", winds),
+                "wind_classes": sorted({w["class"] for w in winds}) or ["unknown"],
+                "gust_max_mps": extent("gust", gust_rows)[1] if extent("gust", gust_rows) else None,
+                "precipitation_intervals": precipitation, "coverage": availability,
+                "instant_envelope_utc": [cls.iso(lo), cls.iso(hi)],
+                "complete": all(availability.values())}
+
+
+    def brief(self, row, event, athlete, calibration):
+        departure = self.departure(event, athlete)
+        start = self.parse_time(departure["at_utc"])
+        if start <= self.epoch:
+            raise ValueError("departure_passed")
+        if start - self.epoch > self.HORIZON_HOURS * 3600:
+            raise ValueError("outside_120_hour_horizon")
+        self.tier = "outlook" if start - self.epoch > self.OUTLOOK_AFTER_HOURS * 3600 else "forecast"
+        self.refresh_seconds = self.OUTLOOK_REFRESH_SECONDS if self.tier == "outlook" else self.REFRESH_SECONDS
+        eta = json.loads(json.dumps(calibration))
+        legs, points = self.sections(row["terrain_summary"], eta, departure)
+        binding = {"event_id": row["event_id"], "route_ref": row["route_ref"],
+                   "departure": departure, "eta": eta, "schema_version": self.VERSION, "tier": self.tier}
+        if self.tier == "outlook":
+            # Broad six-hour envelope, never expose per-section timing/components
+            # as a prediction five days ahead. ETA remains a planning assumption.
+            outlook_window = [self.iso(math.floor(start / 21600) * 21600),
+                              self.iso(math.ceil((start + eta["duration_range_s"][1]) / 21600) * 21600)]
+            for leg in legs:
+                leg["arrival_window_utc"] = [outlook_window[0]] * 2
+                leg["end_window_utc"] = [outlook_window[1]] * 2
+        window_start = self.parse_time(legs[0]["arrival_window_utc"][0])
+        window_end = self.parse_time(legs[-1]["end_window_utc"][1])
+        self.request_window = (math.floor(window_start / 3600) * 3600,
+                               math.ceil(window_end / 3600) * 3600)
+        cache_key = self.digest(binding)
+        provider = "open_meteo"
+        records = self.fetch_provider(provider, points)
+        if not any(r.get("forecast") and r.get("expires_at", 0) > self.epoch for r in records):
+            fallback = self.fetch_provider("met_norway", points)
+            if any(r.get("forecast") and r.get("expires_at", 0) > self.epoch for r in fallback):
+                provider, records = "met_norway", fallback
+            elif not any(r.get("forecast") for r in records):
+                provider, records = "met_norway", fallback
+        if not any(r.get("forecast") for r in records):
+            raise ValueError("forecast_unavailable")
+        total = sum(s["end_km"] - s["start_km"] for s in legs)
+        covered, temperatures, gusts, probabilities, amounts = 0.0, [], [], [], []
+        units = self.sync._athlete_units_from_dict(athlete)
+        wind_factor = {"km/h": 3.6, "mph": 2.236936}.get(units["wind"], 1)
+        for leg in legs:
+            weather = self.section_weather(leg, records[leg["point_id"]], provider, self.tier == "outlook")
+            weather["display"] = {}
+            for key in ("wind_speed_range_mps", "head_component_range_mps", "cross_component_range_mps",
+                        "gust_max_mps", "temperature_range_c", "apparent_temperature_range_c"):
+                value = weather[key]
+                temperature = key.endswith("_c")
+                def convert(v):
+                    return round(v * 1.8 + 32 if temperature and units["temp"] == "f"
+                                 else v if temperature else v * wind_factor, 1)
+                weather["display"][key] = {"value": [convert(v) for v in value] if isinstance(value, list)
+                                           else convert(value),
+                                           "unit": ("F" if units["temp"] == "f" else "C")
+                                           if temperature else units["wind"]} if value is not None else None
+            for period in weather["precipitation_intervals"]:
+                value = period["amount_mm"]
+                period["display_amount"] = {"value": round(value / (25.4 if units["rain"] == "in" else 1), 2),
+                                            "unit": units["rain"]} if value is not None else None
+            leg["weather"] = weather
+            leg["display"] = {key: self.sync._to_display(leg[key + "_km"], "distance",
+                                 self.sync._athlete_units_from_dict(athlete)) for key in ("start", "end")}
+            covered += (leg["end_km"] - leg["start_km"]) if weather["complete"] else 0
+            temperatures.extend(weather["temperature_range_c"] or [])
+            if weather["gust_max_mps"] is not None:
+                gusts.append(weather["gust_max_mps"])
+            for period in weather["precipitation_intervals"]:
+                if period["probability_pct"] is not None:
+                    probabilities.append(period["probability_pct"])
+                if period["amount_mm"] is not None:
+                    amounts.append(period["amount_mm"])
+        if not (temperatures or gusts or probabilities or amounts or
+                any(leg["weather"]["wind_speed_range_mps"] is not None for leg in legs)):
+            raise ValueError("no_forecast_values_in_route_window")
+        forecasts = [r for r in records if r.get("forecast")]
+        stale = any(r.get("expires_at", 0) <= self.epoch or r.get("error") for r in forecasts)
+        spacing = max(b["km"] - a["km"] for a, b in zip(points, points[1:]))
+        reasons = []
+        if covered < total - 1e-6:
+            reasons.append("incomplete_field_or_time_coverage")
+        if spacing > 20:
+            reasons.append("coarse_spatial_sampling")
+        if provider == "met_norway":
+            reasons.append("fallback_met_norway")
+        if any(r.get("deprecated") for r in forecasts):
+            reasons.append("provider_product_deprecated")
+        if stale:
+            reasons.append("retained_expired_forecast")
+        reasons.extend(sorted(self.provider_errors))
+        status = "stale" if stale else "partial" if covered < total - 1e-6 or spacing > 20 else "ok"
+        summary = {"temperature_range_c": [min(temperatures), max(temperatures)] if temperatures else None,
+                   "gust_max_mps": max(gusts) if gusts else None,
+                   "precipitation_probability_max_pct": max(probabilities) if probabilities else None,
+                   "hourly_precipitation_max_mm": max(amounts) if amounts else None,
+                   "aggregation": "Extrema over section arrival windows; precipitation is not a ride total.",
+                   "complete_distance_pct": round(100 * covered / total, 1)}
+        summary["display"] = {
+            "temperature_range": {"value": [round(v * 1.8 + 32 if units["temp"] == "f" else v, 1)
+                                            for v in summary["temperature_range_c"]],
+                                  "unit": "F" if units["temp"] == "f" else "C"} if temperatures else None,
+            "gust_max": {"value": round(summary["gust_max_mps"] * wind_factor, 1),
+                         "unit": units["wind"]} if gusts else None,
+            "hourly_precipitation_max": {"value": round(summary["hourly_precipitation_max_mm"] /
+                                                       (25.4 if units["rain"] == "in" else 1), 2),
+                                        "unit": units["rain"]} if amounts else None,
+            "duration_range": [self.sync._format_duration(v) for v in eta["duration_range_s"]],
+            "moving_duration_range": [self.sync._format_duration(v) for v in eta["moving_duration_range_s"]],
+            "moving_duration_central": self.sync._format_duration(eta["moving_duration_central_s"])}
+        provenance = {"provider": provider, "fallback": provider == "met_norway",
+                      "attribution": "Weather data by Open-Meteo" if provider == "open_meteo" else "Data from MET Norway",
+                      "source_url": "https://open-meteo.com/" if provider == "open_meteo" else "https://api.met.no/",
+                      "licence": "CC BY 4.0", "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+                      "transformations": "Spatial subsampling, time-window extrema and wind components by Section 11.",
+                      "points": [{"point_id": p["point_id"], "fetched_at": self.iso(r["fetched_at"]) if r.get("forecast") else None,
+                                  "validated_at": self.iso(r["validated_at"]) if r.get("forecast") else None,
+                                  "expires_at": self.iso(r["expires_at"]) if r.get("forecast") else None,
+                                  "model": r.get("forecast", {}).get("model"),
+                                  "model_run_at": r.get("forecast", {}).get("model_run_at"),
+                                  "model_run_reason": r.get("forecast", {}).get("model_run_reason"),
+                                  "valid_instants_utc": [self.iso(r["forecast"]["instants"][i]["at"])
+                                                         for i in (0, -1)] if r.get("forecast") else None,
+                                  "provider_updated_at": r.get("forecast", {}).get("provider_updated_at"),
+                                  "error": r.get("error")} for p, r in zip(points, records)]}
+        brief = {**binding, "cache_key": cache_key, "status": status, "reason_codes": reasons,
+                 "fetched_at": self.iso(min(r["fetched_at"] for r in forecasts)),
+                 "expires_at": self.iso(min(r["expires_at"] for r in forecasts)),
+                 "units": dict(self.UNITS), "provenance": provenance, "summary": summary,
+                 "sampling": {"points": points, "max_spacing_km": round(spacing, 2),
+                              "method": "Nearest distance sample; headings retained per polyline leg.",
+                              "limitations": "Approximate 500 m geometry; no shelter, road safety or local exposure."},
+                 "sections": legs if self.tier == "forecast" else []}
+        brief["lead_hours_at_fetch"] = round((start - min(r["fetched_at"] for r in forecasts)) / 3600, 1)
+        if self.tier == "outlook":
+            lo, hi = (self.parse_time(t) for t in outlook_window)
+            values = [v for r in forecasts for v in r["forecast"]["instants"] if lo <= v["at"] <= hi]
+            directions = [v["direction"] for v in values if self.number(v.get("direction")) is not None
+                          and (self.number(v.get("speed")) or 0) > 0]
+            speeds = [v["speed"] for v in values if self.number(v.get("speed")) is not None]
+            period_hours = sorted({p["period_hours"] for leg in legs for p in leg["weather"]["precipitation_intervals"]})
+            summary["period_precipitation_max_mm"] = summary.pop("hourly_precipitation_max_mm")
+            summary["display"]["period_precipitation_max"] = summary["display"].pop("hourly_precipitation_max")
+            summary["aggregation"] = "Trend extrema over the broad outlook window; native-period precipitation maximum, not a ride total."
+            brief["outlook"] = {"window_utc": outlook_window, "precipitation_period_hours": period_hours,
+                                "wind_from_sectors": sorted({("N", "NE", "E", "SE", "S", "SW", "W", "NW")[int((d + 22.5) / 45) % 8] for d in directions}),
+                                "wind_speed_range_mps": [min(speeds), max(speeds)] if speeds else None,
+                                "display_wind_speed_range": {"value": [round(v * wind_factor, 1) for v in (min(speeds), max(speeds))],
+                                                             "unit": units["wind"]} if speeds else None,
+                                "interpretation": "Outlook only: trend, wind direction and rain timing uncertain. No section-level forecast."}
+            brief["reason_codes"].append("long_lead_outlook")
+            if any(h > 1 for h in period_hours):
+                brief["reason_codes"].append("coarse_provider_periods")
+        brief["brief_id"] = self.digest(brief)
+        return brief
+
+    def generate(self, events, activities, previous, athlete, power_inputs=None):
+        by_id = {e.get("id"): e for e in events if e.get("category") in self.sync.TRAINING_EVENT_CATEGORIES}
+        record = self.sync._update_route_eta_history(activities, previous, now=self.now)
+        history = record["activities"]
+        calibration = self.prepare_eta(history, power_inputs)
+        calibration.update(last_full_history_fetch_at=record.get("last_full_fetch_at"),
+                           persistence_status=record.get("persistence_status"),
+                           record_sample_count=len(history),
+                           record_date_range=[history[0]["start_date_local"], history[-1]["start_date_local"]] if history else None)
+        eligible = 0
+        rows = self.sync._routes_data.get("events", [])
+        reference, saved_reference = self.prepare_route_consistency(
+            calibration, (row.get("terrain_summary", {}) for row in sorted(rows, key=lambda r: str(r.get("event_id")))
+                          if row.get("route_status") == "ok" and self.outdoor(by_id.get(row.get("event_id"), {}))),
+            self.epoch, self.state.get("eta_consistency"), record.get("owner_key"))
+        if reference:
+            calibration["route_consistency_reference"] = reference
+            self.state["eta_consistency"] = saved_reference
+        else:
+            self.state.pop("eta_consistency", None)
+        for row in sorted(rows, key=lambda r: (by_id.get(r.get("event_id"), {}).get("start_date_local") or "",
+                                               str(r.get("event_id")))):
+            self.provider_errors = set()
+            event = by_id.get(row.get("event_id"))
+            if row.get("route_status") != "ok" or event is None:
+                continue
+            departure = None
+            try:
+                if not getattr(self.sync, "route_weather_enabled", True):
+                    raise ValueError("disabled")
+                if (event.get("type") not in ("Ride", "GravelRide", "MountainBikeRide")
+                        or event.get("indoor") or event.get("trainer") or event.get("virtual")
+                        or event.get("is_virtual") or "virtual" in str(event.get("sub_type", "")).lower()):
+                    raise ValueError("not_outdoor_cycling")
+                # Gate first; distant/missing-time events do not consume the event budget.
+                departure = self.departure(event, athlete)
+                delta = self.parse_time(departure["at_utc"]) - self.epoch
+                if delta <= 0:
+                    raise ValueError("departure_passed")
+                if delta > self.HORIZON_HOURS * 3600:
+                    raise ValueError("outside_120_hour_horizon")
+                if eligible >= self.MAX_EVENTS:
+                    raise ValueError("event_budget_exhausted")
+                eligible += 1
+                brief = self.brief(row, event, athlete, calibration)
+            except ValueError as error:
+                brief = {"schema_version": self.VERSION, "event_id": row["event_id"],
+                         "route_ref": row["route_ref"], "status": "unavailable",
+                         "reason_codes": [str(error), *sorted(self.provider_errors)], "brief_id": None, "departure": departure}
+            except Exception:
+                # Bad optional provider/cache data must never abort training sync.
+                brief = {"schema_version": self.VERSION, "event_id": row["event_id"],
+                         "route_ref": row["route_ref"], "status": "unavailable",
+                         "reason_codes": ["weather_processing_failed"], "brief_id": None, "departure": departure}
+            row["route_weather"] = brief
+            self.save_snapshot(brief)
+        if self.requests_made:
+            delay = self.FAILURE_BACKOFF_SECONDS if self.failures else self.REFRESH_SECONDS + self.jitter
+            self.state["next_attempt_at"] = self.epoch + delay
+        # Cache records only persist while useful; snapshots have their separate retention.
+        self.state["points"] = {k: v for k, v in self.cache.items()
+                                if isinstance(v, dict) and self.epoch - (self.number(v.get("last_attempt_at")) or 0) < 7 * 86400}
+        self.sync._routes_data["route_weather_cache"] = self.state
+        self.sync._routes_data["brief_snapshots"] = self.snapshots
+        self.sync._routes_data["route_weather_requests_this_sync"] = self.requests_made
+
+
 class IntervalsSync:
     """Sync Intervals.icu data to GitHub repository or local file"""
     
@@ -638,7 +2449,9 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.141"
+    VERSION = "3.145"
+    ROUTE_TERRAIN_VERSION = "3.142"
+    ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
     ROUTES_FILE = "routes.json"
     SAVED_WORKOUTS_FILE = "saved_workouts.json"
@@ -3582,242 +5395,345 @@ class IntervalsSync:
             detail += ", endpoints disagree"
         return f"{status} - {detail}"
 
+    @staticmethod
+    def _event_start_fields(evt: Dict) -> Dict:
+        """Retain an explicit midnight; a date without a time supplies no time."""
+        raw = evt.get("start_date_local")
+        if isinstance(raw, str) and "T" in raw:
+            try:
+                parsed = datetime.fromisoformat(raw)
+                return {"start_time": parsed.strftime("%H:%M"),
+                        "start_time_status": "provided"}
+            except ValueError:
+                pass
+        return {"start_time_status": "missing"}
+
+    @staticmethod
+    def _select_route_attachment(attachments: List[Dict]) -> Optional[Dict]:
+        """GPX before TCX before FIT, then lexical ID, filename and URL."""
+        priority = {"gpx": 0, "tcx": 1, "fit": 2}
+        candidates = []
+        for att in attachments or []:
+            if not isinstance(att, dict):
+                continue
+            filename = str(att.get("filename") or "")
+            ext = filename.lower().rsplit(".", 1)[-1]
+            if ext in priority:
+                candidates.append((priority[ext], str(att.get("id") or ""),
+                                   filename, str(att.get("url") or ""), att))
+        return min(candidates, key=lambda item: item[:4])[-1] if candidates else None
+
+    def _planned_route_fields(self, evt: Dict) -> Dict:
+        """Compact state shared by planned_workouts and race_calendar."""
+        route = getattr(self, "_planned_routes", {}).get(evt.get("id"))
+        if route is None:
+            return {"has_terrain": False, "route_status": "absent"}
+        fields = {"has_terrain": route["route_status"] == "ok",
+                "route_status": route["route_status"],
+                "route_ref": route["route_ref"]}
+        brief = route.get("route_weather")
+        if isinstance(brief, dict):
+            fields["route_weather_summary"] = {
+                key: brief[key] for key in ("event_id", "route_ref", "brief_id", "cache_key", "status", "tier",
+                                            "reason_codes", "departure", "expires_at", "summary") if key in brief}
+            fields["route_weather_summary"]["detail_file"] = "routes.json"
+        return fields
+
+    def _generate_route_weather(self, events, activities, previous, athlete, power_inputs=None):
+        """Optional enrichment; never let a weather failure stop the training output."""
+        try:
+            RouteWeather(self).generate(events, activities, previous, athlete, power_inputs)
+        except Exception:
+            for row in getattr(self, "_routes_data", {}).get("events", []):
+                if row.get("route_status") == "ok":
+                    row["route_weather"] = {"schema_version": RouteWeather.VERSION,
+                                            "event_id": row.get("event_id"), "route_ref": row.get("route_ref"),
+                                            "status": "unavailable", "brief_id": None,
+                                            "reason_codes": ["weather_processing_failed"]}
+
+    def _update_route_eta_history(self, activities, previous=None, full_history=False, now=None):
+        """Non-critical local record; no additional API calls or training payload changes."""
+        try:
+            return RouteWeather.update_history(self, activities, previous or {}, full_history, now)
+        except Exception:
+            return {"activities": [], "last_full_fetch_at": None, "persistence_status": "record_unavailable"}
+
     def _generate_terrain(self, events: List[Dict],
-                          athlete_units: Optional[Dict[str, str]] = None) -> Dict:
-        """
-        Parse GPX/TCX attachments on events into routes.json.
-        
-        Scans all events for attachments, downloads and parses route files,
-        produces terrain_summary with climb/descent detection. Caches by
-        attachment ID to avoid re-downloading unchanged files.
-        
-        Returns dict of event_id → terrain_summary for has_terrain flags.
-        
-        athlete_units (v3.109): plumbed through to _analyze_terrain so each
-        terrain_summary in routes.json carries display blocks. Copy-forward
-        cache hits also refresh display blocks (canonical metric fields are
-        preserved verbatim) so a unit-preference change picks up next sync.
-        """
+                          athlete_units: Optional[Dict[str, str]] = None) -> set:
+        """Reuse unchanged immutable attachments without HTTP; back off failed reads."""
         routes_path = self.data_dir / self.ROUTES_FILE
-        
-        # Load existing cache
-        cached = {"events": []}
+        cached = {}
         if routes_path.exists():
             try:
-                with open(routes_path, 'r') as f:
-                    cached = json.load(f)
-                # Invalidate cache if sync.py changed (schema may differ)
-                if cached.get("script_hash") != self.script_hash:
-                    if self.debug:
-                        print(f"    🔄 routes.json stale (sync.py changed), re-parsing all")
-                    cached = {"events": []}
-            except Exception as e:
-                if self.debug:
-                    print(f"    ⚠️  Could not read routes.json: {e}")
-                cached = {"events": []}
-        
-        # Build lookup of cached attachment_id → terrain entry
-        cached_by_attachment = {}
-        for entry in cached.get("events", []):
-            aid = entry.get("attachment_id")
-            if aid:
-                cached_by_attachment[aid] = entry
-        
-        # Scan events for attachments
+                with open(routes_path, "r") as f:
+                    data = json.load(f)
+                if data.get("script_hash") == self.script_hash:
+                    for entry in data.get("events", []):
+                        if isinstance(entry, dict):
+                            cached[(entry.get("event_id"), entry.get("attachment_id"))] = entry
+            except (OSError, ValueError, TypeError, AttributeError):
+                cached = {}
+
         new_entries = []
+        self._planned_routes = {}
         for evt in events:
-            attachments = evt.get("attachments")
-            if not attachments:
+            att = self._select_route_attachment(evt.get("attachments"))
+            if att is None:
                 continue
-            
-            evt_id = evt.get("id")
-            evt_name = evt.get("name", "Unnamed")
-            evt_date = (evt.get("start_date_local") or "")[:10]
-            evt_category = evt.get("category", "")
-            
-            # Start time: HH:MM when set (not midnight)
-            evt_start_time = None
-            raw_start = evt.get("start_date_local") or ""
-            if "T" in raw_start:
-                time_part = raw_start.split("T")[1][:5]
-                if time_part != "00:00":
-                    evt_start_time = time_part
-            
-            for att in attachments:
-                att_id = att.get("id")
-                filename = att.get("filename", "")
-                url = att.get("url", "")
-                
-                if not att_id or not url:
-                    continue
-                
-                # Skip non-route files by extension
-                ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-                if ext not in ("gpx", "tcx", "fit"):
-                    continue
-                
-                # Check cache — reuse if attachment ID unchanged
-                if att_id in cached_by_attachment:
-                    entry = cached_by_attachment[att_id].copy()
-                    # Update event metadata (name/date may change)
-                    entry["event_id"] = evt_id
-                    entry["event_name"] = evt_name
-                    entry["event_date"] = evt_date
-                    entry["category"] = evt_category
-                    if evt_start_time:
-                        entry["start_time"] = evt_start_time
-                    else:
-                        entry.pop("start_time", None)
-                    # Refresh display blocks against current prefs (v3.109).
-                    # Canonical metric fields are preserved; only display sub-objects
-                    # are recomputed so a pref change picks up without invalidating
-                    # the GPX-parse cache.
-                    cached_ts = entry.get("terrain_summary")
-                    if isinstance(cached_ts, dict):
-                        entry["terrain_summary"] = self._refresh_terrain_display(cached_ts, athlete_units)
-                    new_entries.append(entry)
-                    if self.debug:
-                        print(f"    ✓ Cached terrain: {evt_name} ({filename})")
-                    continue
-                
-                # Download and parse
-                if self.debug:
-                    print(f"    ↓ Downloading: {filename} for {evt_name}")
-                
-                terrain_summary = self._download_and_parse_route(url, filename, athlete_units=athlete_units)
-                
-                entry = {
-                    "event_id": evt_id,
-                    "event_name": evt_name,
-                    "event_date": evt_date,
-                    "category": evt_category,
+            evt_id, att_id = evt.get("id"), att.get("id")
+            filename = str(att.get("filename") or "")
+            # Detect filename replacement; potentially rotating URLs are not identity.
+            source_hash = hashlib.sha256(json.dumps(
+                [filename], separators=(",", ":")
+            ).encode("utf-8")).hexdigest()
+            now = datetime.now(timezone.utc)
+            result = self._cached_route_result(
+                cached.get((evt_id, att_id)), filename, source_hash, now, athlete_units)
+            if result is None:
+                if evt_id is None or att_id is None:
+                    result = {"route_status": "failed", "route_error": "missing_identity"}
+                else:
+                    result = self._download_and_parse_route(
+                        att.get("url"), filename, athlete_units=athlete_units)
+                result = self._validated_route_result(result)
+                result.update(last_attempt_at=now.isoformat(), checked_at=now.isoformat(),
+                              cache_hit=False)
+            # A legacy error dictionary or an incomplete parser result is never terrain.
+            result = self._validated_route_result(result)
+            revision = result.pop("revision", None)
+            entry = {
+                "event_id": evt_id,
+                "event_name": evt.get("name", "Unnamed"),
+                "event_date": (evt.get("start_date_local") or "")[:10],
+                "category": evt.get("category", ""),
+                "attachment_id": att_id,
+                "filename": filename,
+                "attachment_source_hash": source_hash,
+                "route_ref": {
+                    "route_id": (f"intervals:{evt_id}:attachment:{att_id}"
+                                 if evt_id is not None and att_id is not None else None),
+                    "revision": revision,
                     "attachment_id": att_id,
-                    "filename": filename,
-                    "terrain_summary": terrain_summary
-                }
-                if evt_start_time:
-                    entry["start_time"] = evt_start_time
-                new_entries.append(entry)
-        
-        # Build routes.json
+                    "terrain_version": self.ROUTE_TERRAIN_VERSION,
+                },
+                **result,
+                **self._event_start_fields(evt),
+            }
+            new_entries.append(entry)
+            if evt_id is not None:
+                self._planned_routes[evt_id] = entry
+
         self._routes_data = {
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "sync_version": self.VERSION,
             "script_hash": self.script_hash,
-            "events": new_entries
+            "events": new_entries,
         }
-        
-        # Return event_id → True for has_terrain flags
-        return {e["event_id"] for e in new_entries if e.get("terrain_summary")}
-    
+        return {e["event_id"] for e in new_entries if e["route_status"] == "ok"}
+
+    def _cached_route_result(self, cached: Optional[Dict], filename: str,
+                             source_hash: str, now: datetime,
+                             athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
+        """Reuse matching analysis or a not-yet-due failure before any HTTP call.
+
+        Intervals attachment IDs are assumed immutable. A changed ID or filename
+        is a new attachment version; a changed URL is not. The caller checked event/attachment
+        IDs and script hash; content revisions remain the hashes recorded at parse.
+        """
+        if not isinstance(cached, dict):
+            return None
+        ref = cached.get("route_ref")
+        if (not isinstance(ref, dict)
+                or ref.get("terrain_version") != self.ROUTE_TERRAIN_VERSION
+                or cached.get("filename") != filename
+                or cached.get("attachment_source_hash") != source_hash):
+            return None
+        previous = self._validated_route_result(cached)
+        status = previous["route_status"]
+        revision = ref.get("revision")
+        if status in ("ok", "no_elevation"):
+            if (not isinstance(revision, str) or len(revision) != 64
+                    or any(c not in "0123456789abcdef" for c in revision)
+                    or not previous.get("analyzed_at")):
+                return None
+        elif status == "unsupported_format" or previous.get("route_error") == "missing_identity":
+            pass  # Terminal for this unchanged attachment; no repeated request.
+        else:
+            try:
+                last_attempt = datetime.fromisoformat(previous["last_attempt_at"])
+                if last_attempt.tzinfo is None:
+                    last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+            except (KeyError, TypeError, ValueError):
+                return None
+            if (now - last_attempt).total_seconds() >= self.ROUTE_RETRY_BACKOFF_SECONDS:
+                return None
+        result = {key: previous[key] for key in (
+            "route_status", "route_error", "terrain_summary", "route_geometry",
+            "analyzed_at", "last_attempt_at", "checked_at") if key in previous}
+        if status == "ok":
+            result["terrain_summary"] = self._refresh_terrain_display(
+                result["terrain_summary"], athlete_units)
+        elif status == "no_elevation":
+            geometry = dict(result["route_geometry"])
+            geometry["display"] = {"total_distance": self._to_display(
+                geometry["total_distance_km"], "distance", athlete_units)}
+            result["route_geometry"] = geometry
+        return {**result, "revision": revision, "cache_hit": True}
+
+    @staticmethod
+    def _validated_route_result(result: Dict) -> Dict:
+        """Fail closed at the parser/cache boundary, independent of truthiness."""
+        if not isinstance(result, dict) or "error" in result:
+            return {"route_status": "failed", "route_error": "invalid_parse_result"}
+        status = result.get("route_status")
+        if status == "ok":
+            terrain = result.get("terrain_summary")
+            if (not isinstance(terrain, dict) or "error" in terrain
+                    or terrain.get("course_character") not in ("flat", "rolling", "hilly", "mountain")
+                    or not isinstance(terrain.get("polyline"), list)
+                    or len(terrain["polyline"]) < 2
+                    or not isinstance(terrain.get("total_elevation_m"), (int, float))
+                    or not math.isfinite(terrain["total_elevation_m"])):
+                return {"route_status": "failed", "route_error": "invalid_terrain_result"}
+        elif status == "no_elevation":
+            geometry = result.get("route_geometry")
+            if (not isinstance(geometry, dict)
+                    or not isinstance(geometry.get("polyline"), list)
+                    or len(geometry["polyline"]) < 2):
+                return {"route_status": "failed", "route_error": "invalid_geometry_result"}
+        elif status not in ("failed", "unsupported_format", "no_gps"):
+            return {"route_status": "failed", "route_error": "invalid_route_status"}
+        out = dict(result)
+        if status != "ok":
+            out.pop("terrain_summary", None)
+        if status != "no_elevation":
+            out.pop("route_geometry", None)
+        return out
+
     def _download_and_parse_route(self, url: str, filename: str,
-                                  athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Download a route file attachment and parse it into a terrain_summary."""
+                                  athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Download and analyze a new or retry-due attachment, recording its hash."""
+        if filename.lower().endswith(".fit"):
+            return {"route_status": "unsupported_format", "route_error": "FIT is not supported"}
+        if not url:
+            return {"route_status": "failed", "route_error": "missing_url"}
         try:
             response = requests.get(url, timeout=30)
             if response.status_code != 200:
-                return {"error": f"download failed (HTTP {response.status_code})"}
+                return {"route_status": "failed",
+                        "route_error": f"download failed (HTTP {response.status_code})"}
             content = response.content
-        except Exception as e:
-            return {"error": f"download failed: {str(e)[:100]}"}
-        
-        if not content or len(content) < 50:
-            return {"error": "empty or invalid file"}
-        
-        return self._parse_route_file(content, filename, athlete_units=athlete_units)
-    
+        except requests.exceptions.RequestException:
+            return {"route_status": "failed", "route_error": "download failed"}
+        if not content:
+            return {"route_status": "failed", "route_error": "empty_file"}
+
+        revision = hashlib.sha256(content).hexdigest()
+        result = self._validated_route_result(
+            self._parse_route_file(content, filename, athlete_units=athlete_units))
+        result.update(revision=revision, cache_hit=False)
+        if result["route_status"] in ("ok", "no_elevation"):
+            result["analyzed_at"] = datetime.now(timezone.utc).isoformat()
+        return result
+
     def _parse_route_file(self, content: bytes, filename: str,
-                          athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Detect route file format and dispatch to parser."""
-        text_start = content[:200].decode("utf-8", errors="ignore").strip()
-        
-        if text_start.startswith("<?xml") or text_start.startswith("<gpx") or "<gpx" in text_start[:500]:
-            return self._parse_gpx(content, athlete_units=athlete_units)
-        elif "<TrainingCenterDatabase" in text_start or "TrainingCenterDatabase" in content[:500].decode("utf-8", errors="ignore"):
-            return self._parse_tcx(content, athlete_units=athlete_units)
-        elif content[:2] == b'.F' or content[:4] == b'\x0e\x10\xd9\x07':
-            # FIT binary magic bytes
-            return {"error": "FIT format not yet supported"}
-        else:
-            # Fall back to extension
-            ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-            if ext == "gpx":
-                return self._parse_gpx(content, athlete_units=athlete_units)
-            elif ext == "tcx":
-                return self._parse_tcx(content, athlete_units=athlete_units)
-            elif ext == "fit":
-                return {"error": "FIT format not yet supported"}
-            return {"error": f"unrecognized route file format"}
-    
-    def _parse_gpx(self, content: bytes,
-                   athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Parse GPX file into trackpoints, then analyze terrain."""
+                          athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Dispatch on the XML root, never on the shared XML declaration."""
+        if filename.lower().endswith(".fit") or content[8:12] == b".FIT":
+            return {"route_status": "unsupported_format", "route_error": "FIT is not supported"}
         try:
             root = ET.fromstring(content)
-        except ET.ParseError as e:
-            return {"error": f"GPX parse error: {str(e)[:100]}"}
-        
-        # Handle namespace
-        ns = ""
-        tag = root.tag
-        if "}" in tag:
-            ns = tag[:tag.index("}") + 1]
-        
+        except (ET.ParseError, LookupError, ValueError):
+            return {"route_status": "failed", "route_error": "invalid_xml"}
+        tag = root.tag.rsplit("}", 1)[-1]
+        if tag == "gpx":
+            return self._parse_gpx(content, athlete_units=athlete_units)
+        if tag == "TrainingCenterDatabase":
+            return self._parse_tcx(content, athlete_units=athlete_units)
+        return {"route_status": "unsupported_format", "route_error": "unrecognized XML root"}
+
+    @staticmethod
+    def _route_point(lat, lon, ele=None) -> Optional[Dict]:
+        """Keep valid GPS when altitude is missing; reject non-finite coordinates."""
+        try:
+            lat, lon = float(lat), float(lon)
+        except (ValueError, TypeError):
+            return None
+        if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+            return None
+        point = {"lat": lat, "lon": lon}
+        try:
+            altitude = float(ele)
+            if math.isfinite(altitude):
+                point["ele"] = altitude
+        except (ValueError, TypeError):
+            pass
+        return point
+
+    def _route_from_trackpoints(self, trackpoints: List[Dict],
+                                athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        if len(trackpoints) < 2:
+            return {"route_status": "no_gps", "route_error": "insufficient_trackpoints"}
+        # Incomplete altitude coverage must not enter the detector as synthetic zero.
+        if not all("ele" in point for point in trackpoints):
+            distance = 0.0
+            next_threshold = 0.0
+            polyline = []
+            for i, point in enumerate(trackpoints):
+                if i:
+                    prev = trackpoints[i - 1]
+                    distance += self._haversine(prev["lat"], prev["lon"], point["lat"], point["lon"])
+                if distance >= next_threshold or i == len(trackpoints) - 1:
+                    polyline.append([round(distance / 1000, 1),
+                                     round(point["lat"], 5), round(point["lon"], 5)])
+                    next_threshold = distance + 500.0
+            km = round(distance / 1000, 1)
+            return {"route_status": "no_elevation", "route_geometry": {
+                "total_distance_km": km,
+                "start_coords": [round(trackpoints[0]["lat"], 5), round(trackpoints[0]["lon"], 5)],
+                "polyline": polyline,
+                "display": {"total_distance": self._to_display(km, "distance", athlete_units)},
+            }}
+        summary = self._analyze_terrain(trackpoints, athlete_units=athlete_units)
+        if not isinstance(summary, dict) or "error" in summary:
+            return {"route_status": "failed", "route_error": "terrain_analysis_unavailable"}
+        return {"route_status": "ok", "terrain_summary": summary}
+
+    def _parse_gpx(self, content: bytes,
+                   athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Parse GPX trackpoints without inventing missing altitude."""
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError:
+            return {"route_status": "failed", "route_error": "invalid_gpx"}
+        ns = root.tag[:root.tag.index("}") + 1] if "}" in root.tag else ""
         trackpoints = []
         for trkpt in root.iter(f"{ns}trkpt"):
-            lat = trkpt.get("lat")
-            lon = trkpt.get("lon")
-            ele_elem = trkpt.find(f"{ns}ele")
-            if lat and lon:
-                tp = {"lat": float(lat), "lon": float(lon)}
-                if ele_elem is not None and ele_elem.text:
-                    try:
-                        tp["ele"] = float(ele_elem.text)
-                    except ValueError:
-                        pass
-                trackpoints.append(tp)
-        
-        if len(trackpoints) < 2:
-            return {"error": "insufficient trackpoints"}
-        
-        return self._analyze_terrain(trackpoints, athlete_units=athlete_units)
-    
+            point = self._route_point(trkpt.get("lat"), trkpt.get("lon"),
+                                      trkpt.findtext(f"{ns}ele"))
+            if point is not None:
+                trackpoints.append(point)
+        return self._route_from_trackpoints(trackpoints, athlete_units)
+
     def _parse_tcx(self, content: bytes,
-                   athlete_units: Optional[Dict[str, str]] = None) -> Optional[Dict]:
-        """Parse TCX file into trackpoints, then analyze terrain."""
+                   athlete_units: Optional[Dict[str, str]] = None) -> Dict:
+        """Parse TCX positions, retaining GPS if altitude is absent or malformed."""
         try:
             root = ET.fromstring(content)
-        except ET.ParseError as e:
-            return {"error": f"TCX parse error: {str(e)[:100]}"}
-        
-        # Handle namespace
-        ns = ""
-        tag = root.tag
-        if "}" in tag:
-            ns = tag[:tag.index("}") + 1]
-        
+        except ET.ParseError:
+            return {"route_status": "failed", "route_error": "invalid_tcx"}
+        ns = root.tag[:root.tag.index("}") + 1] if "}" in root.tag else ""
         trackpoints = []
         for tp_elem in root.iter(f"{ns}Trackpoint"):
             pos = tp_elem.find(f"{ns}Position")
             if pos is None:
                 continue
-            lat_elem = pos.find(f"{ns}LatitudeDegrees")
-            lon_elem = pos.find(f"{ns}LongitudeDegrees")
-            alt_elem = tp_elem.find(f"{ns}AltitudeMeters")
-            
-            if lat_elem is not None and lon_elem is not None:
-                try:
-                    tp = {"lat": float(lat_elem.text), "lon": float(lon_elem.text)}
-                    if alt_elem is not None and alt_elem.text:
-                        tp["ele"] = float(alt_elem.text)
-                    trackpoints.append(tp)
-                except (ValueError, TypeError):
-                    continue
-        
-        if len(trackpoints) < 2:
-            return {"error": "insufficient trackpoints"}
-        
-        return self._analyze_terrain(trackpoints, athlete_units=athlete_units)
+            point = self._route_point(pos.findtext(f"{ns}LatitudeDegrees"),
+                                      pos.findtext(f"{ns}LongitudeDegrees"),
+                                      tp_elem.findtext(f"{ns}AltitudeMeters"))
+            if point is not None:
+                trackpoints.append(point)
+        return self._route_from_trackpoints(trackpoints, athlete_units)
     
     @staticmethod
     def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -3909,9 +5825,9 @@ class IntervalsSync:
         elevation_per_km = round(total_elevation_m / total_distance_km, 1) if total_distance_km > 0 else 0.0
         
         # Detect climbs and descents
-        # Entry gradient is low (1.5%) to catch long gradual climbs like Brocken.
-        # Post-filter by elevation gain: segments with <100m gain AND <3% avg are
-        # filtered out to avoid detecting gentle inclines as "climbs."
+        # Native segment boundaries use the existing 50m-smoothed elevations.
+        # After raw distance/gradient admission, retain rounded gain >=100m OR
+        # rounded absolute average >=3%; this applies symmetrically to descents.
         raw_climbs = self._detect_segments(trackpoints, cum_dist, smoothed_ele, min_gradient=1.5, min_distance=500.0, ascending=True, athlete_units=athlete_units)
         climbs = [c for c in raw_climbs if c["elevation_m"] >= 100 or c["avg_gradient_pct"] >= 3.0]
         raw_descents = self._detect_segments(trackpoints, cum_dist, smoothed_ele, min_gradient=1.5, min_distance=500.0, ascending=False, athlete_units=athlete_units)
@@ -4089,147 +6005,143 @@ class IntervalsSync:
             trackpoints.append(tp)
         return trackpoints
     
+    @staticmethod
+    def _terrain_native_boundaries(cum_dist, smoothed_ele, ascending):
+        """Native relative-dip parents and all positive 1.5% excess cores."""
+        n = len(cum_dist)
+        if n < 2:
+            return []
+        sign = 1 if ascending else -1
+        y = [sign * value for value in smoothed_ele]
+        d = cum_dist
+        reference = 1.5 / 100
+        spans = []
+        i = 0
+        while i < n - 1:
+            length = d[i + 1] - d[i]
+            if length <= 0 or (y[i + 1] - y[i]) / length < reference:
+                i += 1
+                continue
+            peak = i
+            j = i + 1
+            while j < n:
+                if y[j] > y[peak]:
+                    peak = j
+                allowance = max(2.5, 0.05 * (y[peak] - y[i]))
+                if y[peak] - y[j] > allowance:
+                    break
+                j += 1
+            pending = [(i, peak)]
+            while pending:
+                lo, hi = pending.pop()
+                low = start = end = lo
+                best = 0.0
+                for k in range(lo + 1, hi + 1):
+                    value = y[k] - y[low] - reference * (d[k] - d[low])
+                    if value > best:
+                        start, end, best = low, k, value
+                    if y[k] - reference * d[k] < y[low] - reference * d[low]:
+                        low = k
+                if end > start:
+                    spans.append((start, end))
+                    if lo < start:
+                        pending.append((lo, start))
+                    if end < hi:
+                        pending.append((end, hi))
+            i = max(peak, i + 1)
+        return sorted(spans)
+
+    @staticmethod
+    def _terrain_rolling_gradient(d, y):
+        """Centered native secant within a fixed 200 m window."""
+        from bisect import bisect_left, bisect_right
+        window = 200
+        result = []
+        for i, x in enumerate(d):
+            lo = bisect_left(d, x - window / 2, 0, i + 1)
+            hi = max(i, bisect_right(d, x + window / 2, i) - 1)
+            result.append(100 * (y[hi] - y[lo]) / (d[hi] - d[lo])
+                          if d[hi] > d[lo] else 0)
+        return result
+
+    @staticmethod
+    def _terrain_valley_splits(spans, d, y, g):
+        """Split persistent valleys at a shared native saddle; protect 100 m gain."""
+        from bisect import bisect_left, bisect_right
+        window, fraction = 200, 0.25
+        out, pending = [], list(spans)
+        while pending:
+            a, b = pending.pop()
+            if y[b] - y[a] >= 100:
+                out.append((a, b))
+                continue
+            lo = bisect_left(d, d[a] + window, a, b + 1)
+            hi = bisect_right(d, d[b] - window, lo, b + 1) - 1
+            if hi < lo:
+                out.append((a, b))
+                continue
+            k = min(range(lo, hi + 1), key=lambda j: g[j])
+            threshold = fraction * min(max(g[a:k]), max(g[k + 1:b + 1]))
+            left = right = k
+            if g[k] < threshold:
+                while left > a and g[left - 1] < threshold:
+                    left -= 1
+                while right < b and g[right + 1] < threshold:
+                    right += 1
+            if g[k] >= threshold or d[right] - d[left] < window / 4:
+                out.append((a, b))
+                continue
+            pending.extend(((a, k), (k, b)))
+        return sorted(out)
+
+    @staticmethod
+    def _terrain_bounded_ends(spans, d, g):
+        """Extend supported ends by at most 100 m and a fixed neighbor midpoint."""
+        from bisect import bisect_left
+        window, fraction = 200, 0.25
+        out = []
+        for i, (a, b) in enumerate(spans):
+            hi = (bisect_left(d, (d[b] + d[spans[i + 1][0]]) / 2)
+                  if i + 1 < len(spans) else len(d) - 1)
+            end = b
+            threshold = fraction / 2 * max(g[a:b + 1])
+            while b < hi and g[b + 1] > threshold and d[b + 1] - d[end] <= window / 2:
+                b += 1
+            out.append((a, b))
+        return out
+
+    @staticmethod
+    def _terrain_boundaries(cum_dist, smoothed_ele, ascending):
+        """Fixed segmentation composition on original 50 m-smoothed native samples.
+
+        Six fixed constants: 1.5%, 2.5 m, 5%, 200 m, one quarter, 100 m.
+        Dwell, exit support and extension are derived from window/fraction.
+        Explicit stacks avoid recursion limits; worst-case searches are not linear.
+        """
+        if len(cum_dist) < 2:
+            return []
+        y = [value if ascending else -value for value in smoothed_ele]
+        g = IntervalsSync._terrain_rolling_gradient(cum_dist, y)
+        spans = IntervalsSync._terrain_native_boundaries(cum_dist, smoothed_ele, ascending)
+        spans = IntervalsSync._terrain_valley_splits(spans, cum_dist, y, g)
+        return IntervalsSync._terrain_bounded_ends(spans, cum_dist, g)
+
     def _detect_segments(self, trackpoints: List[Dict], cum_dist: List[float],
                          smoothed_ele: List[float], min_gradient: float,
                          min_distance: float, ascending: bool,
                          athlete_units: Optional[Dict[str, str]] = None) -> List[Dict]:
         """
-        Detect sustained climb or descent segments using chunk-based analysis.
-        
-        Divides route into ~200m chunks, classifies each by gradient, then finds
-        contiguous climbing/descending runs. Tolerates brief flats and small dips
-        within a climb (real climbs have false flats and switchbacks). A climb ends
-        when elevation drops >50m from the local high water mark, indicating a
-        genuine descent, not a brief dip.
-        
-        athlete_units (v3.109): when provided, each segment dict carries a `display`
-        block with position, distance, and elevation in the athlete's preferred units.
+        Detect native climb/descent spans with fixed native boundaries.
+        Admission and formatting measure the original smoothed profile.
+        athlete_units adds the existing preferred-unit display block.
         """
-        CHUNK_M = 200  # chunk size for gradient classification
-        DIP_TOLERANCE_M = 50  # max elevation loss before ending a climb
-        
-        n = len(trackpoints)
-        if n < 2 or cum_dist[-1] < CHUNK_M:
-            return []
-        
-        # Build chunks: each has start_idx, end_idx, gradient, distance, ele_change
-        chunks = []
-        ci = 0
-        while ci < n - 1:
-            cj = ci + 1
-            while cj < n and cum_dist[cj] - cum_dist[ci] < CHUNK_M:
-                cj += 1
-            if cj >= n:
-                cj = n - 1
-            if cj <= ci:
-                break
-            
-            chunk_dist = cum_dist[cj] - cum_dist[ci]
-            chunk_ele = smoothed_ele[cj] - smoothed_ele[ci]
-            chunk_grad = (chunk_ele / chunk_dist * 100) if chunk_dist > 10 else 0
-            
-            chunks.append({
-                "si": ci, "ei": cj,
-                "dist": chunk_dist, "ele": chunk_ele, "grad": chunk_grad
-            })
-            ci = cj
-        
-        if not chunks:
-            return []
-        
-        # Find climbing or descending segments using high-water-mark logic
         segments = []
-        i = 0
-        
-        while i < len(chunks):
-            c = chunks[i]
-            
-            # Look for start of a potential segment
-            if ascending and c["grad"] < 1.0:
-                i += 1
-                continue
-            elif not ascending and c["grad"] > -1.0:
-                i += 1
-                continue
-            
-            # Start tracking a segment
-            seg_start_idx = c["si"]
-            seg_start_ele = smoothed_ele[seg_start_idx]
-            
-            if ascending:
-                high_mark = seg_start_ele
-                high_mark_chunk = i
-            else:
-                low_mark = seg_start_ele
-                low_mark_chunk = i
-            
-            j = i
-            while j < len(chunks):
-                current_ele = smoothed_ele[chunks[j]["ei"]]
-                
-                if ascending:
-                    if current_ele > high_mark:
-                        high_mark = current_ele
-                        high_mark_chunk = j
-                    # End if we've dropped too far from high water mark
-                    if high_mark - current_ele > DIP_TOLERANCE_M:
-                        break
-                else:
-                    if current_ele < low_mark:
-                        low_mark = current_ele
-                        low_mark_chunk = j
-                    # End if we've risen too far from low water mark
-                    if current_ele - low_mark > DIP_TOLERANCE_M:
-                        break
-                j += 1
-            
-            # Determine segment boundaries
-            if ascending:
-                seg_end_idx = chunks[high_mark_chunk]["ei"]
-            else:
-                seg_end_idx = chunks[low_mark_chunk]["ei"]
-            
-            # Trim flat approach: advance start until the LOCAL gradient
-            # (over the next ~1km) shows sustained climbing. Prevents valley
-            # roads with slight uphill trend being included in mountain climbs.
-            LOCAL_TRIM_DIST = 2000  # look 2km ahead for local gradient check
-            LOCAL_TRIM_GRAD = 2.5   # minimum local gradient to start the climb
-            if ascending:
-                for t in range(i, min(high_mark_chunk, len(chunks))):
-                    t_start = chunks[t]["si"]
-                    # Find point ~1km ahead
-                    ahead_idx = t_start
-                    for ai in range(t_start + 1, min(chunks[high_mark_chunk]["ei"] + 1, len(cum_dist))):
-                        if cum_dist[ai] - cum_dist[t_start] >= LOCAL_TRIM_DIST:
-                            ahead_idx = ai
-                            break
-                    if ahead_idx > t_start:
-                        local_dist = cum_dist[ahead_idx] - cum_dist[t_start]
-                        local_ele = smoothed_ele[ahead_idx] - smoothed_ele[t_start]
-                        if local_dist > 0 and (local_ele / local_dist * 100) >= LOCAL_TRIM_GRAD:
-                            seg_start_idx = t_start
-                            break
-            elif not ascending:
-                end_chunk = low_mark_chunk
-                for t in range(i, min(end_chunk, len(chunks))):
-                    t_start = chunks[t]["si"]
-                    ahead_idx = t_start
-                    for ai in range(t_start + 1, min(chunks[end_chunk]["ei"] + 1, len(cum_dist))):
-                        if cum_dist[ai] - cum_dist[t_start] >= LOCAL_TRIM_DIST:
-                            ahead_idx = ai
-                            break
-                    if ahead_idx > t_start:
-                        local_dist = cum_dist[ahead_idx] - cum_dist[t_start]
-                        local_ele = smoothed_ele[ahead_idx] - smoothed_ele[t_start]
-                        if local_dist > 0 and (local_ele / local_dist * 100) <= -LOCAL_TRIM_GRAD:
-                            seg_start_idx = t_start
-                            break
-            
+        for seg_start_idx, seg_end_idx in self._terrain_boundaries(cum_dist, smoothed_ele, ascending):
             seg_dist = cum_dist[seg_end_idx] - cum_dist[seg_start_idx]
             seg_ele = smoothed_ele[seg_end_idx] - smoothed_ele[seg_start_idx]
             
             # Check minimum criteria
-            if seg_dist >= min_distance and abs(seg_ele) >= 50:
+            if seg_dist >= min_distance:
                 avg_gradient = (seg_ele / seg_dist) * 100 if seg_dist > 0 else 0
                 
                 if (ascending and avg_gradient >= min_gradient) or \
@@ -4286,12 +6198,6 @@ class IntervalsSync:
                     
                     segments.append(segment)
             
-            # Advance past this segment
-            if ascending:
-                i = high_mark_chunk + 1
-            else:
-                i = low_mark_chunk + 1
-        
         return segments
     
     def _fetch_today_wellness(self) -> Dict:
@@ -4705,6 +6611,8 @@ class IntervalsSync:
         print("Scanning events for route attachments...")
         terrain_event_ids = self._generate_terrain(events, athlete_units=athlete_units)
         self._terrain_event_ids = terrain_event_ids
+        self._generate_route_weather(events, activities_extended, previous_latest_lookup, athlete,
+                                     RouteWeather.eta_inputs(cycling, latest_wellness, athlete))
         if terrain_event_ids:
             print(f"   🗺️  Route data for {len(terrain_event_ids)} event(s)")
 
@@ -9345,6 +11253,7 @@ class IntervalsSync:
             all_activities = self._intervals_get("activities", {
                 "oldest": earliest_3y, "newest": newest
             })
+            self._update_route_eta_history(all_activities, full_history=True)
         except Exception as e:
             print(f"  ⚠️ Could not fetch full history: {e}")
             if prior_valid:
@@ -12003,7 +13912,7 @@ class IntervalsSync:
             clean_desc = "\n".join(clean_desc_lines).strip()
 
             entry = {
-                "id": evt.get("id", f"unknown_{i+1}"),
+                "id": evt.get("id"),
                 "date": evt_date,
                 "name": evt.get("name", ""),
                 "type": evt.get("category", ""),
@@ -12012,18 +13921,13 @@ class IntervalsSync:
                 "duration_hours": round((evt.get("moving_time") or 0) / 3600, 2),
                 "duration_formatted": self._format_duration(int(evt.get("moving_time") or 0)),
                 "workout_summary": summary,
-                "has_terrain": evt.get("id", f"unknown_{i+1}") in getattr(self, '_terrain_event_ids', set())
+                **self._planned_route_fields(evt)
             }
 
             if coach_notes:
                 entry["coach_notes"] = coach_notes
             
-            # Start time: extract HH:MM when a real time is set (not midnight)
-            raw_start = evt.get("start_date_local") or ""
-            if "T" in raw_start:
-                time_part = raw_start.split("T")[1][:5]
-                if time_part != "00:00":
-                    entry["start_time"] = time_part
+            entry.update(self._event_start_fields(evt))
             
             # Indoor flag: only include when True
             if evt.get("indoor"):
@@ -12280,6 +14184,7 @@ class IntervalsSync:
                             # Convert meters → km for the display helper (canonical kind="distance" expects km)
                             distance_km_for_display = (distance_meters / 1000) if distance_meters else None
                             race_entry = {
+                                "id": evt.get("id"),
                                 "name": evt.get("name", "Unnamed Race"),
                                 "date": start,
                                 "category": cat,
@@ -12292,15 +14197,10 @@ class IntervalsSync:
                                         distance_km_for_display, "distance", athlete_units
                                     ),
                                 },
-                                "has_terrain": evt.get("id") in getattr(self, '_terrain_event_ids', set()),
+                                **self._planned_route_fields(evt),
                                 "_raw": evt  # Keep raw for race-week building
                             }
-                            # Start time: extract HH:MM when a real time is set
-                            raw_start = evt.get("start_date_local") or ""
-                            if "T" in raw_start:
-                                time_part = raw_start.split("T")[1][:5]
-                                if time_part != "00:00":
-                                    race_entry["start_time"] = time_part
+                            race_entry.update(self._event_start_fields(evt))
                             # Indoor flag: only include when True
                             if evt.get("indoor"):
                                 race_entry["indoor"] = True
@@ -13778,6 +15678,8 @@ def main():
                          debug=args.debug, week_start_day=week_start_day,
                          zone_preference=zone_preference)
     sync._force_saved_workouts = args.refresh_saved_workouts
+    # Default-on; either off switch disables forecast requests. See privacy/setup docs.
+    sync.route_weather_enabled = RouteWeather.enabled(config)
     
     # Manual history generation
     if args.generate_history:

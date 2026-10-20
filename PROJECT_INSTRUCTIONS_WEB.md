@@ -31,6 +31,7 @@ Load on demand only, through the same delivery paths:
 - history.json for trend, phase or longitudinal work: trend analysis, phase context, longitudinal comparison
 - intervals.json when analysing an activity with `has_intervals: true`, `has_dfa: true` or `has_structure: true`: interval compliance, pacing, cardiac drift, recovery quality, DFA a1 session interpretation and completed-session detail. Use latest.json's structure_summary for everyday comparisons and pre-workout context
 - routes.json when a planned event has `has_terrain: true`: route analysis, terrain-adjusted pacing, pre-ride briefing
+  For optional route weather, match the summary pointer's event, full route_ref, departure, cache_key and brief_id; use the protocol's weather freshness, coverage and ETA uncertainty rules
 - saved_workouts.json when selecting, reusing, or discussing a saved workout, including my saved version of a familiar workout. Read-only mirror of the athlete's Intervals.icu saved workouts, and the preferred read path for them. Check `refresh.status` (`ok` / `stale` / `unavailable`) before use. Before prescribing a saved workout, verify that its structure implements an applicable Workout Reference Library template; a matching name or adaptation label alone is not a match. Inventory only, never a session-design authority, and never evidence of what was prescribed historically
 - WORKOUT_REFERENCE.md (Workout Reference Library) when prescribing a structured session, including a familiar workout I name or a saved workout proposed for reuse: identify the template it implements before prescribing, and if the library cannot be reached, say so rather than improvising (Section 11 B §8)
 
@@ -134,6 +135,7 @@ Returning:
 ## OUTPUT FORMAT
 
 No citations, no source markers, no parenthetical references. Raw data and analysis only.
+Exception: displayed forecast data must retain the provider's linked attribution, licence and transformation note specified in SECTION_11's Weather Data Source.
 
 **Post-workout reports** use a structured line-by-line format per session, not bullets:
 

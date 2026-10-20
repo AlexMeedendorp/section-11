@@ -37,6 +37,12 @@ setup.
 
 ## Running
 
+`test_terrain_segmentation.py` covers native terrain segmentation boundaries, persistent
+valleys, bounded exit extension, directional symmetry and admission/formatting
+with hand-derived profiles and the offline network guard. Run it alone with
+`python3 -m unittest discover dev/tests -p test_terrain_segmentation.py`, or as
+part of the complete suite below.
+
 From the repository root:
 
 ```
@@ -58,6 +64,53 @@ Nothing else to install, no arguments, no configuration.
 
 Local and manual by design. No CI, no hooks, no coverage tooling, no test
 dependency.
+
+## Offline route ETA evaluation
+
+From a complete source checkout, use the same Python environment as sync.py:
+
+```sh
+python3 -I -B dev/evaluate_route_eta.py /path/to/route_eta_history.json --as-of 2026-10-19 --outdoor-ftp-w 250 --body-weight-kg 75
+```
+
+The date, FTP and weight are synthetic examples. Supply the existing main
+`thresholds.sports.cycling.ftp` and current wellness/profile weight, never eFTP or
+indoor FTP. Optional `--power-zone-upper-pct 55 75 90 105 120 150 999` accepts
+existing outdoor zone percentage upper boundaries. Omitted/invalid main inputs
+report physics unavailable; they are not guessed. Omit `--as-of` for the current UTC date. This reads the
+local record without modifying it or using the network and emits aggregate JSON
+only. No IDs, ride rows, coordinates or credentials are printed. Each fold removes
+the held-out activity ID before fitting both the ETA model and stop ratios; the
+evaluation compares unrounded moving-time bounds with actual moving time. It
+reports coverage, median width in seconds, median width divided by central time,
+median absolute relative error, method counts and excluded/insufficient counts.
+The empirical target is about 70 to 85% coverage with narrow windows; it is not a
+future guarantee. Stops and five-minute rounding are excluded from these scores.
+
+The top-level scores retain the legacy v6 evaluator for comparison.
+`physics_comparison.methods` adds three side-by-side methods on identical rides:
+`pace`, `ftp_zones_physics` (wide 0.7 to 1.4 default window) and
+`ride_power_physics`. Physics evaluation requires existing aggregate power and
+ascent; producer ascent is preferred, recorded ascent remains a labelled proxy.
+No held-out ride's power or time enters its target-power/time-factor fit or its
+residual band. The band uses nested leave-one-out residuals from training only.
+The safeguard needs at least 12 rides, no lower coverage and median widths in
+seconds and relative terms at most 1.10 times pace. It also requires a complete
+record comparison; partial power/ascent coverage cannot switch in-range routes.
+History geometry is an explicit symmetric climb/descent aggregate proxy, not
+observed gradients. These scores cannot validate a GPX profile, new-terrain
+coverage, stop timing or actual forecast performance. Missing power still leaves
+the legacy evaluation available. Fields arrive through normal existing fetches.
+Descending physics now compares flat-target-powered speed with coasting speed,
+under the unchanged 50 km/h cap. The three-method scores include that change.
+They do not include the separate route-geometry consistency factor: the record
+has no historical polylines. That factor compares familiar attached-route
+physics with supported pace, and transfers only a bounded, halved deviation to
+unfamiliar terrain. Agreement is not an additional measured coverage result.
+At least four eligible rides are needed for a fold with three training rides. The window is 180 days;
+future, old, indoor and malformed rows are excluded, duplicate IDs collapse.
+Run on private data locally and share only the aggregate result. No real record
+belongs in the repository. This developer tool is not installed by athlete updates.
 
 ## Conventions
 

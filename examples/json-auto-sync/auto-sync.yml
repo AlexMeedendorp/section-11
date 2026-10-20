@@ -128,7 +128,7 @@ jobs:
               exit 1
             fi
           fi
-          for f in history.json intervals.json routes.json saved_workouts.json ftp_history.json; do
+          for f in history.json intervals.json routes.json saved_workouts.json ftp_history.json route_eta_history.json; do
             if [ -f "$f" ] && ! python -m json.tool "$f" > /dev/null; then
               echo "❌ $f is not valid JSON"
               exit 1
@@ -156,7 +156,7 @@ jobs:
         env:
           RUN_BRANCH: ${{ github.ref_name }}
         run: |
-          GENERATED=(latest.json history.json intervals.json routes.json saved_workouts.json ftp_history.json)
+          GENERATED=(latest.json history.json intervals.json routes.json saved_workouts.json ftp_history.json route_eta_history.json)
           NOW=$(date -u +%s)
           SYNC_TIME=$(date -u -d "@${NOW}" +"%Y-%m-%d %H:%M:%S UTC")
           ARCHIVE_PATH="archive/$(date -u -d "@${NOW}" +"%Y-%m")/$(date -u -d "@${NOW}" +"%Y-%m-%d").json"

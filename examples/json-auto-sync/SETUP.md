@@ -131,7 +131,7 @@ Check the result in your repository's normal **Code** view on github.com:
 
 1. Confirm that the latest commit is a new `Sync training data` commit
 2. Open `latest.json` and check that `metadata.last_updated` changed to the time of this sync
-3. Open `history.json`, `ftp_history.json`, `intervals.json`, `routes.json` and `saved_workouts.json` to confirm they are there
+3. Open `history.json`, `ftp_history.json`, `intervals.json`, `routes.json`, `saved_workouts.json` and `route_eta_history.json` to confirm they are there
 
 Do not check a private repository with plain `raw.githubusercontent.com` URLs. They normally return 404 for a private repository when the request carries no GitHub authentication, and being signed in to github.com in your browser does not make them a reliable check. When your AI needs the files, use a GitHub connector or other authenticated repository access (see [Usage with AI](#usage-with-ai)).
 
@@ -149,6 +149,7 @@ https://raw.githubusercontent.com/[your-username]/[repo-name]/main/saved_workout
 - `history.json`: longitudinal data with tiered granularity: daily (90 days), weekly (180 days), and monthly (up to 3 years). Generated automatically on first run, regenerated when outdated.
 - `intervals.json`: interval/DFA payloads and completed-session structure detail (14-day retention). Written on every successful sync. `has_structure` in latest.json identifies available detail; the compact `structure_summary` survives detail expiry through the 28-day recent-activity window. These committed JSON files also retain the cache state needed by auto-sync; no additional state file is required.
 - `routes.json`: route/terrain data for planned events with GPX/TCX attachments. Includes climb/descent detection, course character, and polyline. Written on every successful sync, with `"events": []` when no planned event has an applicable attachment. Parsed routes are cached by attachment ID.
+- `route_eta_history.json`: rolling 180-day outdoor ride facts for personal route ETA calibration. The workflow validates it when present and commits it with the other generated data, so the next Actions checkout retains the record. Keep it across releases. It is not included in the downloadable training-data artifact; the current ETA result is already in the route brief. On-demand uses this same workflow with the schedule removed.
 - `saved_workouts.json`: read-only mirror of your Intervals.icu saved workouts, with folders and complete workout definitions. Refreshed on its own 6-hour throttle rather than every sync, and the last good copy is kept when a refresh fails.
 
 ---
@@ -461,6 +462,7 @@ GitHub Actions billing and repository visibility are separate questions. Billing
 | `routes.json` | Route/terrain data for planned events with GPX/TCX attachments | Every sync (`events` may be `[]`) |
 | `saved_workouts.json` | Read-only mirror of your Intervals.icu saved workouts | Every sync (own 6h refresh throttle) |
 | `ftp_history.json` | FTP progression tracking for Benchmark Index | Yes |
+| `route_eta_history.json` | Persistent 180-day outdoor ride facts for route ETA calibration; repository state, not download artifact | Every sync |
 | `archive/` | Daily snapshots of `latest.json` (`archive/YYYY-MM/YYYY-MM-DD.json`, UTC date, overwritten during the day) | Yes |
 
 ## Update Notifications
@@ -478,6 +480,8 @@ For local setups (non-GitHub), see [json-local-sync](../json-local-sync/SETUP.md
 ## Updating an Existing Repository
 
 Use this sequence when the workflow template changes, including the change from the earlier 15-minute workflow to the current one.
+
+For the 11.79 / sync 3.145 hotfix, update both `sync.py` and this workflow. Updating the script alone does not add `route_eta_history.json` to the workflow's validation and publication lists. Existing large forecast snapshots in `routes.json` are compacted on the next sync, keeping at most the first and latest usable brief per ride within 24 hours before departure and expiring 14 days after departure. Forecast and ETA calculations are unchanged.
 
 > **Manual-only setup?** If you removed the `schedule` block so the workflow runs only when you trigger it, keep that choice: after replacing the workflow in step 3, remove `schedule:` again and keep `workflow_dispatch:`. See [On-Demand Sync](../json-on-demand/SETUP.md#updating-an-existing-repository).
 

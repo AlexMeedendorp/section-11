@@ -10,7 +10,7 @@
 ```
 Data last_updated (UTC): [YYYY-MM-DDTHH:MM:SS]
 
-Weather ([Location]): [icon] [temp][weather_summary.units.temp], [humidity]% humidity, [conditions], wind [speed] [weather_summary.units.wind] from [direction].
+Weather ([Location], point forecast): [supported values with source units, provider, valid time and fetched time].
 Coach note: [Brief weather-relevant tip. Omit if no actionable weather context.]
 
 Current Status Summary:
@@ -46,6 +46,11 @@ Terrain Context ([course_character], [terrain_summary.display.total_distance.val
 [Key climbs condensed: quote `display.position` / `display.distance` for each climb, e.g. "Cat 2 at [climb.display.position] (6.8 km, 6.3% avg, max 11%)". Use the climb's `display.*` for distance/position/elevation; gradient % is unit-universal.]
 [Pacing note: one sentence connecting terrain to today's effort strategy.]
 
+Route weather ([provider, fallback if used], [forecast/outlook tier], [status], fetched [time], departure [time + timezone]):
+[ETA duration range, selected method (safeguarded personal pace, ride-power physics, uncalibrated main-FTP physics, pace plus climbing allowance, or default), calibration count and historical/default stop allowance. State terrain extrapolation and aggregate-history proxy limits when material. Personal windows reflect observed variability, not guaranteed coverage or measured segment speeds. Main outdoor FTP only, never eFTP/indoor FTP; mention a likely stale FTP/zones flag when present without changing settings or inferring a corrected FTP. Temperature range and relevant wind/gust or precipitation windows by section distance for the forecast tier. An outlook is a broad trend only: no section details, wind direction and rain timing uncertain. Use precomputed display fields and state native precipitation-period durations. State missing coverage or stale/unavailable reason.]
+[If material, state the route-consistency factor transferred from familiar route geometry; agreement with personal pace is not independently validated mountain timing.]
+[Linked provider attribution and CC BY 4.0 licence; sampled and summarized by Section 11.]
+
 Recommendation: [readiness_decision.recommendation: Go / Modify / Skip]
 
 Interpretation:
@@ -75,7 +80,8 @@ is P2-only, P0 and P1 are not overridable. State the rationale.]
 | Polarization | Weekly Seiler TID rendered in power-zone labels. Source: `seiler_tid_7d.z1_pct/z2_pct/z3_pct`. Render as `Z1+Z2` (Seiler Easy / below LT1), `Z3` (Seiler Grey Zone / LT1–LT2), `Z4+` (Seiler Hard / above LT2). Do not output raw `Z1/Z2/Z3` labels; they collide with the per-session Power zones line above |
 | Load/Recovery context | Include tolerance note only when within 0.2 of threshold |
 | Next session | Include only on rest days |
-| Terrain Context | Include when `has_terrain: true` on a planned event and `routes.json` has the corresponding terrain data. Omit entirely otherwise. Full pre-ride briefing available on request |
+| Terrain Context | Include only with `has_terrain: true`, `route_status: "ok"` and matching event ID and complete `route_ref` in `routes.json`. Omit otherwise. `no_elevation` preserves distance/location in `route_geometry`, but never infer flatness, zero ascent, climbs or terrain-adjusted pacing. State other route limitations when route advice is requested. Full pre-ride briefing available on request |
+| Route weather | Only for an `ok` route with matching event, full route_ref, departure, cache_key and brief_id in the summary/detail. Check tier and expiry at report time. For `ok`/`partial`, use supported sections only in the forecast tier; outlooks show broad trends and uncertainty. Identify missing coverage and actual precipitation-period durations; maxima are not ride totals. For `stale`/`unavailable`, give the limitation without claiming current conditions. Omit when disabled. Do not infer safe roads or exposure, or manufacture a Go decision from missing weather. Avoid duplicating a point forecast when the route brief answers the same question. Required provider attribution overrides citation-free formatting; see SECTION_11 Weather Data Source |
 | Modify/Skip rationale | Required when recommendation is not "Go" |
 | Same-day continuation | Include only when a session has already been completed today and a further session is in question. When triggered, output the **Same-Day Continuation Block** in place of the standard report body, not alongside it. Omit entirely on a first session of the day |
 
