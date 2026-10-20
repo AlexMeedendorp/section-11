@@ -204,3 +204,28 @@ The [reports/](reports/) folder contains Section 11-compliant templates:
 | `*_EXAMPLES.md` | Anonymized examples showing normal and threshold-breach scenarios |
 
 Use these to standardize AI coaching output across platforms.
+
+## Checking source copies
+
+If the AI asks for accessible data or invents values, check five layers: loaded project instructions, file access, source freshness, delivered-copy freshness and the AI's read in this response. Fetch/parse failures, context-window overflow, platform/runtime updates that drop instructions, stale imports/uploads, duplicate files and answers from memory can all produce these symptoms. Re-read the applicable [web](../PROJECT_INSTRUCTIONS_WEB.md) or [agentic](../PROJECT_INSTRUCTIONS_AGENTIC.md) contract; a fresh conversation can help when old context persists.
+
+Ask which configured paths were tried and what failed. For filesystem access, check the actual working/data directory because the runtime may override its configuration. For a connector, check access in this project/chat to the specific repository or folder, not just account connection. For uploads, check that the needed files are attached here. For URL fetch, enable browsing and check the public raw path's username, repository, branch (normally `main`) and root filename against the configured source. A private raw URL without authentication returns 404, as can a wrong path.
+
+After replacing a file, compare these markers with the source:
+
+| Source | Marker |
+|---|---|
+| `SECTION_11.md` | `Protocol Version` |
+| Root `latest.json`, not `archive/` | `metadata.last_updated` |
+| Official `DOSSIER.md`, if used | Authority, Official dossier location, Dossier revision and Last reviewed |
+| Trend questions | `latest.json.history.age_days` and the relevant `history.json` |
+| Interval or route detail | `generated_at` in `intervals.json` or `routes.json`, plus the detail's own status/freshness |
+| Saved workouts | `saved_workouts.json.refresh.status` and `refresh.last_success_at` |
+
+Matching markers support a file-read check; they do not prove every fact was read correctly. Ask whether more than one copy is reachable. Resolve conflicting official copies before use.
+
+`metadata.last_updated` uses the sync machine's clock without a timezone offset. The protocol expects under 24 hours and asks for refresh beyond 48 hours. Companions have separate schedules: history becomes due after more than 28 whole days or a script change, with scheduling/retry gates described in [GitHub troubleshooting](json-auto-sync/SETUP.md#historyjson-not-generated); saved workouts have their own throttle and retained-snapshot status. A newly written companion does not prove a fresh provider forecast or new route analysis.
+
+If the source is current but the delivered copy is old, replace frozen uploads, refresh/re-import as the connector requires, and let cloud-drive synchronization finish first. Claude GitHub needs Sync now; Gemini imports must be repeated; ChatGPT retrieves permitted content on demand where available. Use [Platform Setup](../README.md#platform-setup) and its vendor links for other cases. Raw GitHub content can remain cached for a few minutes after a commit. Wait, then read again.
+
+Every training metric must come from a current-response read. Compare the markers again after rereading; start a fresh conversation only if the AI still uses old copies. A fresh protocol download contains no private athlete data. Supply your own current JSON, task-required companions and optional official dossier. Never substitute the fictional `.example.json` files.

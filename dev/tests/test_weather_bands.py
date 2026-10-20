@@ -393,10 +393,21 @@ class CompactReportContractTests(unittest.TestCase):
         for required in ('fallback only','athlete_profile.location','null/empty','current-chat','(from dossier)'):
             self.assertIn(required,row)
         readme = (self.root/'README.md').read_text()
-        line = next(line for line in readme.splitlines() if line.startswith('When no planned ride has a usable route'))
-        for required in ('current-chat','Intervals.icu athlete profile (city/country)',
-                         'dossier Home region','only when the profile location is empty','shows the source'):
-            self.assertIn(required,line)
+        weather = readme.split('### Route Weather\n',1)[1].split('### Saved Workouts Mirror\n',1)[0]
+        self.assertIn('Without a usable route, a fetch-capable AI can give a home forecast.',weather)
+        self.assertIn('[SECTION_11](SECTION_11.md#weather-data-source)',weather)
+        protocol = (self.root/'SECTION_11.md').read_text()
+        location = protocol.split('##### Point-weather location\n',1)[1].split('##### Route-weather operation\n',1)[0]
+        sources = ('1. **Explicit current-chat athlete statement**',
+                   '2. **`athlete_profile.location` in the current `latest.json`**',
+                   "3. **The current official dossier's Home region**")
+        positions = [location.index(source) for source in sources]
+        self.assertEqual(positions,sorted(positions))
+        for required in ('(you said)','Intervals.icu city/region/country','(from Intervals.icu)',
+                         'only when `athlete_profile.location` is null/empty','(from dossier)',
+                         'Show the selected place and source every time',
+                         'unusable Intervals location is not permission to fall back to the dossier'):
+            self.assertIn(required,location)
         for filename in ('PROJECT_INSTRUCTIONS_AGENTIC.md','PROJECT_INSTRUCTIONS_WEB.md'):
             text = (self.root/filename).read_text()
             exception = next(line for line in text.splitlines() if line.startswith('Exception: displayed forecast'))

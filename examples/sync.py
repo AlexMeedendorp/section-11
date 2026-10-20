@@ -4,6 +4,11 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.147 - Additive post-workout elapsed time, temperature source/range,
+  activity-weight W/kg, pace and bounded cached per-activity power curves.
+  Pairs with protocol/skill v11.81; push.py stays v0.8.
+  Existing activity values and route/weather/history behavior are preserved.
+
 Version 3.146 - Local-time PNG weather maps, companion data overview and a
   sync-declared publication list. Preserve compact snapshots and ETA/terrain.
   Pairs with protocol/skill v11.80.
@@ -4545,7 +4550,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.146"
+    VERSION = "3.147"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -4840,6 +4845,10 @@ class IntervalsSync:
         # v3.133: consecutive FINAL failures of _get_activity_messages in this run.
         # Any successful retrieval, including a successful empty response, resets it.
         self._messages_consecutive_failures = 0
+        # v3.147: at most eight new curves per instance/sync. Safe-read retries
+        # share the existing four-extra-attempt budget (at most twelve sends).
+        self._power_curve_fetches_used = 0
+        self._power_curve_run_cache = {}
     
     @property
     def script_hash(self) -> str:
@@ -5226,6 +5235,136 @@ class IntervalsSync:
             # transient. Better to retry than permanently cache an auth/config flake.
             return ("transient", f"http_{status_code}")
 
+    POWER_CURVE_MAX_ACTIVITIES = 8
+    POWER_CURVE_SECONDS = (1, 5, 60, 300, 1200, 3600)
+
+    def _fetch_activity_power_curve(self, activity_id: str) -> tuple:
+        """Exact per-activity watts only; transient failures never become truth."""
+        if self._power_curve_fetches_used >= self.POWER_CURVE_MAX_ACTIVITIES:
+            return ("transient", "request_budget")
+        self._power_curve_fetches_used += 1
+        url = f"{self.INTERVALS_BASE_URL}/activity/{activity_id}/power-curve.json"
+        headers = {"Authorization": f"Basic {self.intervals_auth}",
+                   "Accept": "application/json"}
+        try:
+            response = self._read_with_retry(
+                lambda: requests.get(url, headers=headers,
+                                     timeout=self.INTERVALS_READ_TIMEOUT))
+        except requests.exceptions.RequestException:
+            return ("transient", "transport_error")
+        if response.status_code in (404, 410):
+            return ("terminal_error", f"http_{response.status_code}")
+        if response.status_code != 200:
+            return ("transient", f"http_{response.status_code}")
+        try:
+            data = response.json()
+        except ValueError:
+            return ("transient", "parse_error")
+        if not isinstance(data, dict):
+            return ("transient", "unexpected_shape")
+        secs, watts = data.get("secs"), data.get("watts")
+        if not isinstance(secs, list) or not isinstance(watts, list) or len(secs) != len(watts):
+            return ("transient", "unexpected_shape")
+        curve, seen = {}, set()
+        for seconds, value in zip(secs, watts):
+            if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+                    or not math.isfinite(seconds) or seconds <= 0 or seconds in seen):
+                return ("transient", "unexpected_shape")
+            seen.add(seconds)
+            if value is None:
+                continue
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                return ("transient", "unexpected_shape")
+            if seconds in self.POWER_CURVE_SECONDS:
+                curve[str(int(seconds))] = value
+        return ("ok", curve)
+
+    def _build_power_curve_for_activity(self, act: Dict, previous_lookup: Dict,
+                                       has_power: bool) -> Dict:
+        """Copy success/terminal results; retry transient or budget skips next sync."""
+        act_id = act.get("id")
+        if not has_power or act_id is None:
+            return {}
+        key = str(act_id)
+        def within_duration(curve):
+            duration = act.get("moving_time")
+            return {sec: watts for sec, watts in curve.items()
+                    if not isinstance(duration, (int, float)) or int(sec) <= duration}
+
+        prev = previous_lookup.get(key, {})
+        if isinstance(prev.get("power_curve"), dict):
+            return {"power_curve": within_duration(prev["power_curve"])}
+        if prev.get("power_curve_status") == "failed":
+            return {k: prev[k] for k in ("power_curve_status", "power_curve_error") if k in prev}
+        if key not in self._power_curve_run_cache:
+            status, payload = self._fetch_activity_power_curve(key)
+            result = {}
+            if status == "ok":
+                # The curve is authoritative for exact available durations;
+                # additionally reject points longer than a known activity.
+                result["power_curve"] = within_duration(payload)
+            elif status == "terminal_error":
+                result = {"power_curve_status": "failed", "power_curve_error": payload}
+            self._power_curve_run_cache[key] = result
+        result = dict(self._power_curve_run_cache[key])
+        if "power_curve" in result:
+            result["power_curve"] = within_duration(result["power_curve"])
+        return result
+
+    def _post_workout_fields(self, act: Dict, avg_power, avg_speed, temp_unit, units) -> Dict:
+        """Add presentation fields without changing any legacy activity value."""
+        def number(value):
+            return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value))
+
+        def rounded_duration(seconds):
+            if not number(seconds) or seconds < 0:
+                return None
+            minutes = int(seconds / 60 + 0.5)
+            return self._format_duration(minutes * 60) if minutes else "0m"
+
+        elapsed = act.get("elapsed_time")
+        if not number(elapsed) or elapsed < 0:
+            elapsed = None
+        weight = act.get("icu_weight")
+        if not number(weight) or not 30 <= weight <= 200 or not number(avg_power) or avg_power <= 0:
+            weight = None
+        source, minimum, average, maximum = None, None, None, None
+        if act.get("average_weather_temp") is not None:
+            source = "weather"
+            minimum, average, maximum = (act.get(k) for k in
+                ("min_weather_temp", "average_weather_temp", "max_weather_temp"))
+        elif act.get("average_temp") is not None:
+            source = "device"
+            minimum, average, maximum = (act.get(k) for k in
+                ("min_temp", "average_temp", "max_temp"))
+        temp_display = lambda value: ({"value": round(value), "unit": "°F" if temp_unit == "F" else "°C"}
+                                      if value is not None else None)
+        pace = None
+        if (act.get("type") in {"Run", "TrailRun", "VirtualRun", "Walk", "Hike"}
+                and number(avg_speed) and avg_speed > 0):
+            # Use canonical avg_speed before display-speed rounding.
+            speed = avg_speed * 0.621371 if units.get("distance") == "imperial" else avg_speed
+            seconds = int(3600 / speed + 0.5)
+            pace = {"value": f"{seconds // 60}:{seconds % 60:02d}",
+                    "unit": "/mi" if units.get("distance") == "imperial" else "/km"}
+        return {
+            "elapsed_hours": round(elapsed / 3600, 2) if elapsed is not None else None,
+            "elapsed_formatted": rounded_duration(elapsed),
+            "min_temp": minimum, "max_temp": maximum, "temp_source": source,
+            "power_weight_kg": weight,
+            "avg_power_wkg": round(avg_power / weight, 2) if weight is not None else None,
+            "display": {
+                "moving_time": rounded_duration(act.get("moving_time")),
+                "elapsed_time": rounded_duration(elapsed),
+                "min_temp": temp_display(minimum), "avg_temp": temp_display(average),
+                "max_temp": temp_display(maximum),
+                "power_weight": self._to_display(weight, "weight", units),
+                "pace": pace,
+            },
+        }
+
     def _athlete_units_from_dict(self, athlete: Dict) -> Dict[str, str]:
         """
         Extract the athlete's unit preferences from an already-fetched athlete dict.
@@ -5420,6 +5559,9 @@ class IntervalsSync:
                 entry["weather_summary"] = act["weather_summary"]
             if isinstance(act.get("structure_summary"), dict):
                 entry["structure_summary"] = act["structure_summary"]
+            for key in ("power_curve", "power_curve_status", "power_curve_error"):
+                if key in act:
+                    entry[key] = act[key]
             if entry:
                 lookup[str(act_id)] = entry
         return lookup
@@ -15140,7 +15282,18 @@ class IntervalsSync:
                         activity["chat_notes_status"] = "unavailable"
             
             formatted.append(activity)
-        
+
+        # Run new reads after existing enrichments, preserving their retry budget.
+        for act, activity in zip(activities, formatted):
+            extra = self._post_workout_fields(
+                act, activity["avg_power"], activity["avg_speed"], temp_unit, athlete_units)
+            activity["display"].update(extra.pop("display"))
+            activity.update(extra)
+            has_power = any(isinstance(activity.get(k), (int, float)) and activity[k] > 0
+                            for k in ("avg_power", "normalized_power"))
+            has_power = has_power or "watts" in (act.get("stream_types") or [])
+            activity.update(self._build_power_curve_for_activity(act, previous_latest_lookup, has_power))
+
         return formatted
     
     def _format_wellness(self, wellness: List[Dict],

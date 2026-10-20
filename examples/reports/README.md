@@ -17,11 +17,16 @@ See templates and examples below for annotated reference.
 - Go/Modify/Skip recommendation with rationale
 
 **Post-Workout Reports must include:**
+- Bold dated header and local Data updated (zone only when different from athlete timezone or UTC fallback)
 - One-line session summary
 - Completed session metrics (power, HR, zones, decoupling, VI, TSS vs planned)
 - Plan compliance assessment
 - Weekly running totals (polarization, durability 7d/28d + trend, TID 28d + drift, CTL, ATL, TSB, ACWR, hours, TSS)
 - Interpretation (2-4 sentences: compliance, key quality observations, load context, recovery note)
+- One block per activity with blank-separated time, distance/context, climbs, power, HR and energy groups; separate Terrain, Temperature and Wind lines; descriptive activity power peaks
+- Tomorrow as one session per line in start-time order, with sport and time when present; preserve all sessions
+
+Post-workout duration displays round to whole minutes, while eligibility gates retain exact duration_formatted. Use labelled facts without middle-dot separators or hyphen continuation lines; power and HR zones each occupy one line with labels first. Weekly totals has four unlabelled groups: Phase; capability/TID; load/recovery; Hours/TSS. Missing fields stay omitted under the template's existing rules.
 
 **Weekly Reports must include:**
 - Session breakdown with compliance status (✅/⚠️/❌)
@@ -62,7 +67,7 @@ For fallback data, the single final attribution names the actual provider: "Weat
 | [PRE_WORKOUT_REPORT_TEMPLATE.md](PRE_WORKOUT_REPORT_TEMPLATE.md) | Template structure for pre-workout briefings (no data) |
 | [PRE_WORKOUT_REPORT_EXAMPLES.md](PRE_WORKOUT_REPORT_EXAMPLES.md) | Fictional route, rest-day, indoor, multi-session and outdoor-run examples |
 | [POST_WORKOUT_REPORT_TEMPLATE.md](POST_WORKOUT_REPORT_TEMPLATE.md) | Template structure for post-workout analysis (no data) |
-| [POST_WORKOUT_REPORT_EXAMPLES.md](POST_WORKOUT_REPORT_EXAMPLES.md) | 4 anonymized example post-workout reports |
+| [POST_WORKOUT_REPORT_EXAMPLES.md](POST_WORKOUT_REPORT_EXAMPLES.md) | 8 post-workout scenarios plus synthetic new-field excerpts |
 | [WEEKLY_REPORT_TEMPLATE.md](WEEKLY_REPORT_TEMPLATE.md) | Template structure for weekly summaries (no data) |
 | [WEEKLY_REPORT_EXAMPLES.md](WEEKLY_REPORT_EXAMPLES.md) | 2 anonymized example weekly reports |
 | [BLOCK_REPORT_TEMPLATE.md](BLOCK_REPORT_TEMPLATE.md) | Template structure for block reports (no data) |
@@ -85,7 +90,7 @@ Generated **before** a planned session. Includes:
 - Weather directly under outdoor rides and runs only, with labelled home location/source when no route is supplied
 - Go/Modify/Skip Recommendation followed immediately by two-to-three-sentence interpretation without a separate heading; expand Modify/Skip
 
-### Post-Workout Analysis (~25-30 lines)
+### Post-Workout Analysis (grouped activity blocks)
 Generated **after** a completed session. Includes:
 - Execution summary (actual vs planned)
 - Key metrics (power, HR, decoupling, VI, carbs)
@@ -93,6 +98,7 @@ Generated **after** a completed session. Includes:
 - Load impact (updated CTL, ATL, TSB, weekly totals)
 - Capability update (Durability 7d/28d + trend, TID 28d + drift in weekly totals)
 - Coaching interpretation
+- Descriptive W/kg, work, available exact power peaks, elapsed time and sport-aware pace from sync 3.147; peaks never establish FTP, zones or readiness
 
 ### Weekly Summary (~35-45 lines)
 Generated **end of training week** (Saturday or Sunday morning). Includes:
@@ -141,7 +147,7 @@ Some fields appear only when relevant:
 
 ## Notes
 
-- All examples use anonymized/placeholder data; replace with actual values from your JSON feed
+- Worked report text uses anonymized/placeholder data; replace with actual values from your JSON feed
 - Zone percentages round to nearest whole number (see rounding convention in POST_WORKOUT_REPORT_TEMPLATE.md)
 - Data flows upward between reports: post-workout → weekly → block (see REPORT_HIERARCHY.md)
 - Section 11 flags surface at the weekly level and are summarized with resolution in block reports

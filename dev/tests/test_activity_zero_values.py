@@ -48,6 +48,7 @@ def _out(**fields):
     # can reach the network; they are neutralised so only field formatting runs.
     with mock.patch.object(IntervalsSync, "_build_terrain_for_activity", return_value={}), \
             mock.patch.object(IntervalsSync, "_build_weather_for_activity", return_value={}), \
+            mock.patch.object(IntervalsSync, "_build_power_curve_for_activity", return_value={}), \
             mock.patch.object(IntervalsSync, "_get_activity_messages", return_value=("ok", [])):
         rows = s._format_activities([act])
     assert len(rows) == 1

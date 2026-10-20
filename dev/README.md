@@ -337,3 +337,7 @@ gate, the completed-session structure paths above, the DFA producer paths above,
 covered for their transport behaviour and outcome classification only, not for
 their broader validation rules or calendar semantics beyond the time cases above. Treat this as focused regression guards, not as
 coverage of the repository.
+
+## Route-map format
+
+PNG is the sole route-weather image format. SVG was omitted to avoid a second renderer and compatibility surface. See [Weather Data Source](../SECTION_11.md#weather-data-source) for the map contract and [third-party notices](../THIRD_PARTY_NOTICES.md) for the embedded font.

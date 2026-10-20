@@ -1,5 +1,7 @@
 # Weather Report Examples
 
+The [route-weather map example](example-route-weather-map.png) is a real-route example render using a real Open-Meteo forecast and the v11.80 renderer.
+
 Fictional worked examples, not live forecasts or athlete data. Times use athlete timezone Europe/Copenhagen, so report weather times omit the zone; a different zone or UTC fallback must be labelled. The map lines are output slots: no image is attached here, and an AI may fill a slot only after reading the matching page. Current binding and expiry are checked internally. Numeric ranges use consistent decimal places, and equal endpoints collapse. Each report has one final attribution line; explanatory paragraphs outside the report are not extra athlete-facing text.
 
 ## 1. Two rides with readable maps

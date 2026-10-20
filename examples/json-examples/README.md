@@ -67,6 +67,23 @@ The core examples originated with sync.py v3.86 / Section 11 v11.17; the excepti
 
 For the full field reference, see [SECTION_11.md](../../SECTION_11.md) (Derived Metrics table).
 
+## Post-workout Activity Additions (sync 3.147)
+
+These additive fields are documented here without replacing the legacy latest.example.json with real fixture data. Unknown scalar/display values are null; absent curve fields mean unavailable or deferred, never zero power. Existing activity values and units are unchanged.
+
+| latest.json recent_activities[] field | Meaning |
+|---|---|
+| `elapsed_hours`, `elapsed_formatted` | Activity-list elapsed_time seconds, as two-decimal hours and nearest-minute duration string; null when unavailable. Seconds at 30 round up |
+| `display.moving_time`, `display.elapsed_time` | Nearest-minute duration strings from raw moving/elapsed seconds, e.g. `1h30m`; `0m` is retained. The exact legacy duration_formatted remains the eligibility source |
+| `min_temp`, `max_temp`, `temp_source` | One source selected by the non-null average: weather first (min_weather_temp/average_weather_temp/max_weather_temp), otherwise device (min_temp/average_temp/max_temp). Source is weather/device, else null. Missing range endpoints are not borrowed from the other source |
+| `display.min_temp`, `display.avg_temp`, `display.max_temp` | Selected-source `{value, unit}` blocks, °C or °F already in account units. All null for legacy-only averages whose source is unknown; unchanged avg_temp still retains those legacy values |
+| `power_weight_kg`, `avg_power_wkg`, `display.power_weight` | Activity icu_weight within inclusive 30–200 kg and positive finite avg_power; W/kg rounded to two decimals, weight display kg/lb. All null when either input fails; never substitute curve weight or current wellness weight |
+| `power_curve` | Exact per-activity seconds-to-watts object: optional keys `"1"`, `"5"`, `"60"`, `"300"`, `"1200"`, `"3600"` from parallel secs/watts arrays, filtered to known activity duration. No interpolation, power-model max or lifetime-best inference |
+| `power_curve_status`, `power_curve_error` | Terminal-only `"failed"` plus `"http_404"`/`"http_410"`. Transient transport/HTTP/parse/shape failures and budget skips leave curve/status absent and retry next sync. Successful empty curve is `{}`, not failure |
+| `display.pace` | `{value: "m:ss", unit: "/km" or "/mi"}` for Run/TrailRun/VirtualRun/Walk/Hike with positive finite avg_speed; null otherwise. Derived before display-speed rounding. Runs retain display.avg_speed for the parenthesized speed |
+
+Power curves are fetched only for activities with power and copy forward from previous latest.json after success or terminal failure, with no re-fetch. Up to eight new activities per sync instance use the existing Basic auth, (5, 30) timeout and shared four-extra-attempt retry budget (at most twelve sends); same-run duplicate IDs cost no extra fetch. Unit changes refresh new display fields without invalidating a curve. Existing work_kj supplies Work. Peaks describe this activity only, never tests, bests or capability and never FTP, zone or readiness inputs. See the complete [producer and report contract](../../SECTION_11.md#post-workout-activity-fields).
+
 ## Planned Workout Descriptions
 
 `planned_workouts[].description` carries the text of the planned workout's Intervals.icu description. In `latest.example.json`, the `VO2max Intervals` and `Sweet Spot` rows show optional workout step text written after the step's executable details (`- 3m Recovery`), which is Section 11's house style for descriptions it writes. An athlete's own descriptions may place such text before a step, after it, or anywhere else it reads clearly; this is not a required grammar. See [Intervals.icu Workout Syntax](../agentic/README.md#intervalsicu-workout-syntax).
