@@ -53,15 +53,9 @@ python3 sync.py --days 90 --output 90days.json
 | 90 | Quarterly / build cycle |
 | 180 | Season review |
 
-### Push to GitHub (optional)
+### Repository delivery
 
-If you configured GitHub credentials during setup:
-
-```bash
-python3 sync.py --days 14
-```
-
-Pushes to your configured GitHub repo.
+Use [GitHub sync](../json-auto-sync/SETUP.md) or [On-demand sync](../json-on-demand/SETUP.md) for repository delivery through the shared workflow. The legacy direct API publisher is not one of the four supported setup paths.
 
 ## Generated Files
 
@@ -75,6 +69,8 @@ The script creates/maintains these files:
 | `routes.json` | Route/terrain data for events with GPX/TCX attachments | When attachments exist |
 | `saved_workouts.json` | Read-only mirror of the athlete's Intervals.icu saved workouts | First run, then on its own 6-hour refresh throttle |
 | `ftp_history.json` | FTP progression tracking | Automatically on first run |
+| `route_eta_history.json` | Retained 180-day outdoor ETA calibration | Normal sync/history updates |
+| `maps/weather/` | Up to four ordered PNG pages per ride, six rides (24 pages), for chat | Fresh eligible route-weather briefs |
 | `.sync_config.json` | Your credentials + preferences (local only) | After `--setup` |
 
 ### FTP History
@@ -101,9 +97,13 @@ See [examples/README.md](../README.md#derived-metrics) for the full derived metr
 
 ## Use with AI
 
+Date-only/exact-midnight workouts use labelled 10:00 local by default. Optional `route_weather_default_start` in the existing config or `SECTION11_ROUTE_WEATHER_DEFAULT_START` in the export environment changes it. The AI asks for the actual start or asks you to set it in Intervals.icu; the next normal export picks it up. See [departure handling](../../README.md#route-weather-departure). The overview sits directly after READ_THIS_FIRST, or first when absent.
+
+No extra Manual export steps are needed for 11.80. Sync writes companions next to the latest export, including when `--output` names another directory; retain that folder between exports. The AI reads `latest.json.data_overview` first for presence, file-write times, relative locations and per-ride route/weather/map status. Resolve paths against that export's source; if uploads lose folders, match filenames and verify brief binding. The AI reads and shows matching PNG pages in their listed order only if it can already access them; missing pages remain explicit. Otherwise use the text brief, never describe an unseen map or ask the user to download/upload one. Maps are not part of the download artifact ZIP. Weather times use local zone labels and compass directions.
+
 **Option 1: Upload files**: Upload `latest.json` and `history.json` to your AI platform for a complete analysis with longitudinal context. Upload `intervals.json` when you want detailed post-workout analysis of structured sessions. Upload `routes.json` (if present) when you want terrain-aware coaching for planned events. Upload `saved_workouts.json` on demand, when you want to select, reuse, or discuss one of your saved workouts.
 
-**Option 2: Push to GitHub + configure AI**: Push to a GitHub repo (private recommended), then follow the [main README setup guide](../../README.md#web-chat-setup). Most AI platforms now have GitHub connectors that can access private repos directly.
+**Option 2: Repository delivery**: Follow the GitHub or On-demand setup above, then the [main README setup guide](../../README.md#web-chat-setup) for configured AI access.
 
 **Option 3: Use with agentic platforms**: Claude Code, Claude Cowork, OpenAI Codex CLI, Gemini CLI, OpenClaw, and Hermes read files directly from whatever filesystem their runtime can reach; where that runtime is the machine holding your exported files, no GitHub is needed. Point the agent at the folder containing your exported JSON files. Grok Bot is **experimental** and its filesystem is provider-hosted, so the data reaches it by connector or authenticated repository rather than from your disk; capability class is not a support promise. See the [agentic setup guide](../../README.md#agentic-setup).
 

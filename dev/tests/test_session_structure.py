@@ -350,6 +350,7 @@ class Cache(unittest.TestCase):
                         total_elevation_gain=0, distance=10000)
         with mock.patch.object(self.sync, "_build_terrain_for_activity", return_value={}), \
                 mock.patch.object(self.sync, "_build_weather_for_activity", return_value={}), \
+                mock.patch.object(self.sync, "_build_power_curve_for_activity", return_value={}), \
                 mock.patch.object(self.sync, "_get_activity_messages", return_value=("ok", [])):
             b = self.build()
             self.sync._intervals_data = {"activities": [{"activity_id": self.act["id"], "session_structure": b}]}

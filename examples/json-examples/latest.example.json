@@ -68,6 +68,213 @@
       "total_tss": 456
     }
   },
+  "data_overview": {
+    "version": 1,
+    "base": "latest_file_directory",
+    "files": [
+      {
+        "path": "latest.json",
+        "json_path": "$",
+        "present": true,
+        "updated_at": "2026-01-20T10:00:00+00:00",
+        "holds": "Current training data and companion overview"
+      },
+      {
+        "path": "routes.json",
+        "json_path": "$.events",
+        "present": true,
+        "updated_at": "2026-01-20T10:00:00+00:00",
+        "holds": "Planned route validity, terrain, weather and compact snapshots"
+      },
+      {
+        "path": "intervals.json",
+        "json_path": "$.activities",
+        "present": false,
+        "updated_at": null,
+        "holds": "Completed session interval, structure and DFA detail"
+      },
+      {
+        "path": "history.json",
+        "json_path": "$",
+        "present": false,
+        "updated_at": null,
+        "holds": "Longitudinal training history"
+      },
+      {
+        "path": "ftp_history.json",
+        "json_path": "$",
+        "present": false,
+        "updated_at": null,
+        "holds": "FTP progression"
+      },
+      {
+        "path": "saved_workouts.json",
+        "json_path": "$",
+        "present": false,
+        "updated_at": null,
+        "holds": "Read-only saved workout inventory"
+      },
+      {
+        "path": "route_eta_history.json",
+        "json_path": "$.activities",
+        "present": false,
+        "updated_at": null,
+        "holds": "Rolling 180-day outdoor ETA calibration record"
+      },
+      {
+        "path": "maps/weather/weather-ad7804efd58d9d229785e19d00490dd4.png",
+        "present": true,
+        "updated_at": "2026-01-20T10:00:00+00:00",
+        "holds": "Route weather PNG page 1/1 for chat"
+      }
+    ],
+    "folders": [
+      {
+        "path": "maps/weather/",
+        "present": true,
+        "updated_at": "2026-01-20T10:00:00+00:00",
+        "holds": "Up to four ordered PNG pages per ride, six rides; at most 24 pages for chat",
+        "managed_count": 1
+      }
+    ],
+    "rides": [
+      {
+        "event_id": 90100002,
+        "name": "VO2max Intervals",
+        "path": "routes.json",
+        "json_path": "$.events[1]",
+        "departure_assumed": true,
+        "departure_display": "2026-01-20 10:15 UTC+0000 (ASSUMED)",
+        "start_time_status": "passed_not_completed",
+        "has_route": true,
+        "route_status": "ok",
+        "climbs_present": true,
+        "climb_count": 0,
+        "weather": {
+          "status": "unavailable",
+          "tier": null,
+          "fetched_at": null,
+          "expires_at": null,
+          "summary": null,
+          "reason": "forecast_unavailable"
+        },
+        "map": {"present": false, "reason": "weather_unavailable"}
+      },
+      {
+        "event_id": 90100001,
+        "name": "Endurance - Tuesday",
+        "path": "routes.json",
+        "json_path": "$.events[0]",
+        "departure_assumed": false,
+        "departure_display": "2026-01-21 10:00 UTC+0000",
+        "start_time_status": "provided",
+        "has_route": true,
+        "route_status": "ok",
+        "climbs_present": true,
+        "climb_count": 0,
+        "weather": {
+          "status": "ok",
+          "tier": "forecast",
+          "fetched_at": "2026-01-20T10:00:00+00:00",
+          "expires_at": "2026-01-20T11:00:00+00:00",
+          "summary": "Wind 4.0\u20135.0 m/s; gust max 8.0 m/s; rain native-period max 0.6 mm/h \u00b7 65%; temp 10.0\u201312.0 \u00b0C",
+          "reason": null
+        },
+        "map": {
+          "present": true,
+          "pages": [
+            {
+              "page": 1,
+              "path": "maps/weather/weather-ad7804efd58d9d229785e19d00490dd4.png",
+              "present": true
+            }
+          ],
+          "page_count": 1,
+          "path": "maps/weather/weather-ad7804efd58d9d229785e19d00490dd4.png"
+        }
+      },
+      {
+        "event_id": 90100003,
+        "name": "Recovery Spin",
+        "path": "routes.json",
+        "json_path": "$.events[2]",
+        "departure_assumed": true,
+        "departure_display": "2026-01-21 10:00 UTC+0000 (ASSUMED)",
+        "start_time_status": "midnight_treated_as_unset",
+        "has_route": true,
+        "route_status": "ok",
+        "climbs_present": true,
+        "climb_count": 0,
+        "weather": {
+          "status": "unavailable",
+          "tier": null,
+          "fetched_at": null,
+          "expires_at": null,
+          "summary": null,
+          "reason": "forecast_unavailable"
+        },
+        "map": {"present": false, "reason": "weather_unavailable"}
+      },
+      {
+        "event_id": 90100004,
+        "name": "Sweet Spot",
+        "path": "routes.json",
+        "json_path": null,
+        "departure_assumed": false,
+        "departure_display": "2026-01-24 10:00 UTC+0000",
+        "start_time_status": "provided",
+        "has_route": false,
+        "route_status": "absent",
+        "climbs_present": false,
+        "climb_count": null,
+        "weather": {
+          "status": "missing",
+          "tier": null,
+          "fetched_at": null,
+          "expires_at": null,
+          "summary": null,
+          "reason": "no_route"
+        },
+        "map": {
+          "present": false,
+          "reason": "weather_missing"
+        }
+      },
+      {
+        "event_id": 90100005,
+        "name": "Long Endurance",
+        "path": "routes.json",
+        "json_path": null,
+        "departure_assumed": false,
+        "departure_display": "2026-01-25 10:00 UTC+0000",
+        "start_time_status": "provided",
+        "has_route": false,
+        "route_status": "absent",
+        "climbs_present": false,
+        "climb_count": null,
+        "weather": {
+          "status": "missing",
+          "tier": null,
+          "fetched_at": null,
+          "expires_at": null,
+          "summary": null,
+          "reason": "no_route"
+        },
+        "map": {
+          "present": false,
+          "reason": "weather_missing"
+        }
+      }
+    ],
+    "rides_total": 5,
+    "rides_omitted": 0,
+    "rides_without_route_beyond_horizon": 1,
+    "managed_files": [
+      "latest.json",
+      "maps/weather/weather-ad7804efd58d9d229785e19d00490dd4.png",
+      "routes.json"
+    ]
+  },
   "metadata": {
     "athlete_id": "REDACTED",
     "last_updated": "2026-01-20T12:00:00.000000",
@@ -1269,7 +1476,124 @@
   ],
   "planned_workouts": [
     {
+      "id": 90100002,
+      "date": "2026-01-20",
+      "name": "VO2max Intervals",
+      "type": "WORKOUT",
+      "sport_type": "Ride",
+      "start_time": "09:00",
+      "start_time_status": "provided",
+      "planned_tss": 92,
+      "duration_hours": 1.5,
+      "duration_formatted": "1h30m",
+      "workout_summary": "10m @155W | 10m @185W | 5\u00d7(4m @310W + 3m) | 15m @140W",
+      "description": "- 10m 155w\n- 10m 185w\n\n5x\n- 4m 310w\n- 3m Recovery\n\n- 15m 140w",
+      "has_terrain": true,
+      "route_status": "ok",
+      "route_ref": {
+        "route_id": "intervals:90100002:attachment:17",
+        "attachment_id": 17,
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "terrain_version": "3.142"
+      },
+      "route_weather_summary": {
+        "event_id": 90100002,
+        "route_ref": {
+          "route_id": "intervals:90100002:attachment:17",
+          "attachment_id": 17,
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "terrain_version": "3.142"
+        },
+        "brief_id": null,
+        "status": "unavailable",
+        "reason_codes": ["forecast_unavailable", "provider_timeout"],
+        "departure": {
+          "at_utc": "2026-01-20T10:15:00+00:00",
+          "timezone": "UTC",
+          "source": "assumed",
+          "assumed_reason": "start_passed",
+          "planned_local": "2026-01-20T09:00:00+00:00"
+        },
+        "detail_file": "routes.json"
+      }
+    },
+    {
       "id": 90100001,
+      "has_terrain": true,
+      "route_status": "ok",
+      "route_ref": {
+        "route_id": "intervals:90100001:attachment:12",
+        "attachment_id": 12,
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "terrain_version": "3.142"
+      },
+      "route_weather_summary": {
+        "event_id": 90100001,
+        "route_ref": {
+          "route_id": "intervals:90100001:attachment:12",
+          "attachment_id": 12,
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "terrain_version": "3.142"
+        },
+        "brief_id": "17fb54224e43b48adac09ea943a17a8fe76d902a5fac9be1fe5e556fc680a4f6",
+        "cache_key": "ceb9a1b5dd981680266d1c53a75bfa1bb048d9f1d01159ee4c57941b06a01732",
+        "status": "ok",
+        "tier": "forecast",
+        "reason_codes": [],
+        "departure": {
+          "at_utc": "2026-01-21T10:00:00+00:00",
+          "timezone": "UTC",
+          "source": "event_explicit_offset"
+        },
+        "expires_at": "2026-01-20T11:00:00+00:00",
+        "summary": {
+          "temperature_range_c": [
+            10,
+            12
+          ],
+          "gust_max_mps": 8,
+          "precipitation_probability_max_pct": 65,
+          "hourly_precipitation_max_mm": 0.6000000000000001,
+          "aggregation": "Extrema over section arrival windows; precipitation is not a ride total.",
+          "complete_distance_pct": 100.0,
+          "display": {
+            "temperature_range": {
+              "value": [
+                10,
+                12
+              ],
+              "unit": "C",
+              "label": "10.0\u201312.0 \u00b0C"
+            },
+            "gust_max": {
+              "value": 8,
+              "unit": "m/s",
+              "label": "8.0 m/s"
+            },
+            "hourly_precipitation_max": {
+              "value": 0.6,
+              "unit": "mm",
+              "label": "0.6 mm/h"
+            },
+            "duration_range": [
+              "0s",
+              "5m"
+            ],
+            "moving_duration_range": [
+              "0s",
+              "5m"
+            ],
+            "moving_duration_central": "2m46s",
+            "departure": "2026-01-21 10:00 UTC+0000",
+            "fetched": "2026-01-20 10:00 UTC+0000",
+            "expires": "2026-01-20 11:00 UTC+0000",
+            "wind": "4.0\u20135.0 m/s",
+            "feels_like": "8.0\u201310.0 \u00b0C",
+            "rain": "0.6 mm/h \u00b7 65%"
+          }
+        },
+        "detail_file": "routes.json"
+      },
       "date": "2026-01-21",
       "name": "Endurance - Tuesday",
       "type": "WORKOUT",
@@ -1281,28 +1605,45 @@
       "description": null
     },
     {
-      "id": 90100002,
-      "date": "2026-01-22",
-      "name": "VO2max Intervals",
-      "type": "WORKOUT",
-      "sport_type": "Ride",
-      "planned_tss": 92,
-      "duration_hours": 1.5,
-      "duration_formatted": "1h30m",
-      "workout_summary": "10m @155W | 10m @185W | 5\u00d7(4m @310W + 3m) | 15m @140W",
-      "description": "- 10m 155w\n- 10m 185w\n\n5x\n- 4m 310w\n- 3m Recovery\n\n- 15m 140w"
-    },
-    {
       "id": 90100003,
-      "date": "2026-01-23",
+      "date": "2026-01-21",
       "name": "Recovery Spin",
       "type": "WORKOUT",
       "sport_type": "Ride",
+      "start_time_status": "midnight_treated_as_unset",
       "planned_tss": 30,
       "duration_hours": 1.0,
       "duration_formatted": "1h00m",
       "workout_summary": "1h @140W",
-      "description": null
+      "description": null,
+      "has_terrain": true,
+      "route_status": "ok",
+      "route_ref": {
+        "route_id": "intervals:90100003:attachment:18",
+        "attachment_id": 18,
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "terrain_version": "3.142"
+      },
+      "route_weather_summary": {
+        "event_id": 90100003,
+        "route_ref": {
+          "route_id": "intervals:90100003:attachment:18",
+          "attachment_id": 18,
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "terrain_version": "3.142"
+        },
+        "brief_id": null,
+        "status": "unavailable",
+        "reason_codes": ["forecast_unavailable", "provider_timeout"],
+        "departure": {
+          "at_utc": "2026-01-21T10:00:00+00:00",
+          "timezone": "UTC",
+          "source": "assumed",
+          "assumed_reason": "unset_time",
+          "planned_local": "2026-01-21T10:00:00+00:00"
+        },
+        "detail_file": "routes.json"
+      }
     },
     {
       "id": 90100004,

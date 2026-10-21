@@ -466,8 +466,8 @@ class RouteValidity(unittest.TestCase):
         self.assertEqual(planned[0]["route_ref"], route["route_ref"])
         self.assertEqual(calendar["next_race"]["route_ref"], route["route_ref"])
         for row in (planned[0], calendar["next_race"], route):
-            self.assertEqual(row["start_time"], "00:00")
-            self.assertEqual(row["start_time_status"], "provided")
+            self.assertNotIn("start_time", row)
+            self.assertEqual(row["start_time_status"], "midnight_treated_as_unset")
         self.assertNotIn("start_time", planned[1])
         self.assertEqual(planned[1]["start_time_status"], "missing")
 

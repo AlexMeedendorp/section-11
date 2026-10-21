@@ -26,30 +26,27 @@ An open protocol for deterministic, auditable AI-powered endurance coaching. Bui
 | File | Description |
 |------|-------------|
 | [SECTION_11.md](SECTION_11.md) | Complete protocol: AI Coach Guidance (11 A), Training Plan Protocol (11 B), Validation Protocol (11 C) |
-| [examples/workout-library/](examples/workout-library/) | Workout Reference Library: 26 evidence-based session structures, adapted to your data instead of improvised (Section 11 B §8) |
-| [examples/agentic/](examples/agentic/) | Agentic tools (calendar writes, raw activity stream reads, external API reference) for runtimes with verified access, configured credentials and a tested execution path |
-| [examples/agentic/fit-file-and-merger/](examples/agentic/fit-file-and-merger/) | FIT File & Merger: a reusable reference architecture for multi-source FIT fusion, device identity, verification, recovery and platform-specific duplicate cleanup. Documentation, no runnable scripts in this phase |
-| [examples/json-local-sync/](examples/json-local-sync/) | Local automated sync for runtimes that can reach your filesystem (no GitHub needed) |
-| [examples/dfa_a1/NON_GARMIN.md](examples/dfa_a1/NON_GARMIN.md) | DFA a1 platform support status: documents that the feature requires Garmin + AlphaHRV today, plus discovery commands for Suunto / Karoo / phone-fallback verification |
-| [DOSSIER_TEMPLATE.md](DOSSIER_TEMPLATE.md) | Template for your athlete dossier: the stable private context your AI cannot read from your data |
-| [examples/](examples/) | Full examples directory |
-| [SETUP_ASSISTANT.md](SETUP_ASSISTANT.md) | Interactive AI-guided setup: paste into any AI chat to get started |
-| [manifest.json](manifest.json) | Version tracking (consumed by sync.py for update notifications) |
-| [LICENSE](LICENSE) | MIT: permissive license, commercial use allowed with attribution |
+| [examples/workout-library/](examples/workout-library/) | Workout Reference Library: 26 session templates, adapted to your data |
+| [examples/agentic/](examples/agentic/) | Calendar writes, activity stream reads and external API reference |
+| [examples/agentic/fit-file-and-merger/](examples/agentic/fit-file-and-merger/) | Multi-source FIT fusion, identity, verification, recovery and duplicate-cleanup reference; documentation only |
+| [examples/json-local-sync/](examples/json-local-sync/) | Local automated sync, no GitHub needed |
+| [examples/dfa_a1/NON_GARMIN.md](examples/dfa_a1/NON_GARMIN.md) | DFA a1 requires Garmin + AlphaHRV; other-platform verification guidance |
+| [DOSSIER_TEMPLATE.md](DOSSIER_TEMPLATE.md) | Your stable private athlete context |
+| [examples/](examples/) | Sync guides and fictional JSON schema examples |
+| [examples/reports/](examples/reports/) | Pre-workout, post-workout, weekly, block and on-request weather reports, including route forecasts, weather maps and climbs |
+| [SETUP_ASSISTANT.md](SETUP_ASSISTANT.md) | Interactive AI-guided setup |
+| [manifest.json](manifest.json) | File versions and update tracking |
+| [LICENSE](LICENSE) | MIT license |
 
 ---
 
 ## Privacy & Security
 
-`sync.py` always redacts `metadata.athlete_id`, but it does not anonymize the exported dataset. Output may include activity names and IDs, date of birth, age, sex, height, location, timezone, athlete notes, wellness and training data, route coordinates/polylines, and your saved workouts: their names, descriptions, folder names and full structures, which reveal planning intent such as goal events, target adaptations and prescribed intensities. Store the output in a private location. Publishing the files in a public repository exposes that information.
+`sync.py` redacts `metadata.athlete_id`, but does not anonymize your export. Activity names and IDs, date of birth, age, sex, height, location, timezone, notes, wellness and training data remain. Saved-workout names, descriptions, folders and full structures reveal planning intent, including goal events, target adaptations and prescribed intensities. Route JSON and weather maps reveal geometry and departure times; opaque map filenames do not hide their content. Keep exports and your dossier private. A public repository exposes its files.
 
-Section 11 operates no hosted backend. Data moves only through services you explicitly configure. Credentials are sent only to the service they authenticate, and only when that service is configured: `sync.py` sends your Intervals.icu key in an Authorization header to Intervals.icu, and your GitHub token to GitHub when publishing or issue creation is configured. Credentials are never included in exported or published JSON. Any AI, runtime, model, connector, repository or storage providers actually involved have their own processing and retention terms, which Section 11 neither sets nor can promise.
+Section 11 operates no hosted backend. Your data passes through the services you configure, and the AI, runtime, model, connector, repository and storage providers involved set their own processing and retention terms. See [Route Weather](#route-weather) for forecast-provider data transfers, defaults and both off switches.
 
----
-
-The setup paths documented here are proven starting points, not the only ways to use Section 11. The protocol is open, and the data is yours. Build what fits you.
-
-An AI with persistent memory and a runtime that can execute code reaches more of the project. Filesystem reach, code execution and write access are separate capabilities, each verified per target; none of them follows from a platform's label. See [Agentic Setup](#agentic-setup).
+Configured credentials go to their corresponding service: the Intervals.icu API key in its Authorization header, and a GitHub token to GitHub for configured publishing or issue creation. They are never included in exported or published JSON.
 
 ---
 
@@ -69,15 +66,14 @@ Copy `DOSSIER_TEMPLATE.md` and fill in the context your AI cannot read from your
 
 ### 2. Set Up Your Data Sync
 
-Keep your Intervals.icu data fresh for your AI coach automatically.
+Choose how your data reaches the AI:
 
-**[Local sync](examples/json-local-sync/SETUP.md)**: a script on a machine you control syncs your data on a 60-second timer. An AI whose runtime can reach that filesystem reads the files directly; otherwise it reads them through a cloud connector (Google Drive, OneDrive; [platform support varies](#platform-setup)).
+- **[Local sync](examples/json-local-sync/SETUP.md):** runs on a machine you control every 60 seconds. The AI reads the files directly if its runtime can reach them, or through a cloud connector.
+- **[GitHub sync](examples/json-auto-sync/SETUP.md):** writes to a private repository every 30 minutes by default. Schedules are best-effort; **Sync Now** requests a run and may queue. Runs consume Actions minutes. See [schedule options and costs](examples/json-auto-sync/SETUP.md#sync-schedule-and-github-actions-usage) before changing frequency.
+- **[On-demand sync](examples/json-on-demand/SETUP.md):** trigger from your phone or browser, then download the JSON artifact or refresh your connector. No schedule or local Python.
+- **[Manual export](examples/json-manual/SETUP.md):** run once for your chosen date range, then upload. Re-export when data changes.
 
-**[GitHub sync](examples/json-auto-sync/SETUP.md)**: GitHub Actions syncs to a private repo every 30 minutes by default, and **Sync Now** requests a sync when you want one, for example after a workout; it waits if another sync is already running or queued. Scheduled runs are best-effort, and each run uses your GitHub Actions minutes; see [Sync Schedule and GitHub Actions Usage](examples/json-auto-sync/SETUP.md#sync-schedule-and-github-actions-usage) for Fast mode and hybrid schedules. A hybrid schedule checks more often during an active window fixed in UTC, so its local-clock hours can shift when daylight saving time starts or ends. Your AI reads the data through a GitHub connector; raw URLs work only for a public repository.
-
-**[On-demand sync](examples/json-on-demand/SETUP.md)**: trigger a fresh sync from your phone or browser via your repo's README. Download the data as a ZIP artifact. No schedule, no local Python.
-
-**[Manual export](examples/json-manual/SETUP.md)**: run once, upload the file. No automation. Custom ranges available. Remember the upload is frozen. Re-export and replace it before a report if your data has moved on.
+Plain raw URLs require a public repository. For private data, use authenticated access or uploads.
 
 ### 3. Configure Your AI Platform
 
@@ -88,13 +84,11 @@ Choose your path:
 
 ### 4. Make Files Available to Your AI
 
-Your AI needs access to `SECTION_11.md` (the protocol), plus `DOSSIER.md` (your stable private context and preferences) if you use one. How depends on your setup:
+Supply `SECTION_11.md`, your current `latest.json`, and `DOSSIER.md` if you use one. Supply companion JSON when the task needs it, plus the [report templates](examples/reports/) and [Workout Reference Library](examples/workout-library/) for reports and prescriptions.
 
-- **Local/agentic:** Where the runtime can reach your filesystem, the AI reads the files directly.
-- **GitHub connector:** If these files are in your connected repo, the AI reads them directly. If only `DOSSIER.md` is in your data repo, upload `SECTION_11.md` separately (or connect the CrankAddict/section-11 repo too).
-- **Cloud connector (Google Drive, OneDrive; [platform support varies](#platform-setup)):** If these files are in your synced folder, the AI reads them through the connector.
-- **URL fetch (no connector):** If your data repo is public, the AI can fetch raw URLs directly.
-- **Manual upload:** Upload `SECTION_11.md`, and `DOSSIER.md` if you use one, to your AI platform or project. Uploaded files are frozen at upload. Replace the old copy when you update one, and don't leave two versions in the store.
+Use the runtime's data folder, an authenticated repository/cloud connector, or uploads. If your connector exposes only data, supply the protocol and dossier separately or connect the protocol repository too.
+
+Uploads are frozen. Replace old copies after updates, without leaving two official versions. Connectors may need refresh or re-import; check [Platform Setup](#platform-setup).
 
 ### Having trouble?
 
@@ -106,15 +100,11 @@ Your AI needs access to `SECTION_11.md` (the protocol), plus `DOSSIER.md` (your 
 
 ## Agentic Setup
 
-For runtimes that can execute code, access the filesystem, and run shell commands. These can read your JSON files directly (no web fetch needed) and run sync.py locally. Pushing planned workouts to your Intervals.icu calendar is a separate capability: it needs verified access, configured credentials and a tested integration, and follows from none of the above.
+For sessions with a runtime filesystem, whether on your own machine or a hosted computer. Filesystem access, code execution and write access are separate capabilities, verified per target. Reading data does not authorize calendar writes.
 
-> **Recommended where the runtime reaches your filesystem: [Local sync](examples/json-local-sync/SETUP.md).** sync.py runs on a 60-second timer, the agent reads files directly. Cheapest, fastest, most reliable. No GitHub needed.
+Use [Local sync](examples/json-local-sync/SETUP.md) when the runtime can reach your data folder, or [GitHub sync](examples/json-auto-sync/SETUP.md) for repository access and backup. Hosted runtimes may need a connector or authenticated repository to reach your data.
 
-> **Alternative: [GitHub sync](examples/json-auto-sync/SETUP.md).** A private repo with GitHub Actions gives you multi-device access and backup. Follow the per-platform instructions below.
-
-Your agent needs `SECTION_11.md` (the protocol), plus your `DOSSIER.md` if you use one. If you cloned the repos locally, the agent reads them from the filesystem. If using GitHub sync, the agent reads them from the repo (no manual upload needed).
-
-To point each agent at your local data folder, see [Connect Your Agent](examples/json-local-sync/SETUP.md#connect-your-agent) in the local sync guide.
+Copy the block in [PROJECT_INSTRUCTIONS_AGENTIC.md](PROJECT_INSTRUCTIONS_AGENTIC.md) into the agent's persistent configuration. Point it at your files using [Connect Your Agent](examples/json-local-sync/SETUP.md#connect-your-agent).
 
 ### OpenClaw (formerly ClawdBot/MoltBot)
 
@@ -153,9 +143,7 @@ All Bots on your account share one cloud computer: files, browser sessions and c
 
 ### Hermes Agent
 
-Reads the filesystem of its runtime host, not your machine.
-
-Point it at your data with a pointer file rather than copying files onto the host. Its working directory is not guaranteed to be where you think it is. Set paths explicitly and check the resolved working directory before relying on a relative path.
+Experimental: not validated end to end with Section 11. Hermes reads its runtime host's filesystem, which may differ from your machine. Use a pointer file for your data, set paths explicitly, and verify the resolved working directory before relying on relative paths.
 
 ### OpenCode
 
@@ -165,17 +153,13 @@ An open-source coding agent for the terminal, IDE and desktop.
 
 ### Agentic Tools
 
-Runtimes with verified access, configured credentials and a tested execution path can use the tools in [examples/agentic/](examples/agentic/) for:
+With verified execution, credentials and access, use [examples/agentic/](examples/agentic/):
 
-- **`push.py`**: write planned workouts to your Intervals.icu calendar (push, list, move, delete), update sport-specific thresholds, annotate activities
-- **`pull.py`**: fetch raw per-second activity streams (GPS, altitude, watts, HR, …) when `terrain_summary`/`weather_summary` in `latest.json` aren't enough and the AI needs the underlying track
-- **`EXTERNAL_APIS.md`**: endpoint reference for Strava, MET Norway, Open-Meteo, and Intervals.icu streams + weather, used by agentic flows for pre-ride enrichment
+- **`push.py`:** manage planned workouts, update sport-specific thresholds and annotate activities. Preview writes through the CLI; confirm only after approving the exact change.
+- **`pull.py`:** read raw per-second GPS, altitude, power and HR when the synced summaries are insufficient.
+- **`EXTERNAL_APIS.md`:** endpoints for Strava, MET Norway, Open-Meteo and Intervals.icu. Read sync's briefs for covered route forecasts; direct weather calls are for uncovered locations or times.
 
-These all require code execution; web chat platforms cannot use them.
-
-See [examples/agentic/README.md](examples/agentic/README.md) for setup, commands, and workout syntax.
-
-**Advanced reference.** [examples/agentic/fit-file-and-merger/](examples/agentic/fit-file-and-merger/) documents a reusable reference architecture for building one authoritative activity from multiple source recordings: base and donor selection, field-by-field precedence, device identity rewriting, pre-upload validation, post-upload verification, recovery, and platform-specific duplicate cleanup. This phase contains documentation only, with no runnable scripts, so it is readable on any platform rather than requiring code execution. The working implementation it describes is cycling-tested; other sources and sports need their own implementation and validation.
+The [FIT File & Merger reference](examples/agentic/fit-file-and-merger/) needs no execution to read. It describes a cycling-tested implementation; other sports and sources need their own validation.
 
 ---
 
@@ -185,100 +169,65 @@ For AI platforms reached through a browser or app, with no runtime-accessible fi
 
 ### Project Instructions
 
-Copy the block between the fences in [`PROJECT_INSTRUCTIONS_WEB.md`](PROJECT_INSTRUCTIONS_WEB.md) into your AI Project, Space, Gem, or custom instructions.
+Copy the block between the fences in [PROJECT_INSTRUCTIONS_WEB.md](PROJECT_INSTRUCTIONS_WEB.md) into your Project, Space, Gem or custom instructions. If the AI has a runtime filesystem, use [PROJECT_INSTRUCTIONS_AGENTIC.md](PROJECT_INSTRUCTIONS_AGENTIC.md).
 
-That file is the canonical web and connector contract. It states which sessions it covers, what a delivery path does and does not confer, and how to handle stale or conflicting copies. If your AI runs on a filesystem it can read, use [`PROJECT_INSTRUCTIONS_AGENTIC.md`](PROJECT_INSTRUCTIONS_AGENTIC.md) instead.
-
-**Running local sync?** A runtime that reads your filesystem is agentic, not web chat; use [`PROJECT_INSTRUCTIONS_AGENTIC.md`](PROJECT_INSTRUCTIONS_AGENTIC.md) and see [local sync setup](examples/json-local-sync/SETUP.md).
-
-**If using a connector (GitHub, Google Drive, OneDrive; [platform support varies](#platform-setup)):** The AI reads files through the connector (no URL editing needed). Refresh behavior varies by platform; follow the [Platform Setup](#platform-setup) guidance and refresh or re-import when required. A connector supplies data only; it confers no write authority, and every further capability is separate and must be verified. Committing `DOSSIER.md` to your data repo provides your data and dossier in one connection, and is safe only while that repo stays private. `SECTION_11.md` can be uploaded separately or accessed via a second connector to the CrankAddict/section-11 repo.
-
-**If using URL fetch (public repository only):** Replace `[USERNAME]/[REPO]` with your GitHub data mirror path. Raw URLs of a private repository return 404 without GitHub authentication; see [404 error on JSON URLs / Private repo access](#404-error-on-json-urls--private-repo-access).
+For URL fetch, replace `[USERNAME]/[REPO]` with your public data repository path. Connectors need no URL editing and grant no write authority by themselves.
 
 ### Platform Setup
 
-Most major web-chat platforms can access private GitHub repositories, but access and freshness are separate questions. Some connectors query live data, some maintain an index, and some require a manual sync or re-import. A private connector replaces a public repo only when its refresh model keeps `latest.json` and `history.json` current enough for your workflow.
+Create a project, add the instructions above, then connect your data or upload the files listed in Quick Start. Check `metadata.last_updated` before relying on a report. Access does not guarantee freshness.
 
-**GitHub connector status for web-chat platforms.** A runtime with verified repository access, configured credentials and a tested integration may also use authenticated GitHub tools and workflow dispatch; see [Agentic Setup](#agentic-setup). This table covers the web-chat connector experience.
-
-*GitHub table: the ChatGPT and Gemini rows were re-verified 2026-09-15 against vendor documentation. The other rows and the Google Drive table were verified 2026-08-16 using vendor documentation and, where available, hands-on testing. Plans, interfaces, permissions, and regional availability can change.*
+**GitHub connector status for web-chat platforms.** Runtime repository access is covered in [Agentic Setup](#agentic-setup).
 
 | Platform | How to Connect | Plans | Private Repos | Refresh | Permissions / Caveats |
 |----------|----------------|-------|---------------|---------|-----------------------|
-| [ChatGPT](https://help.openai.com/en/articles/11145903-connecting-github-to-chatgpt) | **Apps** or **Plugins** → GitHub | Varies by plan, workspace, and product surface | Yes, once the GitHub app is installed for the owning account and the repository is selected | On demand; no synced GitHub index | Read-only in ChatGPT; use Codex for repository writes. Availability may include standard chat, deep research, or agent workflows, depending on plan and product surface; some accounts have GitHub in deep research or agent mode but not standard chat. |
-| [Claude](https://support.claude.com/en/articles/10167454-use-the-github-integration) | **+** → **Add from GitHub** | All plans including Free; organization policy may restrict | Yes | Manual **Sync now** | Files only; no commit history, pull requests, or other repository metadata. |
-| [Gemini](https://support.google.com/gemini/answer/16176929) | **Add files** → **More uploads** → **Import code** (ordinary chats) | Personal accounts and qualifying Workspace accounts with Gemini apps enabled; 18+ with Keep Activity on | Yes, with the GitHub account linked to your Google Account | Frozen at import; re-import to refresh | Import on a computer; one repository per chat, up to 5,000 files / 100 MB; read-only. Not a Gem Knowledge source. |
-| [Grok (web/app)](https://docs.x.ai/grok/connectors) | `grok.com/connectors` → GitHub | All users; Business/Enterprise requires admin provisioning | Authorized repositories | On demand | Public documentation identifies repository, issue, pull-request, and code access but does not state whether the GitHub connector can write; review the OAuth grant before authorizing. |
-| [Mistral Vibe](https://docs.mistral.ai/vibe/work/connectors) | **Work** → **Connectors** → **GitHub App** | All plans including Free; organization policy may restrict | Authorized repositories | Real-time / on demand | Can search repositories, review issues, and manage pull requests; actions require approval. |
-| [Perplexity](https://www.perplexity.ai/help-center/en/articles/12275669-github-connector-for-enterprise) | **Settings** → **Connectors** → **GitHub** | Pro, Max, Enterprise Pro, Enterprise Max | Yes | On demand | Can perform actions. The OAuth grant includes unusually broad scopes, including repository deletion and workflow updates; review it carefully. |
+| [ChatGPT](https://help.openai.com/en/articles/11145903-connecting-github-to-chatgpt) | **Apps** / **Plugins** → GitHub | Varies: plan, workspace, surface | Selected repositories | On demand; no index | Read-only; Codex for writes; chat availability varies |
+| [Claude](https://support.claude.com/en/articles/10167454-use-the-github-integration) | **+** → **Add from GitHub** | All, including Free; organization policy | Yes | Manual **Sync now** | Files only; no history, PRs or metadata |
+| [Gemini](https://support.google.com/gemini/answer/16176929) | **Add files** → **More uploads** → **Import code** | Personal/eligible Workspace; 18+; Keep Activity on | Linked GitHub account | Frozen; re-import to refresh | Computer only; read-only; one repo/chat; 5,000 files / 100 MB; not Gem Knowledge |
+| [Grok (web/app)](https://docs.x.ai/grok/connectors) | `grok.com/connectors` → GitHub | All; Business/Enterprise admin provisioning | Authorized repositories | On demand | Repo/issues/PRs/code; writes undocumented; review OAuth grant |
+| [Mistral Vibe](https://docs.mistral.ai/vibe/work/connectors) | **Work** → **Connectors** → **GitHub App** | All, including Free; organization policy | Authorized repositories | Real-time / on demand | Search/issues/PR actions; approval required |
+| [Perplexity](https://www.perplexity.ai/help-center/en/articles/12275669-github-connector-for-enterprise) | **Settings** → **Connectors** → **GitHub** | Pro, Max, Enterprise Pro/Max | Yes | On demand | Actions; broad grant includes repository deletion/workflow updates; review carefully |
 
-**Google Drive access for `.json` files.** `✅` means the Drive-to-chat JSON path is supported. `⚠️` means JSON works, but connector availability or lifecycle is limited.
+**Google Drive access for `.json` files.** ✅ Supported; ⚠️ supported with connector limits or transition.
 
 | Platform | `.json` via Drive | Plans | Refresh | Notes |
 |----------|-------------------|-------|---------|-------|
-| [ChatGPT](https://help.openai.com/en/articles/8437071-data-analysis-with-chatgpt) | ⚠️ Supported; connector limited | Plus and Pro; Business, Enterprise, and Edu when enabled | On-demand file search; continuous sync on Pro and supported workspace plans | JSON is supported. [App capability](https://help.openai.com/en/articles/11487775-apps-in-chatgpt), region, and workspace policy may limit availability. |
-| [Claude](https://support.claude.com/en/articles/10166901-use-google-workspace-connectors) | ✅ Supported | All users; organization policy may restrict | On demand; re-select after changes | Claude supports [JSON files](https://support.claude.com/en/articles/8241126-upload-files-to-claude) and Drive attachments. Only Google Docs are explicitly documented as staying synchronized. |
-| [Gemini](https://support.google.com/gemini/answer/14903178) | ✅ Supported | Signed-in users; Workspace policy may restrict | Re-select after changes | **Add from Drive** uses Gemini's supported-file upload path. Google documents support for most file types; limits vary by plan. |
-| [Grok (web/app)](https://docs.x.ai/grok/connectors/google-drive) | ✅ Supported | All users; Business/Enterprise requires admin provisioning | Real-time / on demand | xAI documents [JSON file support](https://docs.x.ai/grok/faq), while the Drive connector reads Docs, Sheets, Slides, and other file types. |
-| [Mistral Vibe](https://docs.mistral.ai/vibe/work/connectors/knowledge-connectors) | ⚠️ Supported; connector transition | Team and Enterprise for the legacy indexed connector; replacement MCP requires admin setup | Legacy: scheduled sync; MCP: tool-dependent | Vibe supports [JSON files](https://docs.mistral.ai/vibe/work/files-and-canvas) and Drive file reading. The legacy Knowledge Connector is scheduled for removal at the end of August 2026 in favor of an admin-added MCP connector. |
-| [Perplexity](https://www.perplexity.ai/help-center/en/articles/12870620-connecting-perplexity-with-google-drive) | ✅ Supported | Pro, Max, Enterprise Pro, Enterprise Max | Real-time standard search; selected-file sync also available | JSON is explicitly listed. Enterprise adds My Files sync and high-precision search. |
+| [ChatGPT](https://help.openai.com/en/articles/8437071-data-analysis-with-chatgpt) | ⚠️ Supported; connector limited | Plus/Pro; enabled Business/Enterprise/Edu | On-demand search; sync on Pro/eligible workspaces | [App capability](https://help.openai.com/en/articles/11487775-apps-in-chatgpt), region and policy limits |
+| [Claude](https://support.claude.com/en/articles/10166901-use-google-workspace-connectors) | ✅ Supported | All; organization policy | On demand; re-select changes | [JSON attachments](https://support.claude.com/en/articles/8241126-upload-files-to-claude); only Google Docs stay synced |
+| [Gemini](https://support.google.com/gemini/answer/14903178) | ✅ Supported | Signed-in; Workspace policy | Re-select changes | **Add from Drive**; supported-file uploads; plan limits |
+| [Grok (web/app)](https://docs.x.ai/grok/connectors/google-drive) | ✅ Supported | All; Business/Enterprise admin provisioning | Real-time / on demand | [JSON supported](https://docs.x.ai/grok/faq); Docs/Sheets/Slides/other files |
+| [Mistral Vibe](https://docs.mistral.ai/vibe/work/connectors/knowledge-connectors) | ⚠️ Supported; transition | Legacy: Team/Enterprise; MCP: admin setup | Legacy: scheduled; MCP: tool-dependent | [JSON/files](https://docs.mistral.ai/vibe/work/files-and-canvas); legacy connector being replaced; check Mistral's docs |
+| [Perplexity](https://www.perplexity.ai/help-center/en/articles/12870620-connecting-perplexity-with-google-drive) | ✅ Supported | Pro, Max, Enterprise Pro/Max | Real-time search; selected-file sync | Enterprise: My Files sync/high-precision search |
 
 **Note:** Check the linked vendor documentation before setup. Connector availability and behavior change often, and a stale connector can silently serve old training data.
 
 #### ChatGPT (Projects)
 
-1. Create a Project
-2. Add instructions to Project settings
-3. **GitHub connector:** Open **Apps** or **Plugins** → GitHub → Connect, install the ChatGPT GitHub app for the account or organization that owns your data repository, and select the repository. Availability varies by plan, workspace, and product surface. ChatGPT retrieves repository content on demand and keeps no synced index, so name the repository and file path when you ask for a report. The connector is read-only.
-4. **No connector?** Upload SECTION_11.md, and DOSSIER.md if used, to "Project Files". If using the connector but `SECTION_11.md` isn't in your data repo, upload it separately (or connect the CrankAddict/section-11 repo too). Uploaded files are frozen at upload. Replace the old copy when you update one, and don't leave two versions in the store.
+Create a Project and add instructions in its settings. Install the GitHub app for the repository owner and select your repository. Name the repository and file path in requests. Otherwise upload to Project Files.
 
 #### ChatGPT (CustomGPT)
 
-1. Create GPT → Configure
-2. Paste instructions in "Instructions" field
-3. Upload files under "Knowledge"
-4. Enable "Web Browsing" in Capabilities
+Create GPT → Configure. Paste instructions, upload files under Knowledge, and enable Web Browsing for URL fetch.
 
 #### Claude (Projects)
 
-1. Create a Project
-2. Add instructions to "Project Instructions"
-3. **GitHub connector:** Click **+** in a chat or the project's Files section → **Add from GitHub** → select files. Private repositories are supported. Click **Sync now** before a report when the repository has changed.
-4. **No connector?** Upload SECTION_11.md, and DOSSIER.md if used, to "Project Knowledge". If using the connector but `SECTION_11.md` isn't in your data repo, upload it separately (or connect the CrankAddict/section-11 repo too). Uploaded files are frozen at upload. Replace the old copy when you update one, and don't leave two versions in the store.
-5. Enable "Web search" in settings if using URL-based fetch instead of the connector (public repository only)
+Create a Project and add Project Instructions. Select repository files through the GitHub integration, or upload to Project Knowledge. Enable Web search for public URL fetch.
 
 #### Gemini (Gems)
 
-1. Create a Gem.
-2. **Instructions:** paste the block between the fences in `PROJECT_INSTRUCTIONS_WEB.md`. Do not paste the full Section 11 protocol into the instructions field.
-3. **Knowledge:** add `SECTION_11.md` as a knowledge file, plus `DOSSIER.md` if you use one. Uploaded files are frozen at upload. Replace the old copy when you update one, and don't leave two versions in the Gem.
-4. **Current JSON:** supply `latest.json`, and any other file the task needs, through the delivery path you configured (see the tables above).
-5. **GitHub repository (ordinary Gemini chat):** Google documents repository import for chats, not as Gem Knowledge. On a computer, open **Add files** → **More uploads** → **Import code**, paste the repo URL, and link your GitHub account if prompted. Private repositories are supported, but the imported repository is frozen: changes do not sync, so re-import it before the next report.
-
-Do not upload the complete Section 11 repository as a ZIP. Gemini's ordinary ZIP upload accepts at most ten files.
-
-> **Note:** Not all Google accounts have the same access. Gemini's capabilities vary by account type, Workspace edition, and region. If Gemini can't access your repo, see [Troubleshooting](#troubleshooting).
+Create a Gem. Put the project contract in Instructions and `SECTION_11.md`, plus your optional dossier, in Knowledge. Supply current JSON separately. Use ordinary chats for repository import. Do not upload the whole repository as a ZIP; ordinary ZIP upload has a ten-file limit.
 
 #### Grok (web/app)
 
-1. Create Project
-2. Add instructions to Project configuration
-3. **GitHub connector:** Open `grok.com/connectors` → **New Connector** → GitHub → authorize. Connectors are available to all Grok (web/app) users; Business and Enterprise workspaces require an administrator to provision them first.
-4. **No connector?** Upload SECTION_11.md, and DOSSIER.md if used, to "Sources". If using the connector but some files aren't in your data repo, upload those separately. Uploaded files are frozen at upload. Replace the old copy when you update one, and don't leave two versions in the store.
+Create a Project and add instructions. Connect your data using the table above, or upload to Sources.
 
 #### Mistral (Vibe)
 
-1. Create New Project
-2. Add instructions
-3. **GitHub connector:** Switch to **Work** → **Connectors** → **GitHub App** → Connect and authorize. Vibe can manage pull requests as well as read repository data, and asks for approval before actions.
-4. **No connector?** Upload SECTION_11.md, and DOSSIER.md if used, during project creation. If using the connector but some files aren't in your connected repo, upload those separately. Uploaded files are frozen at upload. Replace the old copy when you update one, and don't leave two versions in the store.
+Create a Project and add instructions. Connect your data, or upload during project creation.
 
 #### Perplexity
 
-1. Create a Space (or use standard chat)
-2. Add instructions
-3. **GitHub connector:** **Settings** → **Connectors** → GitHub. Available on Pro, Max, Enterprise Pro, and Enterprise Max. Review the OAuth grant before authorizing: it includes broad administrative scopes, repository deletion, and GitHub Actions workflow updates.
-4. **No connector?** Upload SECTION_11.md, and DOSSIER.md if used, to the Space. Free users without connector access can use URL-based fetch, which requires a public repo (see [Privacy & Security](#privacy--security) for what publishing exposes), or upload files manually. Uploaded files are frozen at upload. Replace the old copy when you update one, and don't leave two versions in the store.
+Create a Space or use chat, then add instructions. Connect your data, or upload to the Space.
 
 ---
 
@@ -291,19 +240,18 @@ After configuration, test with:
 > "How was today's workout?"
 
 **Good response includes:**
-- ✅ Read latest.json automatically (no asking for it); history.json only when the question needs trend or longitudinal context
-- ✅ Session summary with all fields (type, start time, duration, power, HR, TSS, cadence, decoupling, EF, zones, carbs, energy)
-- ✅ Training load context (TSB, CTL, ATL, weekly totals)
-- ✅ Brief interpretation
-- ✅ No "(GitHub)" or URL citations
-- ✅ No excessive emojis
-- ✅ No false recovery warnings for normal TSB (-10 to -30)
+
+- ✅ Reads current `latest.json`; loads companion detail only when needed
+- ✅ Available session facts: name/type/start, moving/total/paired planned time, distance/ascent, sport-specific speed/pace, terrain, temperature, wind, climbs, power avg/NP/W/kg, max power/peaks, HR/zones, cadence, work, calories, Carbs used and TSS
+- ✅ Executed structure, gated diagnostics and subjective fields per the [post-workout template](examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md); peaks describe this activity only
+- ✅ Weekly totals, brief Interpretation and every planned Tomorrow session
+- ✅ Plain formatting without source-marker clutter or excessive emojis
 
 **Bad response:**
-- ❌ "I don't have access to your data, please provide..."
-- ❌ Missing session fields
-- ❌ "(GitHub)" citations throughout
-- ❌ "Your TSB is -23, consider recovery" (when no other triggers present)
+
+- ❌ Requests accessible data, invents fields or omits available session data
+- ❌ Treats peaks as FTP/readiness evidence or whole-session power as main-set power
+- ❌ Recommends recovery for normal TSB (-10 to -30) without other triggers
 
 ### Pre-Workout Test
 
@@ -321,119 +269,106 @@ After configuration, test with:
 - ❌ Missing capability snapshot (durability, TID drift)
 - ❌ Generic "listen to your body" without referencing actual metrics
 
+### Weather Test
+
+> "weather for my rides"
+
+**Good response includes:**
+
+- ✅ Route names/dates, labelled weather, moving/total time, and matching readable map pages
+- ✅ An explicit assumption for unset start times, and one linked attribution naming the actual provider
+- ✅ Missing/stale/disabled status, or the no-route message and GPX/TCX hint; Weather at home only with a resolved Place/source and actual fetch capability
+
+**Bad response:**
+
+- ❌ Invented weather, unseen maps or precise section forecasts from an outlook
+- ❌ Home weather substituted for a stale route brief
+
+See the [Weather Report template](examples/reports/WEATHER_REPORT_TEMPLATE.md).
+
 ### Stable-Context Test
 
-Only if you use a dossier. Ask about something your official dossier records, such as your regular training bottle or a piece of equipment:
+If you use a dossier, ask about something it records:
 
 > "What's in my regular training bottle?"
 
 **Good response includes:**
-- ✅ Your bottle or equipment exactly as your official dossier records it
-- ✅ When you follow up with "Which dossier did you read?", an authority statement, **Official dossier location** and **Dossier revision** that match your official copy
-- ✅ A plain statement when the official copy is missing, unreachable or has no entry for it
+
+- ✅ Your recorded bottle/equipment, or a clear statement that the official copy or entry is unavailable
+- ✅ On "Which dossier did you read?", the matching authority statement, Official dossier location, revision and last-reviewed date
+- ✅ On "How many should I take on my next long ride?", a current JSON/planned-session read before prescribing numbers, or a statement that no session is planned
 
 **Bad response:**
-- ❌ A guess, a generic recipe or product, or a value from an earlier chat presented as your own
-- ❌ An answer from a stale or unofficial dossier copy treated as current
 
-Then ask a prescriptive follow-up, such as "How many of those should I take on my next long ride?" A good response also reads `latest.json` and your planned session (or says none is planned) before giving numbers.
+- ❌ A generic answer or earlier-chat value presented as yours
+- ❌ A stale or unofficial dossier treated as current
 
 ---
 
 ## Troubleshooting
 
-Most data problems sit in one of five places: the AI has not loaded your project instructions, it cannot reach the files, the source files are old, the copy it sees is old, or it is answering from an earlier read. Your contract, [`PROJECT_INSTRUCTIONS_WEB.md`](PROJECT_INSTRUCTIONS_WEB.md) or [`PROJECT_INSTRUCTIONS_AGENTIC.md`](PROJECT_INSTRUCTIONS_AGENTIC.md), defines the delivery paths: a runtime-accessible filesystem (agentic runtimes), a connector or authenticated repository, an upload or attachment, and URL fetch. Current connect and refresh details for each platform are in [Platform Setup](#platform-setup).
+Check the source file, the delivered copy, and the AI's current read. Your [web](PROJECT_INSTRUCTIONS_WEB.md) or [agentic](PROJECT_INSTRUCTIONS_AGENTIC.md) instructions define access and freshness rules.
 
 ### AI asks for data instead of fetching
 
-If every configured path fails, the contracts require the AI to say which paths it tried and what failed, and then ask you. Ask for that report, then check the failing path:
+Ask which configured paths failed. Check the runtime's actual data directory, connector scope, attached files, or public raw URL and browsing capability. A connected account may lack access to the particular repository.
 
-- **Filesystem:** the data directory the runtime actually used. Some runtimes override the configured working directory.
-- **Connector or repository:** the connector is available in this project or chat and authorized for the repository or folder that holds your files. A connector shown as connected can still lack access to a specific repository.
-- **Upload:** the files are attached to this project or conversation.
-- **URL fetch:** web fetch or browsing is enabled, the repository is public, and the raw URLs in your project instructions, or in your dossier's source configuration when you use one, are correct.
-
-After you replace a file, ask the AI to report the marker for that file: the `Protocol Version` for `SECTION_11.md`, `metadata.last_updated` for `latest.json`, or the dossier revision and last-reviewed date for `DOSSIER.md` when you use one. Start a fresh conversation only if it still reports the old copy.
+Reload the project instructions, then ask the AI to identify the file it read and its timestamp/version. If it still sees an old copy, try a fresh conversation.
 
 ### 404 error on JSON URLs / Private repo access
 
-A `raw.githubusercontent.com` URL can be read without credentials only from a public repository. A private repository returns `404 Not Found`, the same response as a wrong path.
-
-- **Public repository:** check the username, repository, branch (`main`) and file name, and confirm that the sync has committed `latest.json` to the repository root. See [Privacy & Security](#privacy--security) for what a public repository publishes.
-- **Private repository:** use a connector or authenticated repository instead. If the connector is connected but the repository is missing, check that the platform's GitHub app is installed for the account or organization that owns the repository and that the repository is selected. An organization or workspace administrator may need to approve or enable it. See [Platform Setup](#platform-setup).
-- **No working connector:** upload `latest.json`, plus `history.json` for trend questions and `intervals.json`, `routes.json` or `saved_workouts.json` when the task needs them. Upload `SECTION_11.md`, and your dossier if you use one, when the connector was supplying them. Replace older copies rather than adding new ones.
-- **Agentic runtime:** clone the data repository or authenticate the runtime to it. See [Agentic Setup](#agentic-setup).
+Plain `raw.githubusercontent.com` URLs return 404 for private repositories as well as wrong paths. Check the repository, branch and root filename. For private data, select the repository in an authorized connector or authenticate the runtime; organization approval may be needed. If access still fails, upload fresh files as described in [Quick Start](#4-make-files-available-to-your-ai).
 
 ### Data appears stale after sync
 
-Check each layer in turn.
+Compare the source and the AI's `latest.json` using `metadata.last_updated`, which uses the sync machine's clock without a timezone offset. The protocol expects under 24 hours and requests refresh beyond 48 hours.
 
-1. **Source.** `latest.json` records `metadata.last_updated` on every sync, as the clock time of the machine that ran it, without a timezone offset. Section 11 expects it to be under 24 hours old and asks for a refresh beyond 48 hours. If it is old, see [Sync workflow not updating JSON](#sync-workflow-not-updating-json). Other files follow their own schedules: `history.json` is regenerated about every four weeks and whenever `sync.py` changes, with its age reported under `history` in `latest.json`, and `saved_workouts.json` reports `refresh.status`.
-2. **Delivered copy.** Uploads are frozen at upload; re-export and replace them. Connectors differ. Claude's GitHub integration refreshes the selected files when you click **Sync now**. A Gemini repository import never updates and must be imported again. ChatGPT retrieves permitted repository content on demand, with availability depending on plan and product surface. For other platforms, follow [Platform Setup](#platform-setup) and the linked vendor documentation. When the source is a cloud-drive folder, your computer must also finish syncing it before a connector can see the change.
-3. **Fetch cache (URL fetch).** Raw GitHub content can stay cached for a few minutes after a commit. Wait, then fetch again.
-4. **Conversation.** An AI can keep answering from an earlier read. Every cited metric must come from a read in the current response, so ask it to re-read `latest.json` and report `metadata.last_updated`. Start a fresh conversation if it keeps using old values.
+If the source is old, check sync below. Otherwise replace uploads, refresh/re-import connectors, or let your cloud folder finish syncing. Raw GitHub content can lag a few minutes. Ask for a fresh read in this response; use a new conversation if old values persist.
 
 ### Sync workflow not updating JSON
 
-Start with the sync path you use. On every path, check that your Intervals.icu API key and athlete ID are valid; a period without activities legitimately adds none.
+Check the API key, athlete ID and run log; no recent activities can legitimately mean no new activity data.
 
-- **Local sync:** check the timer (`launchctl list | grep section11` on macOS, `systemctl --user status section11-sync.timer` on Linux, or your scheduler's status), read `sync.log`, keep `.sync_config.json` in the data directory root rather than inside `section11/`, and run once by hand with `--debug`. See [Verification and Troubleshooting](examples/json-local-sync/SETUP.md#verification-and-troubleshooting).
-- **GitHub sync:** open your data repository's **Actions** tab and check the latest **Auto-Sync Intervals.icu Data** run; its log names the cause, such as a missing secret. Scheduled runs are best-effort and can be delayed or skipped, so use **Sync Now** (**Run workflow**) when you need fresh data; in a public repository GitHub also disables scheduled workflows after 60 days without repository activity. Private repositories consume your account's GitHub Actions allowance, and GitHub rounds each job up to a whole minute, so every run counts as at least one minute. Check your current usage against [GitHub's billing documentation](https://docs.github.com/en/billing/concepts/product-billing/github-actions) and see [GitHub Actions minutes](examples/json-auto-sync/SETUP.md#github-actions-minutes). If a push fails with a permission error, check **Settings → Actions → General → Workflow permissions**. The copies of `sync.py` and `auto-sync.yml` in your data repository never update themselves; see [Update Notifications](examples/json-auto-sync/SETUP.md#update-notifications) and [the GitHub sync troubleshooting](examples/json-auto-sync/SETUP.md#troubleshooting).
-- **On-demand sync:** nothing runs until you trigger the workflow. Confirm that the run completed, then download the `training-data` artifact, which is kept for seven days, and replace your uploads, or refresh your connector as your platform requires.
-- **Manual export:** nothing updates by itself. Run `sync.py` again and replace the uploaded files.
+- **Local:** check the timer and `sync.log`, keep `.sync_config.json` at the data root, and try `--debug`. See [local troubleshooting](examples/json-local-sync/SETUP.md#verification-and-troubleshooting).
+- **GitHub:** inspect **Actions → Auto-Sync Intervals.icu Data**. Check secrets, Actions minutes and workflow permissions; request **Sync Now** when needed. See [workflow troubleshooting](examples/json-auto-sync/SETUP.md#troubleshooting).
+- **On-demand:** trigger the workflow and download its completed `training-data` artifact within seven days, or refresh your connector.
+- **Manual:** export again and replace uploads.
+
+For script/workflow replacement, see [Update Notifications](#update-notifications).
 
 ### Activities show null or missing fields
 
-An empty field is not always a fault. A field stays empty when the device did not record it, and some fields report unavailability explicitly, such as `terrain_status` and `weather_status`.
+Missing device measurements remain unavailable. `terrain_status` and `weather_status` can explain absent data.
 
-Activities imported through Strava are different. Strava's API terms do not allow Intervals.icu to pass Strava-sourced activities on through its own API, so Intervals.icu shows you the activity but its API returns only a stub, with little or no detail for the export.
-
-**Fix:** connect your device platform (Garmin, Wahoo and similar) directly to Intervals.icu, or upload the original activity files, so that new activities arrive from a non-Strava source.
+Strava-sourced activities may appear in Intervals.icu but reach its API only as stubs under Strava's API terms. Connect Garmin, Wahoo or your device platform directly to Intervals.icu, or upload original activity files so new records arrive from a non-Strava source.
 
 ### HRV shows as unavailable on Apple Watch
 
-Readiness uses the Intervals.icu wellness `hrv` field as rMSSD. SDNN is stored separately in `hrvSDNN`; `latest.json` passes it through as `hrv_sdnn` for context, and Section 11 never substitutes it for rMSSD. When a usable rMSSD value is present, readiness uses it whichever device produced it. When the latest wellness record has only SDNN, `readiness_decision.signals.hrv` is `unavailable` with `reason: "rmssd_missing_sdnn_available"`. Apple Health has long reported HRV as SDNN, which is why Apple Watch users often see this.
+Readiness needs rMSSD in Intervals.icu's `hrv` field. Apple Health commonly supplies SDNN, which passes through as `hrv_sdnn` for context and never substitutes for rMSSD. SDNN-only records report `rmssd_missing_sdnn_available`.
 
-**Fix:** a tool upstream of Intervals.icu must write rMSSD to its `hrv` field. Community projects are discussed in the [Intervals.icu forum's External Projects category](https://forum.intervals.icu/c/external-projects/14); none is verified or supported by Section 11. A new source may bring no history, and the readiness baseline uses the last seven days, so allow about a week of values before relying on it.
+An upstream tool must supply rMSSD. [Community projects](https://forum.intervals.icu/c/external-projects/14) are not verified or supported by Section 11; allow about a week for a new seven-day baseline. See [Readiness Decision](SECTION_11.md#readiness-decision-v1113).
 
 ### Gemini can't access your repo or ignores data
 
-- Repository import is documented for ordinary Gemini chats, not as Gem Knowledge. In a Gem, add `SECTION_11.md` under Knowledge instead; see [Gemini (Gems)](#gemini-gems).
-- A repository import never updates. Import it again before a report if the repository has changed.
-- Account type, age, activity settings and Workspace policy affect availability, and a private repository needs your GitHub account linked to your Google Account. See the Gemini row in [Platform Setup](#platform-setup).
-- An import is limited in files and size. The GitHub sync keeps one copy of `latest.json` per UTC day under `archive/`, and earlier versions of the workflow added one on every run, so a long-running data repository can outgrow the limit. You can delete old archive files; see [Archive](examples/json-auto-sync/SETUP.md#archive).
-- If Gemini answers without using the data, ask it to open the root `latest.json` and report `metadata.last_updated` before anything else.
+Use Knowledge files for Gems and repository import for ordinary chats. Re-import after changes; check account eligibility and GitHub authorization in [Platform Setup](#platform-setup). Large archives may exceed import limits: see [Archive](examples/json-auto-sync/SETUP.md#archive). If the AI ignores data, ask it to read the root `latest.json` and report `metadata.last_updated`.
 
 ### Grok (web/app) can't connect to GitHub
 
-Connectors are available to all Grok (web/app) users. Add GitHub at `grok.com/connectors` → **New Connector**. In Business and Enterprise workspaces an administrator must provision connectors first. If it's still unavailable, upload files manually, or use a public repo with URL-based fetch; see [Privacy & Security](#privacy--security) for what publishing exposes.
+Check [Platform Setup](#grok-webapp), including administrator provisioning in Business/Enterprise. If the connector remains unavailable, upload fresh files; public URL fetch exposes the data described in [Privacy & Security](#privacy--security).
 
 ### AI uses the wrong dossier or ignores your preferences
 
-`DOSSIER.md` is optional. When you use one, it holds your stable private athlete context: long-term goals, health context, constraints, equipment and source configuration. It also holds your portable coaching and communication defaults and your athlete-specific preferences and behavioral overrides, which apply below platform safety rules, your explicit current request and task-specific Section 11 requirements. It is never a source of current metrics, readiness, zones, phase or schedule; those come from your data. Without a dossier the AI loses that personalization but can still coach safely from your data.
+Ask for its authority statement, Official dossier location, revision and last-reviewed date; compare with your official copy. Resolve conflicting copies yourself, then replace or remove superseded ones.
 
-- Ask the AI to report the dossier's authority statement, **Official dossier location**, **Dossier revision** and **Last reviewed**, and compare them with your official copy.
-- If it finds more than one copy, it must not merge them. It compares their authority statements, locations, revisions and last-reviewed dates, and asks you which copy is official. Once you have decided, replace or remove the superseded copies.
-- The AI may propose dossier changes. It applies one only after your exact approval, and only where write access to the official copy has been verified; otherwise it returns a revised file for you to save. After saving, check that the revision number increased.
-- Keep the dossier private. Never place it in a public repository.
+Dossier changes require your exact approval and verified write access, otherwise the AI returns a revised artifact for you to save. Check that its revision increased. The [dossier template](DOSSIER_TEMPLATE.md) explains preference precedence and maintenance.
 
 ### AI fabricates metrics or ignores synced data
 
-This can happen when the AI fails to fetch or parse your JSON data, when the context window overflows, when a platform or runtime update drops your project instructions, when a connector, import or upload serves missing, stale or duplicate files, or when the AI answers from an earlier read or from memory.
+Reload the project instructions and ask for the protocol version, current `latest.json` timestamp and, if used, dossier revision. Compare them with the source; a confident summary is insufficient. Resolve stale, missing or duplicate copies before continuing.
 
-**First, reload the rules.** Start a fresh conversation if needed and tell the AI to re-read and follow your project instructions ([`PROJECT_INSTRUCTIONS_WEB.md`](PROJECT_INSTRUCTIONS_WEB.md) or [`PROJECT_INSTRUCTIONS_AGENTIC.md`](PROJECT_INSTRUCTIONS_AGENTIC.md)). `SECTION_11.md` governs coaching decisions and reports, your data is the only source of current metrics, and `DOSSIER.md` supplies stable context and preferences as described above. If a file the task needs is unavailable, the AI must say so rather than guess.
+For a fresh protocol copy, use the [local updater](examples/json-local-sync/SETUP.md#staying-up-to-date), or download the [repository](https://github.com/CrankAddict/section-11) in a format your platform accepts. It contains no private athlete data: supply your own current JSON. Files under `examples/json-examples/` and all `.example.json` files are fictional schema examples, never coaching data.
 
-**Then verify what it read.** Ask it to report these values and compare them with the source:
-
-- The `Protocol Version` in `SECTION_11.md`.
-- `metadata.last_updated` in the root `latest.json`, not in a copy under `archive/`.
-- The dossier revision and last-reviewed date, when you use a dossier.
-- For the task at hand: `history.age_days` in `latest.json` for trend work, `generated_at` in `intervals.json` or `routes.json` when those files are needed, and `refresh.status` in `saved_workouts.json` for saved-workout questions.
-- Whether it can see more than one copy of any of these files.
-
-Exact matches are evidence that it read the files; a confident summary is not. If anything is wrong or missing, work through [Data appears stale after sync](#data-appears-stale-after-sync).
-
-**Fallback: provide a fresh protocol copy.** On agentic setups, clone or update the [section-11 repo](https://github.com/CrankAddict/section-11); with local sync, run `python3 section11/examples/sync.py --update`. Otherwise download the repository as a zip and attach or import it in the format your platform accepts; some platforms limit how many files a ZIP may contain. The bundled files under `examples/json-examples/` end in `.example.json`; every value in them is fictional, and they must never be used as athlete data. The repository contains none of your private athlete data. The AI still needs your current `latest.json` for current coaching, `history.json` for trend work, `intervals.json`, `routes.json` or `saved_workouts.json` when the task needs them, and your `DOSSIER.md`, if you use one, for your stored personalization and preferences. Uploaded copies are frozen at upload. Replace them when Section 11 changes, and don't leave two copies in the store.
+Detailed causes, companion markers and refresh checks: [source-copy checks](examples/README.md#checking-source-copies).
 
 ---
 
@@ -443,11 +378,12 @@ Exact matches are evidence that it read the files; a confident summary is not. I
 
 Defines behavioral rules for AI coaches:
 
-- **No virtual math**: AI must use your actual logged values, not estimates
-- **Explicit data requests**: If data is missing, AI asks rather than assumes
-- **Tolerance compliance**: Recommendations stay within ±3W / ±1bpm / ±1% variance
-- **Framework citations**: Every recommendation references specific science
-- **11-point validation checklist**: AI self-validates before responding (Step 0–10)
+- **No virtual math:** use current logged values
+- **Missing data:** read configured sources, then ask if required data is unavailable
+- **Tolerances and auditability:** apply the protocol's numeric checks and evidence rules
+- **Self-validation:** complete Steps 0–10, including 5b and 6b
+
+See the [AI Self-Validation Checklist](SECTION_11.md#ai-self-validation-checklist).
 
 ### Section 11 B: AI Training Plan Protocol
 
@@ -461,24 +397,7 @@ Defines rules for AI systems generating or modifying training plans:
 
 ### Section 11 C: AI Validation Protocol
 
-Standardized metadata schema for audit trails:
-
-```json
-{
-  "validation_metadata": {
-    "data_source_fetched": true,
-    "json_fetch_status": "success",
-    "protocol_version": "11.24",
-    "checklist_passed": [0, 1, 2, 3, 4, 5, 6, "6b", 7, 8, 9, 10],
-    "checklist_failed": [],
-    "data_timestamp": "2026-01-23T10:02:07Z",
-    "data_age_hours": 2.3,
-    "confidence": "high",
-    "missing_inputs": [],
-    "frameworks_cited": ["Seiler 80/20", "Gabbett ACWR"]
-  }
-}
-```
+Records data access, source timestamps, protocol version, passed/failed checks, confidence and missing inputs in structured audit metadata. See the [schema and field definitions](SECTION_11.md#validation-metadata-schema).
 
 ### Scientific Foundations
 
@@ -487,7 +406,7 @@ The protocol integrates 19+ validated endurance science frameworks:
 | Framework | Application |
 |-----------|-------------|
 | Seiler's 80/20 Polarized Training | Intensity distribution |
-| Gabbett's ACWR (2016) | Load progression, injury prevention |
+| Gabbett's ACWR (2016) | Retrospective load context, not standalone injury prediction |
 | Banister's Impulse-Response | CTL/ATL/TSB dynamics |
 | Foster's Monotony & Strain | Overuse detection |
 | Issurin's Block Periodization | Phase structure |
@@ -514,24 +433,25 @@ Phase classification combines retrospective history (4-week CTL/ACWR/hard-day tr
 
 ### Readiness Thresholds
 
-Automatic load adjustment based on recovery status:
+Examples from the protocol's readiness rules:
 
 | Trigger | Response |
 |---------|----------|
-| HRV ↓ >20% | Easy day / deload |
+| HRV ↓ >20% | Consider easy day / deload |
 | RHR ↑ ≥5 bpm | Flag fatigue/illness |
-| Feel ≥4/5 | Reduce volume 30-40% |
+| Current Feel ≥4/5 (solicited) | Adjust volume 30–40% for 3–4 days |
 | RI <0.6 | Mandatory deload |
 
 ### Progression Triggers
 
 Green-light criteria for safe load increases:
 
-- Durability Index ≥0.97 for 3+ long rides
+- Durability Index ≥0.97 for 3+ long rides (≥2 h)
 - HR drift <3% in aerobic sessions
 - Recovery Index ≥0.85 (7-day mean)
 - ACWR within 0.8–1.3
-- Feel ≤3/5
+- Monotony <2.5
+- Current Feel ≤3/5, when solicited
 
 ---
 
@@ -559,37 +479,49 @@ The script maintains `ftp_history.json` to track indoor and outdoor FTP changes 
 
 ### Completed Session Structure
 
-`latest.json` carries a compact `structure_summary` for each recent activity: plan-match status and ordered duration, target, actual mean power and match rows. Summaries survive for the existing 28-day activity window. `has_structure` points to detailed `session_structure` in `intervals.json` within its 14-day retention; after expiry the last summary is carried forward without stream refetches. Unknown and no-plan are distinct. Whole-session average power and NP remain aggregate context, never main-set power.
+`latest.json` includes `structure_summary` for recent activities: planned targets beside measured step/set power and duration. `has_structure` points to detail in `intervals.json`, retained for 14 days; the last summary survives for 28 days.
 
-The full block retains window power, observed kJ, HR, cadence, coverage and zero-power share, plus a minimal paired-event reference. Thirds and upstream WORK efforts appear only without usable step windows. Refresh bookkeeping stays with this block, so GitHub Actions needs no separate state file. Within retention, unchanged blocks refresh within 24 hours; cache hits add no requests. No per-step calls or FIT downloads. See [Completed Session Structure](SECTION_11.md#completed-session-structure) for plan-match rules, retention limits and the separate unchanged compliance contract.
-
-Flat planned steps now receive summaries. Post-workout reports include walk distance and recorded ascent for walks, runs and rides indoors and outdoors, in display units; ascent is descriptive and source-dependent.
+Whole-session average power and NP are not main-set power. Unknown, no-plan and descriptive fallback differ; broad plan match does not prove formal compliance. See [Completed Session Structure](SECTION_11.md#completed-session-structure) for interpretation, freshness and limits.
 
 ### Interval-Level Data
 
-The script generates `intervals.json` with per-interval segment data (power, HR incl. min, cadence, zone, timing, W'bal start/end) for recent structured sessions, plus per-session DFA a1 rollups when AlphaHRV recorded. For these payloads, activities in `latest.json` carry two independent flags: `has_intervals: true` (structured segments) and `has_dfa: true` (AlphaHRV session). Either flag indicates an entry in `intervals.json`. Incrementally cached with a 72h scan window and 14-day retention. Interval/DFA payloads cover whitelisted sport families (cycling, run, ski, rowing, swim). Structure-only entries may cover any activity type and use the independent `has_structure` flag. Note that Intervals.icu emits a whole-session `RECOVERY` placeholder on many unstructured activities, which counts as "detected structure" for inclusion but sets neither flag; follow `has_intervals` / `has_dfa` / `has_structure`, not the presence of an entry.
+`intervals.json` holds per-interval power, HR, cadence, zones, timing and W'bal, plus session-level DFA a1 when AlphaHRV recorded. Follow the independent `has_intervals`, `has_dfa` and `has_structure` flags in `latest.json`; an entry alone may be a whole-session RECOVERY placeholder.
+
+Interval/DFA data covers cycling, run, ski, rowing and swim, with a 72-hour scan window and 14-day retention. Structure has separate sport rules. See [Interval Data Mirror](SECTION_11.md#interval-data-mirror-intervalsjson) for fields and interpretation.
 
 ### Route & Terrain Data
 
-The script writes `routes.json` on every sync, with terrain analysis for planned events that have GPX/TCX file attachments; its `events` list is empty when there are none. Includes total distance, elevation, course character classification, climb detection (Cat 4 through HC), descent detection, and a 500m-downsampled polyline with elevation. Events with terrain data are flagged with `has_terrain: true` in `latest.json`. Cached by attachment ID. Files are only downloaded and parsed once.
+The script writes `routes.json` on every sync, with terrain analysis for planned events that have GPX/TCX file attachments: distance, elevation, course character, climbs (position, length, average and max gradient), descents and a downsampled polyline. Planned-route climbs support pre-workout reports; completed-activity terrain comes from `latest.json` for post-workout reports. Events with terrain are flagged `has_terrain: true`. Attachments are cached after download and parsing.
 
-**Forecast along the route (sync 3.145):** On by default for every user, including the agentic local-file path. Turn it off with `"route_weather": false` in your existing sync config JSON or `SECTION11_ROUTE_WEATHER=0` in the sync process environment. Either off switch wins. Retain `routes.json` for forecast caching/snapshots and `route_eta_history.json` for the rolling 180-day calibration; the latter survives the supported updater's cache clear. GitHub and On-demand sync retain that ETA record through the shared workflow's validation and commit set, outside the download artifact; update both the script and workflow. Local sync and Manual export retain it in the same data directory between runs. Run one sync process at a time; use the existing `--lockfile` for automated timers. Forecast requests cover only the event's needed hours. Slow batches may split within the existing request cap; portable streaming deadline checks close slow responses and expose timeout causes. See SECTION_11 for the timing limits.
+### Data Overview
 
-The feature sends sampled route coordinates/elevations to [Open-Meteo](https://open-meteo.com/) and, if needed, [MET Norway](https://api.met.no/). Providers see the requesting IP; no Intervals credentials, event names or activity history are sent. Open-Meteo's free endpoint requires **non-commercial use** under its [terms](https://open-meteo.com/en/terms); commercial subscription support is not implemented. Reports must link the provider and [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) licence and identify Section 11's sampling/summarization. The producer supplies MET's identifying User-Agent and [caching requirements](https://api.met.no/doc/TermsOfService).
+`latest.json` starts with `data_overview`, immediately after `READ_THIS_FIRST` when present: companion files, locations and route/weather/map availability. The AI reads it first; file presence does not guarantee access.
 
-Valid planned outdoor cycling routes qualify through 120 hours: at most six events, six points each and eight HTTP requests per sync. Through 72 hours, forecasts refresh hourly or later; beyond that, outlooks refresh six-hourly or later and omit section detail because wind direction and rain timing are uncertain. Failure backoff is at least 15 minutes; cache hits make zero requests. Detailed briefs and compact pre-departure snapshots live in `routes.json`; `latest.json` carries a matching pointer. Snapshots keep the first usable brief within 24 hours of departure and the latest before departure, at most two per event and 64 overall. The first keeps its original binding; only the latest is replaced. Each expires 14 days after its recorded departure, including removed events. The next sync compacts old snapshots automatically; an unsaved brief is labelled `snapshot_context: "now"` with a reason. See SECTION_11 for segment summaries and the 16,000-byte compact-JSON per-record bound. ETA now computes section physics from the route gradients, anchored on actual outdoor ride power with a bounded personal time factor. Within historical terrain, the accepted pace window stays unless calibrated physics matches its leave-one-out coverage at comparable width. Outside history, physics uses a wider, explicitly extrapolated window. Main outdoor FTP/zones are only the prior and no-power-history fallback; eFTP and indoor FTP are never substituted. Missing main FTP/weight uses pace plus an explicit excess-ascent allowance, or generic defaults when pace is unavailable. An aggregate FTP consistency diagnostic can flag likely stale settings without changing them. History gains optional power fields from existing fetches; no additional requests. Stops retain observed elapsed/moving ratios, otherwise a labelled 0 to 25% allowance. Five-minute outward rounding and all ranges are planning conventions, not pace targets or guaranteed coverage. See SECTION_11's **Weather Data Source** for public assumptions, aggregate-history proxy limits and use in upcoming-ride questions. Forecasts never establish road safety or exposure.
+**Upgrading from before 11.80:** GitHub and On-demand users must replace both `sync.py` and `.github/workflows/auto-sync.yml` once. Follow the [upgrade steps](examples/json-auto-sync/SETUP.md#updating-an-existing-repository), retaining custom settings and On-demand's manual-only trigger.
 
-Shallow descents can use flat/rolling target power; the 50 km/h descent cap remains. Familiar-route polylines also provide a bounded consistency correction against personal pace, with only half the deviation transferred to unfamiliar terrain. This agreement is not observed route validation; SECTION_11 documents the limits and the 30-day, input-bound reference cache.
+Keep the export folder between runs, including `routes.json` and `route_eta_history.json`. GitHub/On-demand persist these and maps in the repository; their six-JSON download artifact excludes maps and ETA history. Manual uploads need no extra map step. Run one sync process at a time; automated local timers should use `--lockfile`.
+
+### Route Weather
+
+For planned outdoor rides with routes in the next five days, sync forecasts wind relative to travel, gusts, rain and temperature, timed with an estimate calibrated on your outdoor rides when history allows. Pre-workout reports include weather; ask "weather for my rides" anytime. PNG maps appear in `maps/weather/` ([example map](examples/reports/example-route-weather-map.png)). Without a usable route, a fetch-capable AI can give a home forecast.
+
+**On by default.** Disable with `"route_weather": false` in sync config or `SECTION11_ROUTE_WEATHER=0` ([GitHub repository variable](examples/json-auto-sync/SETUP.md#optional-route-weather-variables)). Sampled route coordinates/elevations go to [Open-Meteo](https://open-meteo.com/), with [MET Norway](https://api.met.no/) fallback; providers see the requesting IP, but no credentials, event names or activity history. Open-Meteo's free service is for non-commercial use. Maps reveal your route. Forecasts are planning aids, not safety assessments. See [SECTION_11](SECTION_11.md#weather-data-source) for details.
+
+#### Route weather departure
+
+Without a start time, **10:00 local is assumed** and the AI asks when you leave. Set the time in Intervals.icu or `route_weather_default_start`.
 
 ### Saved Workouts Mirror
 
-The script generates `saved_workouts.json`, a read-only mirror of your saved workouts from Intervals.icu: folders and complete workout definitions, including each workout's structure exactly as Intervals.icu stores it. Intervals.icu remains the source of truth and the only write path; the mirror never writes back. It exists as a faster, cheaper read path than repeated API retrieval, and it makes your saved workouts available to platforms without API access through connectors, repositories, URLs and file uploads. It refreshes on its own 6-hour throttle rather than on every sync, keeps the last good copy when a refresh fails, and reports whether what you are reading was just verified or is a retained older snapshot. See [`examples/json-examples/README.md`](examples/json-examples/README.md#saved-workouts-mirror) for the full description.
+`saved_workouts.json` mirrors your Intervals.icu folders and complete saved-workout structures for convenient reads through any data path. It is read-only; edits belong in Intervals.icu. Refresh runs on a six-hour throttle and retains the last good copy on failure, so check `refresh.status` before use.
+
+It is inventory, not the Workout Reference Library or proof of historical prescriptions. See [Saved Workouts Mirror](examples/json-examples/README.md#saved-workouts-mirror).
 
 ### Update Notifications
 
-The sync script checks for upstream updates. Runs that **publish to GitHub with configured credentials** open a GitHub Issue in the data repo when a new release is available; the automated data-mirror workflow does not, since it runs `sync.py` in output-only mode. **Local users** see a one-line notification during sync runs (once per day) and can run `--update` to pull changes. See [json-local-sync](examples/json-local-sync/SETUP.md#staying-up-to-date) for details.
+**GitHub/On-demand:** the shared output-only workflow sends no update notification. Replace `sync.py` and update workflow changes manually, preserving customizations; see [Updating an Existing Repository](examples/json-auto-sync/SETUP.md#updating-an-existing-repository). The separate configured direct-publishing path can open update issues.
 
-**Renames and removals:** `--update` lists files that no longer exist upstream as orphaned items and asks separately before deleting them. Approve that prompt to complete a rename or removal. Declining it, or running non-interactively, leaves the old files in place.
+**Local:** sync prints a daily notice when updates are available. Use `python3 section11/examples/sync.py --update`; renames/removals need a second confirmation. Declining or running non-interactively leaves orphaned files. See [Staying Up to Date](examples/json-local-sync/SETUP.md#staying-up-to-date).
 
 ### Data Hierarchy
 

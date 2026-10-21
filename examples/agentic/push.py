@@ -89,7 +89,7 @@ class IntervalsPush:
     """Manage planned workouts on Intervals.icu calendar."""
 
     BASE_URL = "https://intervals.icu/api/v1"
-    VERSION = "0.7"
+    VERSION = "0.8"
 
     # Athlete path ID (v0.7). Intervals.icu uses `i` + digits for current accounts,
     # digits only for early accounts (their Strava athlete ID), and `0` for the
@@ -497,6 +497,9 @@ class IntervalsPush:
         if workout_date < today:
             return False, f"date {date} is in the past - planned workouts must be today or future"
 
+        if "time" in workout and not self._valid_time(workout["time"]):
+            return False, "time must be HH:MM local (00:00 through 23:59)"
+
         wtype = workout.get("type", "Ride")
         if wtype not in self.VALID_TYPES:
             return False, f"invalid type: {wtype} - valid: {sorted(self.VALID_TYPES)}"
@@ -555,7 +558,7 @@ class IntervalsPush:
         """Convert a validated workout dict to an Intervals.icu event payload."""
         event = {
             "category": workout.get("category", "WORKOUT"),
-            "start_date_local": f"{workout['date']}T00:00:00",
+            "start_date_local": f"{workout['date']}T{workout.get('time', '00:00')}:00",
             "name": workout["name"],
             "type": workout.get("type", "Ride"),
         }
@@ -621,10 +624,12 @@ class IntervalsPush:
                 duration = None
         start = evt.get("start_date_local")
         date = start[:10] if isinstance(start, str) else None
+        local_time = start[11:] if isinstance(start, str) and len(start) > 11 and start[10] == "T" else None
         return {
             "id": evt.get("id"),
             "name": evt.get("name"),
             "date": date,
+            "time": local_time,
             "type": evt.get("type"),
             "category": evt.get("category"),
             "duration_minutes": duration,
@@ -821,6 +826,7 @@ class IntervalsPush:
             summary.append({
                 "name": w.get("name"),
                 "date": w.get("date"),
+                "time": w.get("time", "00:00"),
                 "type": w.get("type", "Ride"),
                 "duration_minutes": w.get("duration_minutes"),
                 "tss": w.get("tss"),
@@ -945,8 +951,29 @@ class IntervalsPush:
             "the event does not carry every requested value. It may hold the "
             "pre-write state or a concurrent edit; neither proves the write failed.")
 
-    def preview_move(self, event_id: int, new_date: str) -> dict:
+    @staticmethod
+    def _valid_time(value):
+        return isinstance(value, str) and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) is not None
+
+    @staticmethod
+    def _move_start(event, new_date, new_time):
+        if new_time is not None:
+            return f"{new_date}T{new_time}:00"
+        raw = event.get("start_date_local")
+        if raw in (None, "") or (isinstance(raw, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw)):
+            return f"{new_date}T00:00:00"
+        try:
+            if not isinstance(raw, str) or "T" not in raw:
+                raise ValueError()
+            datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("existing start time is invalid; supply --time HH:MM")
+        return new_date + "T" + raw.split("T", 1)[1]
+
+    def preview_move(self, event_id: int, new_date: str, new_time: str = None) -> dict:
         """Preview moving a workout to a new date."""
+        if new_time is not None and not self._valid_time(new_time):
+            return {"success": False, "mode": "preview", "error": "time must be HH:MM local"}
         # Validate new date
         try:
             target_date = datetime.strptime(new_date, "%Y-%m-%d").date()
@@ -964,6 +991,10 @@ class IntervalsPush:
 
         evt = current["event"]
         old_date = (evt.get("start_date_local") or "")[:10]
+        try:
+            start = self._move_start(evt, new_date, new_time)
+        except ValueError as error:
+            return {"success": False, "mode": "preview", "error": str(error)}
 
         return {
             "success": True,
@@ -972,11 +1003,15 @@ class IntervalsPush:
             "name": evt.get("name"),
             "from_date": old_date,
             "to_date": new_date,
+            "from_time": self._summarize_event(evt).get("time"),
+            "to_time": start.split("T", 1)[1],
             "message": "Preview only - add --confirm to move this workout",
         }
 
-    def move_event(self, event_id: int, new_date: str) -> dict:
+    def move_event(self, event_id: int, new_date: str, new_time: str = None) -> dict:
         """Move a workout to a new date."""
+        if new_time is not None and not self._valid_time(new_time):
+            return {"success": False, "outcome": "not_applied", "error": "time must be HH:MM local"}
         # Validate
         try:
             target_date = datetime.strptime(new_date, "%Y-%m-%d").date()
@@ -989,9 +1024,17 @@ class IntervalsPush:
             return {"success": False, "outcome": "not_applied",
                     "error": f"date {new_date} is in the past"}
 
-        return self.update_event(event_id, {
-            "start_date_local": f"{new_date}T00:00:00",
-        })
+        pre = self._event_presence(event_id)
+        if pre["state"] == "error":
+            return self._pre_read_failure(pre["error"])
+        if pre["state"] == "absent":
+            return {"success": False, "outcome": "not_applied",
+                    "error": f"event {event_id} does not exist; nothing was written"}
+        try:
+            start = self._move_start(pre["event"], new_date, new_time)
+        except ValueError as error:
+            return {"success": False, "outcome": "not_applied", "error": str(error)}
+        return self._apply_event_update(event_id, {"start_date_local": start})
 
     # ── Delete ─────────────────────────────────────────────────────
 
@@ -1491,6 +1534,8 @@ def _output(result: dict):
 def _build_workouts_from_args(args) -> list:
     """Build workout list from CLI args or --json file."""
     if args.json:
+        if args.time is not None:
+            _reject_local(args, "--time is for a single workout; JSON uses per-workout time")
         try:
             with open(args.json) as f:
                 data = json.load(f)
@@ -1520,6 +1565,8 @@ def _build_workouts_from_args(args) -> list:
         workout["target"] = args.target
     if args.indoor:
         workout["indoor"] = True
+    if args.time is not None:
+        workout["time"] = args.time
 
     return [workout]
 
@@ -1544,9 +1591,9 @@ def _cmd_list(args, pusher: IntervalsPush):
 def _cmd_move(args, pusher: IntervalsPush):
     """Handle move subcommand."""
     if not args.confirm:
-        _output(pusher.preview_move(args.event_id, args.date))
+        _output(pusher.preview_move(args.event_id, args.date, args.time))
     else:
-        _output(pusher.move_event(args.event_id, args.date))
+        _output(pusher.move_event(args.event_id, args.date, args.time))
 
 
 def _cmd_delete(args, pusher: IntervalsPush):
@@ -1617,6 +1664,7 @@ def main():
     push_parser = subparsers.add_parser("push", help="Add workouts to calendar")
     push_parser.add_argument("--name", help="Workout name (required unless --json)")
     push_parser.add_argument("--date", help="Date YYYY-MM-DD (required unless --json)")
+    push_parser.add_argument("--time", help="Local start HH:MM for a single workout; JSON uses per-workout time")
     push_parser.add_argument("--type", default="Ride", help="Activity type (default: Ride)")
     push_parser.add_argument("--description", default="", help="Workout description")
     push_parser.add_argument("--duration", type=float, help="Planned duration in minutes")
@@ -1637,6 +1685,7 @@ def main():
     move_parser = subparsers.add_parser("move", help="Move a workout to a different date")
     move_parser.add_argument("--event-id", type=int, required=True, help="Event ID to move")
     move_parser.add_argument("--date", required=True, help="New date YYYY-MM-DD")
+    move_parser.add_argument("--time", help="Local start HH:MM; omitted preserves the existing time")
     move_parser.add_argument("--confirm", action="store_true", help="Execute write (default is preview)")
 
     # ── delete ──

@@ -8,11 +8,12 @@ Section 11-compliant AI coaching reports follow a layered structure. Each level 
 
 | Report Type | Trigger | Target Length | Purpose |
 |-------------|---------|---------------|---------|
-| **Pre-Workout** | Before each session | ~15-20 lines | Readiness check, Go/Modify/Skip |
+| **Pre-Workout** | Before each session | Four status groups, then a Today block per session; weather under outdoor rides/runs only | Readiness check, Go/Modify/Skip followed immediately by interpretation |
 | **Post-Workout** | After each session | ~25-30 lines | Session analysis, execution quality |
 | **Weekly** | End of training week | ~35-45 lines | Compliance, trends, weekly fitness delta |
 | **Block** | End of 3-5 week block | ~45-60 lines | Phase assessment, progression decision |
 | **Season** | On-demand only | ~55-70 lines | Annual-arc trajectory, YoY metrics comparison |
+| **Weather** | On request only | One fact per labelled line; separate identity, facts and maps; one line each for comparison/coach/no-route in mixed-route reports; explicit no-route case otherwise | Five-day route forecast/outlook and practical preparation |
 
 ---
 
@@ -29,6 +30,12 @@ Pre-Workout → Post-Workout → Weekly → Block → Season
 ```
 
 **Key principle:** Data flows upward. Each report level summarizes and contextualizes the level below.
+
+**Weather is a parallel planning report**, sourced directly from matching current route-weather briefs, not aggregated from completed sessions. It covers all relevant rides in the next five days and may inform the same-day pre-workout block. It does not replace readiness, infer a Go decision, reschedule training or promote an outlook into section-level certainty. Missing/stale/disabled data stay explicit. Read and show accessible matching PNG pages in their listed order; never describe an unseen image. Expand into band detail only for missing/unreadable pages, JSON-only access or partial briefs, reading forecast `bands` directly rather than aggregating raw sections, one line per band after Feels like. Use separate labelled identity/weather facts, including Moving time and Total time, and an assumed-start question on its own line. Strongest gusts at and dominant wind effect by distance require supported band locations; omit them when unsupported. Wind effect estimates air resistance relative to calm air: Headwind adds it, Tailwind reduces it, Crosswind is roughly neutral (can slightly help or hinder), and Calm requires 0 m/s. Use supplied 80°/110° classes under the weather template's coverage and tie rules. Add blank lines before optional Prepare and material Note lines. Separate blocks with blank lines; no middle-dot separators or hyphen continuation lines. Weather clocks use local HH:MM unless a differing zone or UTC fallback needs a label. Always check expiry. End report text with one linked line, "Weather data by Open-Meteo, CC BY 4.0.", without a transformation note or separate GeoNames line. Maps and data labels remain unchanged.
+
+When no planned ride has a usable route within 120 h, use the [template's explicit no-route case](WEATHER_REPORT_TEMPLATE.md#no-planned-ride-has-a-usable-route-within-120-h), including the ride list and GPX/TCX hint. Only actual fetch capability plus a location resolved under the [shared point-weather rule](../../SECTION_11.md#point-weather-location) allows a separate **Weather at home** block with labelled Place and Time lines; it never substitutes for route weather inside a ride block. Always show the place and source: current-chat statement first `(you said)`, then current `athlete_profile.location` `(from Intervals.icu)`, then dossier Home region `(from dossier)` only when the profile location is null/empty. Without fetch capability, say "A home forecast isn't available in this setup." No planned rides at all gets the single no-rides line, with the home block optional under the same capability/location and planned-day gates.
+
+For fallback data, the single final attribution uses the actual provider name: "Weather data by MET Norway, CC BY 4.0." Name and link both providers on that line only when separate report blocks use both.
 
 - **Post-Workout** metrics (decoupling, VI, target compliance) appear in **Weekly** Quality Session Detail
 - **Weekly** fitness deltas (CTL, ATL, TSB) appear week-by-week in **Block** Volume Progression
@@ -71,3 +78,5 @@ All report types share these formatting principles:
 | `BLOCK_REPORT_EXAMPLES.md` | 2 anonymized block examples |
 | `SEASON_REPORT_TEMPLATE.md` | Season report template |
 | `SEASON_REPORT_EXAMPLES.md` | 2 synthetic season examples |
+| `WEATHER_REPORT_TEMPLATE.md` | On-request five-day route-weather report |
+| `WEATHER_REPORT_EXAMPLES.md` | Synthetic forecast, outlook, partial and unavailable examples |

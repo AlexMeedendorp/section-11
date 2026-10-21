@@ -246,11 +246,13 @@ class WorkflowPersistenceTests(unittest.TestCase):
         artifact = workflow.split("- name: Upload data files for download", 1)[1].split("- name: Publish", 1)[0]
         expected = {"history.json", "intervals.json", "routes.json", "saved_workouts.json",
                     "ftp_history.json", "route_eta_history.json"}
-        self.assertEqual(set(re.search(r"for f in ([^;]+); do", validation)[1].split()), expected)
-        self.assertEqual(set(re.search(r"GENERATED=\(([^)]+)\)", publish)[1].split()), expected | {"latest.json"})
+        from test_data_overview import workflow_rules
+        self.assertEqual(set(workflow_rules()['FALLBACK']), expected | {"latest.json"})
+        self.assertIn('python "$RUNNER_TEMP/validate-data.py" prepare', validation)
+        self.assertIn('mapfile -t GENERATED < "$STAGE_DIR/touched.txt"', publish)
         self.assertNotIn("route_eta_history.json", artifact)
-        self.assertIn('! python -m json.tool "$f"', validation)
-        self.assertIn('for f in "${GENERATED[@]}"', publish)
+        self.assertIn('json.loads(content, parse_constant=invalid_constant)', validation)
+        self.assertIn('python "$RUNNER_TEMP/validate-data.py" restore', publish)
         self.assertIn('git add -- "${SAVED[@]}" "$ARCHIVE_PATH"', publish)
         self.assertIn('"$CHECKOUT_SHA" "$UPSTREAM_SHA" -- "${GENERATED[@]}" "$ARCHIVE_PATH"', publish)
         self.assertIn('MAX_ATTEMPTS=3', publish)

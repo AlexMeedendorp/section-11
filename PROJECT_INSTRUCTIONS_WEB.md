@@ -27,7 +27,12 @@ A delivery path supplies data only. It confers no write authority, no ability to
 or workflows, and no script execution. Each of those is a separate capability and must be verified
 before it is used or assumed.
 
+Read latest.json's data_overview first to discover companions and route/weather/map status. Resolve relative locations against the source folder or URL base of that latest file; match filenames for folderless Manual uploads. Presence does not prove AI access. Follow Section 11's local-time, compass and brief-binding rules. Read and show matching route_weather_map.pages PNGs in their listed order, one page at a time. Show only pages actually read by the AI; identify any missing page and retain the text brief, with no map download or extra Manual step.
+
+If route-weather departure.source is assumed, retain the ASSUMED label and ask for the actual start time or ask me to set it in Intervals.icu. A data connector does not grant calendar write access. Use the next sync's newly bound brief and the compact outlook display_wind_from label.
+
 Load on demand only, through the same delivery paths:
+
 - history.json for trend, phase or longitudinal work: trend analysis, phase context, longitudinal comparison
 - intervals.json when analysing an activity with `has_intervals: true`, `has_dfa: true` or `has_structure: true`: interval compliance, pacing, cardiac drift, recovery quality, DFA a1 session interpretation and completed-session detail. Use latest.json's structure_summary for everyday comparisons and pre-workout context
 - routes.json when a planned event has `has_terrain: true`: route analysis, terrain-adjusted pacing, pre-ride briefing
@@ -135,19 +140,22 @@ Returning:
 ## OUTPUT FORMAT
 
 No citations, no source markers, no parenthetical references. Raw data and analysis only.
-Exception: displayed forecast data must retain the provider's linked attribution, licence and transformation note specified in SECTION_11's Weather Data Source.
+Exception: displayed forecast data must retain one final linked attribution line, "Weather data by Open-Meteo, CC BY 4.0.", whether or not maps are shown. Report text has no transformation note; PNG footers stay unchanged. Point weather uses Weather at home and a Place line with its source label (you said / from Intervals.icu / from dossier) under the shared Point-weather location rule. GeoNames attribution remains in API documentation and other geocoding displays; pre-workout and weather reports omit a separate GeoNames line.
+
+Use the actual provider name for fallback: "Weather data by MET Norway, CC BY 4.0." If separate blocks use both providers, name both on the single final line.
 
 **Post-workout reports** use a structured line-by-line format per session, not bullets:
 
-1. Data timestamp
+1. Bold Post-workout date, then local Data updated timestamp; zone only when different from athlete timezone or UTC fallback
 2. One-line summary
-3. Session block(s), one per activity, line-by-line: activity type and name, start time, duration (actual vs planned), distance (including walks), recorded Ascent (walks/runs/rides indoors and outdoors; display.elevation, omit missing, retain zero; descriptive only, never compare barometric/GPS/virtual sources), Power (whole session: avg/NP), Executed structure (branch/status and supported step/set actuals or descriptive fallback; omit for Walk/Hike), power zones (%), Grey Zone (Z3) %, Quality (Z4+) %, HR (avg/max), HR zones (%), cadence, decoupling (with label only when its per-session validity gate in SECTION_11.md is met), EF (when power and HR available; interpret only when its per-session validity gate in SECTION_11.md is met), Variability Index (with label for steady-state sessions only; omit the label for interval sessions where high VI is expected), calories (kcal), carbs used (g), TSS (actual vs planned)
+3. One block per activity ID with a bold name (sport prefix only if absent from the name), ride indoor/outdoor type, then blank-separated time, distance/context/climbs, power, HR and energy groups. Start uses HH:MM; Moving time, differing Total time and paired Planned use whole-minute rounding. Quote supplied display speed/pace by sport. Preserve recorded Ascent (indoor/outdoor walks/runs/rides, display.elevation, zero retained, missing omitted, never compare sources). Terrain, Temperature and Wind are separate supported lines; Climbs uses supplied position/length/average/max gradients. Power is whole-session avg, optional W/kg and NP, followed by exact Max power and available Peaks; peaks are descriptive only, never tests, bests, capability or FTP/zones/readiness evidence. Keep Executed structure (omit for Walk/Hike), IF, power zones, Grey Zone, Quality, Session profile and VI, then HR/zones/cadence/decoupling/EF/HRRc/DFA, then Work, Calories, Carbs used, TSS and subjective fields. Retain every validity/omission rule in the template, including decoupling/EF gates and VI labels only for steady-state sessions.
 4. Weekly totals: Phase, Polarization, Durability (7d/28d + trend), EF (7d/28d + trend), HRRc (7d/28d + trend; partial or omitted when data is insufficient, per the post-workout template), TID 28d (+ drift), TSB, CTL, ATL, Ramp rate, ACWR, Recovery Index, Hours, TSS
-5. Overall: coach note, 2–4 sentences: compliance, quality observations, load context, recovery note
+5. Bold Interpretation: 2–4 sentences on compliance, quality, load, recovery and supported terrain/heat/wind causes
+6. Bold Tomorrow: one session per line in start-time order, with sport, type, duration, supported condensed main set and time when present; keep every session, omit section when none
 
-Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete session field set and its activity-specific inclusion, omission and label rules, including IF, Session profile, HRRc, DFA a1, Feel, RPE, Effort response, Note and the conditional Outdoor context line.
+Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete field set and every conditional, including Feel, RPE, Effort response and Note. No middle-dot separators or hyphen continuation lines. Power and HR zones each use one line with labels first and the ≥1% rule. Weekly totals has a bold heading and four unlabelled groups: Phase; capability/TID; load/recovery; Hours/TSS. Rounded presentation durations never replace exact duration_formatted in eligibility gates.
 
-**Pre-workout reports** must include: readiness (HRV, RHR, Sleep vs baselines), load context (TSB, ACWR, Monotony if > 2.3), capability snapshot (durability 7d + trend, TID drift if not consistent), today's planned workout, and a Go / Modify / Skip recommendation.
+**Pre-workout reports** follow PRE_WORKOUT_REPORT_TEMPLATE.md: preserve every status field and conditional in four blank-separated groups without subgroup headings, then one Today block per session in calendar order. Weather belongs directly under outdoor rides and runs only. Use separate labelled facts, no middle-dot separators or hyphen continuation lines, and put an assumed-start question on its own line. Weather times use HH:MM unless a differing zone or UTC fallback needs a label; Data updated keeps its zone. Put interpretation directly after Go / Modify / Skip Recommendation without an Interpretation heading.
 
 ## RULES
 
@@ -171,7 +179,7 @@ Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete session fi
 
 ## Notes
 
-**Privacy.** Keep the dossier private. It may live in a local file, a private repository, or a private document store. A public data mirror carries JSON only, never the dossier. See the README's Privacy & Security section for the full statement.
+**Privacy.** Keep the dossier private. It may live in a local file, a private repository, or a private document store. A public data mirror exposes its generated JSON and route-weather PNGs, never the dossier; maps reveal route geometry and departure times. See the README's Privacy & Security section for the full statement.
 
 **URL fetch.** Replace `[USERNAME]/[REPO]` with your data mirror path.
 
