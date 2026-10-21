@@ -123,15 +123,60 @@ class WeatherMapTests(unittest.TestCase):
 
     def test_wind_from_direction_relative_to_route_and_boundaries(self):
         for bearing in (0, 90, 180, 270, 359):
-            for difference, kind in ((0, "head"), (44.99, "head"), (45, "cross"),
-                                     (90, "cross"), (134.99, "cross"), (135, "tail"),
-                                     (180, "tail"), (315, "cross")):
-                sample = Weather.wind(5, (bearing + difference) % 360, bearing)
-                self.assertEqual(sample["class"], kind)
+            for difference, kind in ((0, "head"), (79.99, "head"), (80, "cross"),
+                                     (80.01, "cross"), (109.99, "cross"), (110, "tail"),
+                                     (110.01, "tail"), (180, "tail"), (280, "cross"), (315, "head")):
+                for sign in (-1, 1):
+                    section = {"bearing_deg": bearing,
+                               "arrival_window_utc": [Weather.iso(0)] * 2,
+                               "end_window_utc": [Weather.iso(0)] * 2}
+                    record = {"forecast": {"instants": [{"at": 0, "speed": 5,
+                              "direction": (bearing + sign * difference) % 360}]}}
+                    sample = Map.central_sample(section, record, 1, "m/s")
+                    self.assertEqual(sample["wind_class"], kind)
+                    section["weather"] = {"map_sample": sample}
+                    self.assertEqual(Map.sample_kind(section), kind)
+                    self.assertEqual(Weather.section_weather(section, record, "open_meteo")["wind_classes"], [kind])
         self.assertEqual(Weather.wind(0, None, 0)["class"], "calm")
         self.assertEqual(Weather.wind(5, None, 0)["class"], "unknown")
         self.assertEqual(Weather.wind(5, 0, 0)["head_mps"], 5)
         self.assertEqual(Weather.wind(5, 180, 0)["head_mps"], -5)
+
+    def test_changed_band_dominance_reselects_representative_before_rendering(self):
+        brief = self.row["route_weather"]
+        prototype = brief["sections"][0]
+        self.row["terrain_summary"]["polyline"] = [[km, 55 + km * .01, 12, 0] for km in (0, 1, 4, 6)]
+        self.row["terrain_summary"]["total_distance_km"] = 6
+        brief["sampling"]["points"] = brief["sampling"]["points"][:2]
+        brief["sampling"]["points"][0]["km"] = 0.5
+        brief["sections"] = []
+        # Old rule: Crosswind 4 km, Headwind 2 km; nearest Crosswind is index 0.
+        # New rule: Headwind 5 km, Crosswind 1 km; index 0 is no longer eligible.
+        for i, (start, end, angle, old_kind) in enumerate(
+                ((0, 1, 90, "cross"), (1, 4, 60, "cross"), (4, 6, 10, "head"))):
+            section = copy.deepcopy(prototype)
+            section.update(section_id=i, start_km=start, end_km=end, bearing_deg=0, point_id=0)
+            section["display"]["start"]["value"] = start
+            section["display"]["end"]["value"] = end
+            section["weather"]["map_sample"].update(
+                wind_speed_mps=5, wind_from_deg=angle, wind_class=old_kind)
+            brief["sections"].append(section)
+        with mock.patch.object(Weather, "HEAD_MAX_DEG", 45), mock.patch.object(Weather, "TAIL_MIN_DEG", 135):
+            old = Weather.forecast_bands(brief)[0]
+        self.assertEqual((old["wind_class"], old["representative_section_index"]), ("cross", 0))
+        brief["bands"] = Weather.forecast_bands(brief)
+        new = brief["bands"][0]
+        self.assertEqual((new["wind_class"], new["representative_section_index"]), ("head", 1))
+        self.assertEqual(new["display"]["wind_class"], "Headwind")
+        self.assertEqual(Map.sample_kind(brief["sections"][new["representative_section_index"]]), "head")
+        self.assertIs(Map.bands(brief), brief["bands"])
+        # No other band metadata, coverage, extrema or timing changed.
+        normalized = copy.deepcopy(new)
+        normalized.update(wind_class="cross", representative_section_index=0)
+        normalized["display"]["wind_class"] = "Crosswind"
+        self.assertEqual(normalized, old)
+        labels = [op[3] for op in Map.scene(self.row) if op[0] == "text"]
+        self.assertIn("Headwind", labels)
 
     def test_sample_uses_nearest_native_instant_and_earlier_tie(self):
         section = {"arrival_window_utc": [Weather.iso(0), Weather.iso(0)],

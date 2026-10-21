@@ -686,10 +686,67 @@ class RouteWeatherTests(unittest.TestCase):
         self.assertEqual(Weather.wind(5, 0, 0), {"class": "head", "head_mps": 5, "cross_mps": 0})
         self.assertEqual(Weather.wind(5, 0, 180)["head_mps"], -5)
         self.assertEqual(Weather.wind(5, 0, 90)["cross_mps"], 5)
-        for direction, kind in ((44.9, "head"), (45, "cross"), (135, "tail"), (359, "head")):
-            self.assertEqual(Weather.wind(5, direction, 0)["class"], kind)
-        self.assertEqual(Weather.wind(0, None, 0)["class"], "calm")
-        self.assertEqual(Weather.wind(5, None, 0)["class"], "unknown")
+        for angle, kind in ((0, "head"), (45, "head"), (79.999, "head"),
+                            (80, "cross"), (80.001, "cross"), (109.999, "cross"),
+                            (110, "tail"), (110.001, "tail"), (135, "tail"), (180, "tail")):
+            for sign in (-1, 1):
+                for bearing in (0, 90, 180, 270, 359):
+                    direction = (bearing + sign * angle) % 360
+                    for speed in (5, 0.000001):
+                        with self.subTest(angle=angle, sign=sign, bearing=bearing, speed=speed):
+                            self.assertEqual(Weather.wind(speed, direction, bearing), {
+                                "class": kind,
+                                "head_mps": round(speed * math.cos(math.radians(angle)), 3),
+                                "cross_mps": round(speed * math.sin(math.radians(angle)), 3)})
+        self.assertEqual(Weather.wind(5, 360, 0), Weather.wind(5, 0, 360))
+        for direction in (None, 0, 360, float("nan")):
+            self.assertEqual(Weather.wind(0, direction, 0),
+                             {"class": "calm", "head_mps": 0.0, "cross_mps": 0.0})
+        unknown = {"class": "unknown", "head_mps": None, "cross_mps": None}
+        for speed in (None, -1, True, "5", float("nan"), float("inf")):
+            self.assertEqual(Weather.wind(speed, 0, 0), unknown)
+        for direction in (None, -1, 361, True, "90", float("nan"), float("inf")):
+            self.assertEqual(Weather.wind(5, direction, 0), unknown)
+
+    def test_cached_weather_rebuilds_old_labels_and_preserves_first_snapshot(self):
+        def oblique(url, params, **kwargs):
+            result = success(url, params, **kwargs)
+            payload = result.json.return_value
+            for point in payload if isinstance(payload, list) else [payload]:
+                point["hourly"]["wind_direction_10m"] = [60] * 192
+            return result
+
+        # Simulate the previous release using the same synthetic native records.
+        with mock.patch.object(Weather, "HEAD_MAX_DEG", 45), mock.patch.object(Weather, "TAIL_MIN_DEG", 135):
+            old, _ = self.run_weather(oblique)
+        self.assertEqual(old["status"], "ok")
+        self.assertTrue(all(s["weather"]["wind_classes"] == ["cross"] for s in old["sections"]))
+        retained = copy.deepcopy(self.s._routes_data["brief_snapshots"][0])
+        cached_rows = copy.deepcopy(self.s._routes_data["events"])
+        self.persist()
+        self.now += timedelta(seconds=60)
+        new, _ = self.run_weather(rows=cached_rows)  # Network guard rejects any uncached fetch.
+        self.assertEqual(self.s._routes_data["route_weather_requests_this_sync"], 0)
+        self.assertEqual(new["cache_key"], old["cache_key"])
+        self.assertNotEqual(new["brief_id"], old["brief_id"])
+        normalized = copy.deepcopy(new)
+        for section in normalized["sections"]:
+            self.assertEqual(section["weather"]["wind_classes"], ["head"])
+            self.assertEqual(section["weather"]["map_sample"]["wind_class"], "head")
+            section["weather"]["wind_classes"] = ["cross"]
+            section["weather"]["map_sample"]["wind_class"] = "cross"
+        for band in normalized["bands"]:
+            if band["section_count"]:
+                self.assertEqual(band["wind_class"], "head")
+                self.assertEqual(band["display"]["wind_class"], "Headwind")
+                band["wind_class"] = "cross"
+                band["display"]["wind_class"] = "Crosswind"
+        normalized["brief_id"] = old["brief_id"]
+        self.assertEqual(normalized, old)  # Every non-classification field is preserved.
+        snapshots = self.s._routes_data["brief_snapshots"]
+        self.assertEqual(len(snapshots), 2)
+        self.assertEqual(snapshots[0], retained)
+        self.assertEqual(snapshots[1]["brief"]["brief_id"], new["brief_id"])
 
     def test_precipitation_intervals_have_correct_time_direction(self):
         om = Weather.parse_open_meteo(om_point())
@@ -698,6 +755,22 @@ class RouteWeatherTests(unittest.TestCase):
         self.assertEqual(om["periods"][0]["end"], BASE)
         self.assertEqual(met["periods"][0]["start"], BASE)
         self.assertEqual(met["periods"][0]["end"], BASE + 3600)
+
+    def test_fictional_route_wind_classes_match_components_and_central_angles(self):
+        routes = json.loads((SYNC_PATH.parent / "json-examples/routes.example.json").read_text())
+        for row in routes["events"]:
+            for section in row.get("route_weather", {}).get("sections", []):
+                weather = section["weather"]
+                speed_lo, speed_hi = weather["wind_speed_range_mps"]
+                self.assertEqual(speed_lo, speed_hi)  # These fictional envelopes have fixed speed.
+                angles = [math.degrees(math.acos(head / speed_lo))
+                          for head in weather["head_component_range_mps"]]
+                expected = sorted({"head" if a < 80 else "cross" if a < 110 else "tail" for a in angles})
+                self.assertEqual(weather["wind_classes"], expected)
+                sample = weather["map_sample"]
+                angle = abs((sample["wind_from_deg"] - section["bearing_deg"] + 180) % 360 - 180)
+                self.assertEqual(sample["wind_class"],
+                                 "head" if angle < 80 else "cross" if angle < 110 else "tail")
 
     def test_unit_mismatch_is_unknown_not_zero(self):
         payload = om_point()

@@ -4,6 +4,11 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.148 - Route-weather Headwind/Crosswind/Tailwind use 80/110 degree
+  boundaries for estimated resistance effect relative to calm air.
+  Preserve forecast wind, signed components, band selection and old snapshots.
+  Pairs with protocol/skill v11.82; push.py stays v0.8.
+
 Version 3.147 - Additive post-workout elapsed time, temperature source/range,
   activity-weight W/kg, pace and bounded cached per-activity power curves.
   Pairs with protocol/skill v11.81; push.py stays v0.8.
@@ -666,6 +671,8 @@ class RouteWeather:
     Provider fixtures follow the official documentation snapshot of 2026-10-19.
     """
     VERSION = 2
+    HEAD_MAX_DEG = 80
+    TAIL_MIN_DEG = 110
     HORIZON_HOURS = 120
     OUTLOOK_AFTER_HOURS = 72
     REFRESH_SECONDS = 3600
@@ -1981,7 +1988,7 @@ class RouteWeather:
         if cls.number(direction) is None or not 0 <= direction <= 360:
             return {"class": "unknown", "head_mps": None, "cross_mps": None}
         angle = (direction - bearing + 180) % 360 - 180
-        return {"class": "head" if abs(angle) < 45 else "cross" if abs(angle) < 135 else "tail",
+        return {"class": "head" if abs(angle) < cls.HEAD_MAX_DEG else "cross" if abs(angle) < cls.TAIL_MIN_DEG else "tail",
                 "head_mps": round(speed * math.cos(math.radians(angle)), 3),
                 "cross_mps": round(abs(speed * math.sin(math.radians(angle))), 3)}
 
@@ -4550,7 +4557,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.147"
+    VERSION = "3.148"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"

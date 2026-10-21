@@ -510,7 +510,6 @@
                 4.096
               ],
               "wind_classes": [
-                "cross",
                 "tail"
               ],
               "gust_max_mps": 8,
@@ -797,7 +796,7 @@
             }
           }
         ],
-        "brief_id": "4ad63e1af9e207c1dcb44e2ab8bcca6c7e77dda9fa7372b2e7732068036f19e4"
+        "brief_id": "17fb54224e43b48adac09ea943a17a8fe76d902a5fac9be1fe5e556fc680a4f6"
       },
       "route_weather_map": {
         "page": 1,
@@ -821,7 +820,7 @@
         "page_count": 1,
         "total_bytes": 101305,
         "renderer_version": 4,
-        "brief_id": "4ad63e1af9e207c1dcb44e2ab8bcca6c7e77dda9fa7372b2e7732068036f19e4",
+        "brief_id": "17fb54224e43b48adac09ea943a17a8fe76d902a5fac9be1fe5e556fc680a4f6",
         "cache_key": "ceb9a1b5dd981680266d1c53a75bfa1bb048d9f1d01159ee4c57941b06a01732",
         "tier": "forecast",
         "expires_at": "2026-01-20T11:00:00+00:00"
