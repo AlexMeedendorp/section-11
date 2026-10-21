@@ -323,6 +323,8 @@ validation or evidence that the thresholds generalize to all recordings.
 
 ## Completed-session structure
 
+`test_sync_facts.py` covers coupled weekly 7:28 ACWR (including retained legacy history and the 0.68 to 0.74 example), unchanged live/start-of-day values and Overreached thresholds, paired no_steps/name/duration propagation, and descriptive cycling facts. Synthetic cases exercise four disjoint rolling chunks, metric-gate parity, mixed zone bases, exact end-date CTL, chunk-based biggest week, environment splits, missing/zero data, dated maxima, complete producer output, calendar-season partial-week exclusion, short curves, exact ID/date joins, the one-send cap, compact/legacy cache reuse and stale/unavailable fallback. Compact cache tests preserve duration winners, counts, names in summaries and original partial-window provenance, and reject malformed rows. The network guard has a direct negative control. These tests validate the supplied API response contract offline, not live provider behavior or physiological meaning.
+
 `test_session_structure.py` uses synthetic activity/event/stream data to test exact pairing, resolved power bands versus genuine ramps, recording pauses, per-step coverage, zero versus missing data, current-plan comparison, repeated short-recovery sets and the bounded lag alignment in SECTION_11. Controls cover the exact step-start exclusion, offset ties/bounds/additive shifts, shortened recordings versus clipped lagged measurements, unsupported atoms and output caps. It also tests persisted cache reuse, expiry, revisions, late/changed/deleted plans, stale failures, Retry-After and request counts. Placement tests persist only latest.json and intervals.json between runs, exercise the retention boundary and summary carry-forward through day 28 without refetch, preserve interval/DFA flags and retry state, verify dropped-field absence and exclude Walk/Hike structure while retaining other-sport fallback. A structure-only entry cannot suppress an initial interval/DFA fetch. The network guard has a direct negative control. No private athlete fixture or FIT file is committed.
 
 `test_workout_summary.py` keeps its independent expansion oracle and repeat regression constants, with explicit v3.141 flat-list availability changes. Formal adherence, independently verified outdoor boundaries and physiological validity are not validated by these tests.
@@ -333,7 +335,7 @@ validation or evidence that the thresholds generalize to all recordings.
 
 Everything else. No report generation, and no `sync.py`
 surface outside per-endpoint fetch state, HTTP policy, the `history.json` refresh
-gate, the completed-session structure paths above, the DFA producer paths above, the `--init` and `--update` distribution rules and the `workout_summary` renderer with its report-template field contract. `push.py` write paths are
+gate, the completed-session structure and descriptive-fact paths above, the DFA producer paths above, the `--init` and `--update` distribution rules and the `workout_summary` renderer with its report-template field contract. `push.py` write paths are
 covered for their transport behaviour and outcome classification only, not for
 their broader validation rules or calendar semantics beyond the time cases above. Treat this as focused regression guards, not as
 coverage of the repository.

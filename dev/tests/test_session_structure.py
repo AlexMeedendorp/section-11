@@ -159,7 +159,7 @@ class Structure(unittest.TestCase):
         self.assertEqual(self.build()["status"], "unknown")
         self.act, self.event, self.streams = inputs()
         self.event["workout_doc"]["steps"] = []
-        self.assertEqual(self.build()["status"], "no_plan")
+        self.assertEqual(self.build()["status"], "no_steps")
         self.act, self.event, self.streams = inputs()
         self.event["updated"] = "2026-01-02T10:00:00Z"
         self.assertEqual(self.build()["status"], "followed")
@@ -500,13 +500,15 @@ class Placement(unittest.TestCase):
         row = self.capture()
         block = self.sync._intervals_data["activities"][0]["session_structure"]
         self.assertEqual(set(block), {"version", "method", "status", "plan", "steps", "cache"})
-        self.assertEqual(set(block["plan"]), {"event_id", "updated"})
+        self.assertEqual(set(block["plan"]), {"event_id", "updated", "duration_s", "duration_source"})
         for step in block["steps"]:
             self.assertEqual(set(step), {"target_w", "actual", "match"})
         self.assertEqual(set(block["cache"]), {"activity_key", "event_key", "plan_key", "sampled_at", "next_refresh_at"})
         self.assertEqual(row["structure_summary"], {"method": "plan_match_v2", "status": "followed",
+            "plan": {"event_id": "42", "updated": "2026-01-01T09:00:00Z", "duration_s": 300,
+                     "duration_source": "workout_doc.duration"},
             "steps": [[99, 100, 100, True], [99, 200, 200, True], [99, 300, 300, True]]})
-        self.assertLess(len(json.dumps(row["structure_summary"], separators=(",", ":"))), 200)
+        self.assertLess(len(json.dumps(row["structure_summary"], separators=(",", ":"))), 350)
 
     def test_missing_event_retains_intent_without_actuals_or_obsolete_issue(self):
         self.capture()

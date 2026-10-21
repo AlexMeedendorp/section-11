@@ -4,6 +4,12 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.149 - Coupled 7:28 ACWR throughout weekly history and phase context.
+  Distinguish paired plans without steps and retain explicit plan metadata.
+  Add descriptive rolling/weekly/season facts with bounded cached season curves.
+  Supply four rolling 7-day chunks and keep only compact weekly power caches.
+  Pairs with protocol/skill v11.83; report redesign remains v11.84.
+
 Version 3.148 - Route-weather Headwind/Crosswind/Tailwind use 80/110 degree
   boundaries for estimated resistance effect relative to calm air.
   Preserve forecast wind, signed components, band selection and old snapshots.
@@ -4557,7 +4563,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.148"
+    VERSION = "3.149"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -4983,9 +4989,17 @@ class IntervalsSync:
             "Authorization": f"Basic {self.intervals_auth}",
             "Accept": "application/json"
         }
-        response = self._read_with_retry(
-            lambda: requests.get(url, headers=headers, params=params,
-                                 timeout=self.INTERVALS_READ_TIMEOUT))
+        if endpoint == "activity-power-curves":
+            # Descriptive season data has a strict one-send budget. No redirect
+            # or retry may turn its one admission into multiple HTTP requests.
+            response = requests.get(url, headers=headers, params=params,
+                                    timeout=self.INTERVALS_READ_TIMEOUT, allow_redirects=False)
+            if response.status_code != 200:
+                raise requests.exceptions.HTTPError("season_curve_read_failed", response=response)
+        else:
+            response = self._read_with_retry(
+                lambda: requests.get(url, headers=headers, params=params,
+                                     timeout=self.INTERVALS_READ_TIMEOUT))
         response.raise_for_status()
         return response.json()
 
@@ -5317,6 +5331,464 @@ class IntervalsSync:
         result = dict(self._power_curve_run_cache[key])
         if "power_curve" in result:
             result["power_curve"] = within_duration(result["power_curve"])
+        return result
+
+    @staticmethod
+    def _fact_number(value):
+        return (value if isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and 0 <= value <= 1e12 else None)
+
+    @staticmethod
+    def _fact_date(value):
+        try:
+            return datetime.fromisoformat(value).strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _fact_indoor(cls, act):
+        if cls.SPORT_FAMILIES.get(act.get("type")) != "cycling":
+            return None
+        if act.get("type") == "VirtualRide" or "virtual" in str(act.get("sub_type", "")).lower():
+            return True
+        flags = [act.get(k) for k in ("trainer", "indoor", "virtual", "is_virtual")]
+        if any(v is True for v in flags):
+            return True
+        if any(v is not None and not isinstance(v, bool) for v in flags):
+            return None
+        return False
+
+    def _fact_activity(self, act, formatted=False):
+        """Canonical cycling observations only; no inference from activity names."""
+        if self.SPORT_FAMILIES.get(act.get("type")) != "cycling":
+            return None
+        date = self._fact_date(act.get("date" if formatted else "start_date_local"))
+        if date is None or act.get("id") is None:
+            return None
+        number = self._fact_number
+        if formatted:
+            row = {k: number(act.get(k)) for k in
+                   ("moving_time_s", "distance_m", "elevation_m", "work_kj", "carbs_used", "max_hr")}
+            indoor = act.get("indoor")
+            power_keys = ("avg_power", "normalized_power")
+        else:
+            row = {dest: number(act.get(src)) for dest, src in
+                   (("moving_time_s", "moving_time"), ("distance_m", "distance"),
+                    ("elevation_m", "total_elevation_gain"), ("carbs_used", "carbs_used"))}
+            joules = number(act.get("icu_joules"))
+            row["work_kj"] = round(joules / 1000, 1) if joules else None
+            row["max_hr"] = next((number(act[k]) for k in
+                ("max_heartrate", "max_hr", "max_heart_rate", "maxHr", "icu_max_hr")
+                if number(act.get(k)) is not None and act[k] > 0), None)
+            indoor = self._fact_indoor(act)
+            power_keys = ("average_watts", "avg_watts", "average_power", "avgWatts",
+                          "icu_average_watts", "weighted_average_watts", "np", "icu_pm_np",
+                          "normalizedPower", "icu_weighted_avg_watts")
+        if row["max_hr"] == 0:
+            row["max_hr"] = None
+        row.update(activity_id=str(act["id"]), date=date,
+                   activity_name=act.get("name") if isinstance(act.get("name"), str) else None,
+                   environment="indoor_virtual" if indoor is True else "outdoor" if indoor is False else "unknown")
+        curve = act.get("power_curve")
+        row["power_curve"] = {str(sec): number(curve.get(str(sec))) for sec in self.POWER_CURVE_SECONDS
+            if isinstance(curve, dict) and number(curve.get(str(sec))) is not None
+            and (row["moving_time_s"] is None or sec <= row["moving_time_s"])}
+        row["has_power"] = act.get("power_curve_expected") is True or bool(row["power_curve"]) or any(
+            number(act.get(k)) is not None and act[k] > 0 for k in power_keys
+        ) or "watts" in (act.get("stream_types") or [])
+        return row
+
+    @staticmethod
+    def _fact_max(records, key):
+        candidates = [r for r in records if r and r.get(key) is not None]
+        return min(candidates, key=lambda r: (-r[key], r.get("date", r.get("week_start", "")),
+                                              r.get("activity_id", ""))) if candidates else None
+
+    def _fact_work_bucket(self, rows, **identity):
+        work = [r["work_kj"] for r in rows if r.get("work_kj") is not None]
+        carbs = [r["carbs_used"] for r in rows if r.get("carbs_used") is not None]
+        return {**identity, "work_kj": round(sum(work), 1) if work else None,
+                "carbs_used": round(sum(carbs), 1) if carbs else None,
+                "cycling_activity_count": len(rows), "work_activities": len(work),
+                "carbs_activities": len(carbs)}
+
+    def _build_fun_facts(self, activities, start, end, formatted=False, include_week=False):
+        """Observed cycling facts, never a training-test/capability calculation."""
+        rows_by_id = {}
+        for act in activities:
+            row = self._fact_activity(act, formatted)
+            if row and start <= row["date"] <= end:
+                rows_by_id.setdefault(row["activity_id"], row)
+        rows = sorted(rows_by_id.values(), key=lambda r: (r["date"], r["activity_id"]))
+        fields = ("moving_time_s", "work_kj", "carbs_used", "distance_m", "elevation_m", "max_hr")
+        counts = {k: sum(r[k] is not None for r in rows) for k in fields}
+        total = lambda k, rs: (round(sum(r[k] for r in rs if r[k] is not None), 3)
+                              if not rs or any(r[k] is not None for r in rs) else None)
+        power_rows = [r for r in rows if r["has_power"]]
+        expected = {str(s): sum(r["moving_time_s"] is None or r["moving_time_s"] >= s
+                               for r in power_rows) for s in self.POWER_CURVE_SECONDS}
+        available = {str(s): sum(str(s) in r["power_curve"] for r in power_rows)
+                     for s in self.POWER_CURVE_SECONDS}
+        power = {"status": "complete" if expected == available else "partial",
+                 "expected": expected, "available": available}
+        if not power_rows:
+            power["status"] = "no_power"
+        elif not any(available.values()):
+            power["status"] = "unavailable"
+        identity = lambda r: {k: r[k] for k in ("activity_id", "activity_name", "date")}
+        peaks = {}
+        for seconds in self.POWER_CURVE_SECONDS:
+            points = [{**identity(r), "watts": r["power_curve"][str(seconds)]}
+                      for r in rows if str(seconds) in r["power_curve"]]
+            peaks[str(seconds)] = self._fact_max(points, "watts")
+        max_hr = self._fact_max(rows, "max_hr")
+        longest = self._fact_max(rows, "moving_time_s")
+        days = defaultdict(list)
+        weeks = defaultdict(list)
+        for row in rows:
+            days[row["date"]].append(row)
+            day = datetime.strptime(row["date"], "%Y-%m-%d")
+            anchor = datetime.strptime(end, "%Y-%m-%d")
+            ws = anchor - timedelta(days=((anchor - day).days // 7) * 7 + 6)
+            weeks[ws.strftime("%Y-%m-%d")].append(row)
+        result = {"start": start, "end": end, "cycling_activity_count": len(rows),
+                  **{k: total(k, rows) for k in ("moving_time_s", "work_kj", "carbs_used")},
+                  "distance_elevation": {}, "max_power": peaks.pop("1"), "peaks": peaks,
+                  "max_hr": {**identity(max_hr), "bpm": max_hr["max_hr"]} if max_hr else None,
+                  "longest_ride": {**identity(longest), "moving_time_s": longest["moving_time_s"],
+                                   "distance_m": longest["distance_m"],
+                                   "environment": longest["environment"]} if longest else None,
+                  "biggest_day": self._fact_max([
+                      self._fact_work_bucket(rs, date=d) for d, rs in days.items()], "work_kj"),
+                  "coverage": {**counts, "power": power}}
+        for environment in ("indoor_virtual", "outdoor", "unknown"):
+            group = [r for r in rows if r["environment"] == environment]
+            result["distance_elevation"][environment] = {
+                "cycling_activity_count": len(group),
+                **{k: total(k, group) for k in ("distance_m", "elevation_m")},
+                "distance_activities": sum(r["distance_m"] is not None for r in group),
+                "elevation_activities": sum(r["elevation_m"] is not None for r in group)}
+        if include_week:
+            buckets = []
+            for ws, group in weeks.items():
+                we = (datetime.strptime(ws, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d")
+                buckets.append(self._fact_work_bucket(group, week_start=ws,
+                    start=max(start, ws), end=min(end, we), partial=start > ws or end < we,
+                    chunk=(datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(we, "%Y-%m-%d")).days // 7 + 1))
+            result["biggest_week"] = self._fact_max(buckets, "work_kj")
+        return result
+
+    def _rolling_7d_chunks(self, activities, wellness, formatted, today, current_ctl):
+        """Four disjoint rolling weeks; reuse metric gates, never phase detection."""
+        anchor = datetime.strptime(today, "%Y-%m-%d")
+        chunks = []
+        for index in range(4):
+            end = (anchor - timedelta(days=index * 7)).strftime("%Y-%m-%d")
+            start = (anchor - timedelta(days=index * 7 + 6)).strftime("%Y-%m-%d")
+            acts = [a for a in activities if start <= a.get("start_date_local", "")[:10] <= end]
+            days = [w for w in wellness if start <= w.get("id", "")[:10] <= end]
+            zones = self._aggregate_zones(acts)
+            by_date = defaultdict(list)
+            for act in acts:
+                by_date[act["start_date_local"][:10]].append(act)
+            hard_days = 0
+            for group in by_date.values():
+                by_basis = {}
+                for act in group:
+                    z, basis = self._get_activity_zones(act, sport_family=self.SPORT_FAMILIES.get(act.get("type")))
+                    if z and basis:
+                        totals = by_basis.setdefault(basis, {})
+                        for key, seconds in z.items():
+                            totals[key] = totals.get(key, 0) + seconds
+                hard_days += int(bool(self._classify_hard_day(by_basis)[0]))
+            durability = self._calculate_durability(acts, acts)
+            ef = self._calculate_efficiency_factor(acts, acts)
+            hrrc = self._calculate_hrrc_trend(acts, acts)
+            hrv = [w["hrv"] for w in days if self._is_valid_hrv(w.get("hrv"))]
+            rhr = [w["restingHR"] for w in days if w.get("restingHR")]
+            sleep = [w["sleepSecs"] / 3600 for w in days if w.get("sleepSecs")]
+            end_wellness = next((w for w in days if w.get("id", "")[:10] == end), {})
+            chunks.append({
+                "chunk": index + 1, "start": start, "end": end,
+                "total_hours": round(sum(a.get("moving_time", 0) or 0 for a in acts) / 3600, 2),
+                "total_tss": round(sum(a.get("icu_training_load", 0) or 0 for a in acts), 0),
+                "zone_distribution": {
+                    **{key + "_hours": round(zones[key + "_time"] / 3600, 2)
+                       for key in ("z1", "z2", "z3", "z4_plus", "total")},
+                    "zone_basis": zones["zone_basis"]},
+                "hard_days": hard_days,
+                "durability_mean": durability["mean_decoupling_7d"],
+                "durability_qualifying": durability["qualifying_sessions_7d"],
+                "ef_mean": ef["mean_ef_7d"], "ef_qualifying": ef["qualifying_sessions_7d"],
+                "hrrc_mean": hrrc["mean_hrrc_7d"], "hrrc_qualifying": hrrc["qualifying_sessions_7d"],
+                "avg_hrv": round(statistics.mean(hrv), 1) if hrv else None,
+                "avg_resting_hr": round(statistics.mean(rhr), 1) if rhr else None,
+                "avg_sleep_hours": round(statistics.mean(sleep), 2) if sleep else None,
+                "wellness_days": {"hrv": len(hrv), "resting_hr": len(rhr), "sleep": len(sleep)},
+                "ctl_end": current_ctl if index == 0 else end_wellness.get("ctl"),
+                "fun_facts": self._build_fun_facts(formatted, start, end, formatted=True)})
+        return chunks
+
+    def _season_fun_facts(self, weekly_rows):
+        """Reduce the completed-week cache only; never include its partial last row."""
+        weeks = [r["fun_facts"] for r in weekly_rows[:-1]]
+        if not weeks:
+            return None
+        result = self._build_fun_facts([], weeks[0]["start"], weeks[-1]["end"], include_week=True)
+        result["completed_weeks"] = len(weeks)
+        result["cycling_activity_count"] = sum(w["cycling_activity_count"] for w in weeks)
+        for key in ("moving_time_s", "work_kj", "carbs_used"):
+            values = [w[key] for w in weeks if w[key] is not None]
+            result[key] = round(sum(values), 3) if values else None
+        for key in result["coverage"]:
+            if key != "power":
+                result["coverage"][key] = sum(w["coverage"][key] for w in weeks)
+        for key in ("moving_time_s", "work_kj", "carbs_used"):
+            if result["cycling_activity_count"] and not result["coverage"][key]:
+                result[key] = None
+        for env, block in result["distance_elevation"].items():
+            for key in block:
+                values = [w["distance_elevation"][env][key] for w in weeks
+                          if w["distance_elevation"][env][key] is not None]
+                block[key] = round(sum(values), 3) if values else None
+            for key, count in (("distance_m", "distance_activities"), ("elevation_m", "elevation_activities")):
+                if block["cycling_activity_count"] and not block[count]:
+                    block[key] = None
+        for key, metric in (("max_power", "watts"), ("max_hr", "bpm"),
+                            ("longest_ride", "moving_time_s"), ("biggest_day", "work_kj")):
+            result[key] = self._fact_max([w[key] for w in weeks], metric)
+        result["peaks"] = {s: self._fact_max([w["peaks"][s] for w in weeks], "watts")
+                           for s in result["peaks"]}
+        result["biggest_week"] = self._fact_max([
+            {"week_start": w["start"], "start": w["start"], "end": w["end"], "partial": False,
+             "work_kj": w["work_kj"], "carbs_used": w["carbs_used"],
+             "cycling_activity_count": w["cycling_activity_count"],
+             "work_activities": w["coverage"]["work_kj"],
+             "carbs_activities": w["coverage"]["carbs_used"]} for w in weeks
+             if w["coverage"]["work_kj"] > 0], "work_kj")
+        power = result["coverage"]["power"]
+        for kind in ("expected", "available"):
+            power[kind] = {s: sum(w["coverage"]["power"][kind][s] for w in weeks)
+                           for s in power[kind]}
+        statuses = {w["coverage"]["power"]["status"] for w in weeks}
+        power["status"] = ("stale" if "stale" in statuses else
+                           "unavailable" if not any(power["available"].values()) and any(power["expected"].values()) else
+                           "partial" if statuses - {"complete", "no_power"} else
+                           "complete" if any(power["expected"].values()) else "no_power")
+        return result
+
+    def _cached_fact_power_valid(self, facts, start, end):
+        """Only a well-formed in-window observation cache can survive a failure."""
+        try:
+            if facts["start"] != start or not start <= facts["end"] <= end:
+                return False
+            power = facts["coverage"]["power"]
+            if power["status"] not in ("complete", "partial", "unavailable", "no_power", "stale"):
+                return False
+            for kind in ("expected", "available"):
+                if any(type(power[kind][str(s)]) is not int or power[kind][str(s)] < 0
+                       for s in self.POWER_CURVE_SECONDS):
+                    return False
+            for point in [facts["max_power"], *(facts["peaks"][str(s)] for s in self.POWER_CURVE_SECONDS[1:])]:
+                if point is not None and (not isinstance(point["activity_id"], str)
+                        or self._fact_number(point["watts"]) is None
+                        or self._fact_date(point["date"]) != point["date"]
+                        or not start <= point["date"] <= facts["end"]):
+                    return False
+            return True
+        except (KeyError, TypeError, AttributeError):
+            return False
+
+    def _pack_weekly_fact_power(self, facts, meta):
+        """Persist only the attributed maxima needed across history refreshes."""
+        grouped = {}
+        points = [facts["max_power"], *(facts["peaks"][str(s)] for s in self.POWER_CURVE_SECONDS[1:])]
+        for index, point in enumerate(points):
+            if point is not None:
+                key = (point["activity_id"], point["date"])
+                grouped.setdefault(key, [*key, *([None] * 6)])[index + 2] = point["watts"]
+        def counts(values):
+            vector = [values[str(s)] for s in self.POWER_CURVE_SECONDS]
+            return vector[0] if len(set(vector)) == 1 else vector
+        power = facts["coverage"]["power"]
+        result = {"power": [grouped[k] for k in sorted(grouped)], "expected": counts(power["expected"])}
+        coverage = {}
+        implied = "complete" if any(power["expected"].values()) else "no_power"
+        if power["status"] != implied:
+            coverage["status"] = power["status"]
+        if power["available"] != power["expected"]:
+            coverage["available"] = counts(power["available"])
+        default_end = min(meta["end"], (datetime.strptime(facts["start"], "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d"))
+        for key, default in (("sampled_at", meta.get("sampled_at")),
+                             ("start", facts["start"]), ("end", default_end)):
+            if power.get(key) != default:
+                coverage[key] = power.get(key)
+        if coverage:
+            result["coverage"] = coverage
+        return result
+
+    def _unpack_weekly_fact_power(self, row, meta, names):
+        """Read compact or earlier full caches; malformed rows cannot be reused."""
+        try:
+            raw, start = row["fun_facts"], row["week_start"]
+            if "power" not in raw:
+                return raw  # The earlier full-week schema remains readable.
+            if meta.get("weekly_cache_version") != 1:
+                return None
+            end = min(meta["end"], (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d"))
+            def counts(value):
+                vector = [value] * 6 if type(value) is int else value
+                if not isinstance(vector, list) or len(vector) != 6 or any(type(n) is not int or n < 0 for n in vector):
+                    raise ValueError("invalid coverage")
+                return dict(zip(map(str, self.POWER_CURVE_SECONDS), vector))
+            expected = counts(raw["expected"])
+            extra = raw.get("coverage", {})
+            available = counts(extra["available"]) if "available" in extra else dict(expected)
+            power = {"expected": expected, "available": available,
+                     "status": "complete" if any(expected.values()) else "no_power",
+                     "sampled_at": meta.get("sampled_at"), "start": start, "end": end}
+            power.update({k: extra[k] for k in ("status", "sampled_at", "start", "end") if k in extra})
+            if (power["start"] != start or self._fact_date(power["end"]) != power["end"]
+                    or not start <= power["end"] <= end):
+                return None
+            points = {str(s): None for s in self.POWER_CURVE_SECONDS}
+            if not isinstance(raw["power"], list) or len(raw["power"]) > 6:
+                return None
+            for item in raw["power"]:
+                if (not isinstance(item, list) or len(item) != 8 or not isinstance(item[0], str)
+                        or not item[0] or self._fact_date(item[1]) != item[1]
+                        or not start <= item[1] <= power["end"] or all(w is None for w in item[2:])):
+                    return None
+                for s, watts in zip(self.POWER_CURVE_SECONDS, item[2:]):
+                    if watts is not None:
+                        if self._fact_number(watts) is None or points[str(s)] is not None:
+                            return None
+                        points[str(s)] = {"watts": watts, "activity_id": item[0], "date": item[1],
+                                          "activity_name": names.get((item[0], item[1]))}
+            if any(available[s] > expected[s] or (available[s] > 0) != (points[s] is not None) for s in points):
+                return None
+            observed_status = ("complete" if any(expected.values()) else "no_power") if available == expected else (
+                "partial" if any(available.values()) else "unavailable")
+            if power["status"] not in (observed_status, "stale") and not (
+                    power["status"] == "unavailable" and not any(available.values())):
+                return None
+            return {"start": start, "end": end, "max_power": points.pop("1"),
+                    "peaks": points, "coverage": {"power": power}}
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None
+
+    def _history_fun_fact_power(self, weekly_rows, activities, previous):
+        """One aggregate read on history refresh; weekly maxima are the disk cache."""
+        start, end = weekly_rows[0]["week_start"], datetime.now().strftime("%Y-%m-%d")
+        old_meta = previous.get("fun_facts_power") or {}
+        if not isinstance(old_meta, dict):
+            old_meta = {}
+        names = {}
+        prior_facts = previous.get("fun_facts")
+        season = prior_facts.get("season") if isinstance(prior_facts, dict) else None
+        season = season if isinstance(season, dict) else {}
+        prior_peaks = season.get("peaks")
+        prior_peaks = prior_peaks if isinstance(prior_peaks, dict) else {}
+        for point in [season.get("max_power"), *prior_peaks.values()]:
+            if isinstance(point, dict) and isinstance(point.get("activity_name"), str):
+                names[(point.get("activity_id"), point.get("date"))] = point["activity_name"]
+        for act in activities:
+            if isinstance(act.get("name"), str):
+                names[(str(act.get("id")), self._fact_date(act.get("start_date_local")))] = act["name"]
+        old_rows = {}
+        for row in previous.get("weekly_180d", []) or []:
+            if isinstance(row, dict):
+                facts = self._unpack_weekly_fact_power(row, old_meta, names)
+                if self._cached_fact_power_valid(facts, row.get("week_start"), end):
+                    old_rows[row["week_start"]] = facts
+        stamp = self._history_stamp_utc(old_meta.get("sampled_at"))
+        now = datetime.now(timezone.utc)
+        cache_fresh = (old_meta.get("status") == "ok" and old_meta.get("start") == start
+                       and old_meta.get("end") == end and stamp is not None
+                       and 0 <= (now - stamp).total_seconds() < 86400
+                       and all(old_rows.get(r["week_start"]) for r in weekly_rows)
+                       and old_meta.get("activity_key") == self._structure_fingerprint(activities))
+        curves, error = None, None
+        if not cache_fresh:
+            query = (start, end)
+            cached = getattr(self, "_fun_fact_curve_run", None)
+            if cached is not None:
+                if cached[0] == query:
+                    curves, error = cached[1:]
+                else:
+                    error = "request_budget"
+            else:
+                try:
+                    payload = self._intervals_get("activity-power-curves", {
+                        "oldest": start, "newest": end, "type": "Ride",
+                        "secs": ",".join(map(str, self.POWER_CURVE_SECONDS))})
+                    curves = self._parse_fun_fact_curves(payload, start, end)
+                except requests.exceptions.RequestException as exc:
+                    response = getattr(exc, "response", None)
+                    error = "http_" + str(response.status_code) if response is not None else "transport_error"
+                except (ValueError, TypeError, KeyError):
+                    error = "invalid_response"
+                self._fun_fact_curve_run = (query, curves, error)
+        meta = {"start": start, "end": end, "status": "ok" if curves is not None or cache_fresh else "unavailable",
+                "sampled_at": old_meta.get("sampled_at") if cache_fresh else now.isoformat() if curves is not None else None,
+                "activity_key": self._structure_fingerprint(activities), "weekly_cache_version": 1}
+        if error:
+            meta["error"] = error
+        matched = set()
+        for week in weekly_rows:
+            ws = week["week_start"]
+            we = min(end, (datetime.strptime(ws, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d"))
+            group = []
+            for act in activities:
+                date = self._fact_date(act.get("start_date_local"))
+                if date is None or not ws <= date <= we:
+                    continue
+                act = dict(act)
+                curve = (curves or {}).get(str(act.get("id")))
+                if curve and curve["date"] == date and self.SPORT_FAMILIES.get(act.get("type")) == "cycling":
+                    act["power_curve"] = curve["power_curve"]
+                    matched.add(str(act["id"]))
+                group.append(act)
+            facts = self._build_fun_facts(group, ws, we)
+            power = facts["coverage"]["power"]
+            power["sampled_at"] = meta["sampled_at"]
+            power.update(start=ws, end=we)
+            if curves is None:
+                prior = old_rows.get(ws)
+                if prior:
+                    facts["max_power"], facts["peaks"] = prior["max_power"], prior["peaks"]
+                    facts["coverage"]["power"] = dict(prior["coverage"]["power"])
+                    if not cache_fresh:
+                        facts["coverage"]["power"]["status"] = "stale"
+                        meta["status"] = "stale"
+                        meta["sampled_at"] = old_meta.get("sampled_at")
+                else:
+                    power["status"] = "unavailable"
+            week["fun_facts"] = facts
+        if curves is not None:
+            meta["unmatched_curves"] = len(set(curves) - matched)
+        return meta
+
+    def _parse_fun_fact_curves(self, payload, start, end):
+        """Validate the supplied ActivityPowerCurvePayload; never pad short arrays."""
+        if (not isinstance(payload, dict) or type(payload.get("after_kj")) is not int
+                or payload["after_kj"] != 0):
+            raise ValueError("invalid_response")
+        seconds, raw = payload.get("secs"), payload.get("curves")
+        if (not isinstance(seconds, list) or not seconds or not isinstance(raw, list)
+                or any(type(s) is not int or s not in self.POWER_CURVE_SECONDS for s in seconds)
+                or len(set(seconds)) != len(seconds)):
+            raise ValueError("invalid_response")
+        result = {}
+        for curve in raw:
+            if not isinstance(curve, dict):
+                raise ValueError("invalid_response")
+            aid, date, watts = curve.get("id"), self._fact_date(curve.get("start_date_local")), curve.get("watts")
+            if (not isinstance(aid, str) or not aid or aid in result or date is None
+                    or not start <= date <= end or not isinstance(watts, list) or len(watts) > len(seconds)
+                    or any(w is not None and self._fact_number(w) is None for w in watts)):
+                raise ValueError("invalid_response")
+            result[aid] = {"date": date, "power_curve": {str(s): w for s, w in zip(seconds, watts) if w is not None}}
         return result
 
     def _post_workout_fields(self, act: Dict, avg_power, avg_speed, temp_unit, units) -> Dict:
@@ -9213,6 +9685,13 @@ class IntervalsSync:
             "race_calendar": race_calendar
         }
 
+        data["rolling_7d_chunks"] = self._rolling_7d_chunks(
+            activities_extended, wellness_extended, data["recent_activities"], today, ctl)
+        data["fun_facts"] = {"scope": "cycling", "rolling_7d": data["rolling_7d_chunks"][0]["fun_facts"],
+            "rolling_28d": self._build_fun_facts(
+            data["recent_activities"], (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=27)).strftime("%Y-%m-%d"),
+            today, formatted=True, include_week=True)}
+
         # Body weight signal (v3.112) — gated W/kg + weekly weight trend.
         # None when no field qualifies; AI omits the report section silently.
         weight_signal = self._build_weight_signal(
@@ -11924,8 +12403,8 @@ class IntervalsSync:
             # 3 weeks ago that has since resolved should not keep triggering Overreached.
             # NB the caller's window is finalized weeks in live mode (the in-progress
             # current week is excluded upstream) and the target week in backfill mode,
-            # so this is the last completed week's weekly_180d acwr (7d acute / 21d
-            # chronic), not derived_metrics.acwr (7d/28d).
+            # so this is the last completed week's coupled 7:28 ACWR.
+            # Live derived_metrics.acwr uses the same definition on rolling days.
             current_acwr = recent_rows[-1].get("acwr") if recent_rows else None
             if current_acwr is not None and current_acwr >= 1.5:
                 return "Overreached"
@@ -12488,6 +12967,9 @@ class IntervalsSync:
             with open(history_path, 'r') as f:
                 history_data = json.load(f)
             rows = history_data.get("weekly_180d", [])
+            # Retained pre-upgrade history may survive refresh backoff. Recompute
+            # before slicing, using the complete supplied week sequence.
+            self._couple_weekly_acwr(rows)
             # Return last 4 weeks for lookback
             return rows[-4:] if len(rows) >= 4 else rows
         except Exception:
@@ -13582,6 +14064,13 @@ class IntervalsSync:
         print("  Building 180-day weekly tier...")
         weekly_180d = self._build_weekly_tier(activities_by_date, wellness_by_date, days=180,
                                               athlete_units=athlete_units)
+        try:
+            previous_history = json.loads((self.data_dir / self.HISTORY_FILE).read_text())
+            if not isinstance(previous_history, dict):
+                previous_history = {}
+        except (OSError, ValueError):
+            previous_history = {}
+        fun_facts_power = self._history_fun_fact_power(weekly_180d, all_activities, previous_history)
         
         # === PHASE BACKFILL ===
         # Retroactively classify phase for each COMPLETED weekly row using
@@ -13636,8 +14125,17 @@ class IntervalsSync:
             "summaries": summaries,
             "daily_90d": daily_90d,
             "weekly_180d": weekly_180d,
+            "fun_facts_power": fun_facts_power,
+            "fun_facts": {"scope": "cycling", "season": self._season_fun_facts(weekly_180d)},
+            "acwr_definition": "coupled_7_28",
             **monthly_tiers
         }
+
+        # The complete season summary above is retained. Only attributed power
+        # maxima need persistence between refreshes; other weekly facts are
+        # rebuilt from the already fetched activities, not read from this cache.
+        for week in weekly_180d:
+            week["fun_facts"] = self._pack_weekly_fact_power(week["fun_facts"], fun_facts_power)
         
         # Save locally (atomic: a failed write leaves any previous file intact)
         history_path = self._history_write(history)
@@ -14094,19 +14592,25 @@ class IntervalsSync:
             
             current += timedelta(days=7)
         
-        # Post-pass: compute per-week ACWR
-        # ACWR = this week's avg daily TSS / prior 3 weeks' avg daily TSS
+        self._couple_weekly_acwr(rows)
+        return rows
+
+    @staticmethod
+    def _couple_weekly_acwr(rows):
+        """Same coupled 7:28 definition as live ACWR; no partial-week scaling."""
         for i, row in enumerate(rows):
+            row["acwr"] = None
             if i < 3:
-                # Not enough prior weeks for chronic load
+                continue
+            # Do not silently bridge missing calendar weeks in a retained file.
+            dates = [datetime.strptime(r["week_start"], "%Y-%m-%d") for r in rows[i - 3:i + 1]]
+            if any((b - a).days != 7 for a, b in zip(dates, dates[1:])):
                 continue
             acute = row["total_tss"] / 7 if row["total_tss"] else 0
-            chronic_tss = sum(rows[j]["total_tss"] or 0 for j in range(i - 3, i))
-            chronic = chronic_tss / 21 if chronic_tss else 0
+            chronic_tss = sum(rows[j]["total_tss"] or 0 for j in range(i - 3, i + 1))
+            chronic = chronic_tss / 28 if chronic_tss else 0
             if chronic > 0:
                 row["acwr"] = round(acute / chronic, 2)
-        
-        return rows
     
     def _build_monthly_tier(self, activities_by_date: Dict, wellness_by_date: Dict,
                             days: int,
@@ -14570,7 +15074,7 @@ class IntervalsSync:
                 print(f"  Could not create update issue: {e}")
     
     # Structure shares interval retention, but not interval/DFA interpretation.
-    STRUCTURE_VERSION = 2
+    STRUCTURE_VERSION = 3
     STRUCTURE_MAX_STEPS = 20
     STRUCTURE_MAX_EFFORTS = 8
 
@@ -14609,11 +15113,19 @@ class IntervalsSync:
         plan["reference"] = {"event_id": str(event["id"])[:80],
                              "updated": str(event.get("updated") or "")[:80] or None}
         doc = event.get("workout_doc")
+        if isinstance(event.get("name"), str):
+            plan["reference"]["name"] = event["name"]
+        duration, source = event.get("moving_time"), "moving_time"
+        if not (self._structure_number(duration) and 0 <= duration <= 604800):
+            duration = doc.get("duration") if isinstance(doc, dict) else None
+            source = "workout_doc.duration"
+        if self._structure_number(duration) and 0 <= duration <= 604800:
+            plan["reference"].update(duration_s=duration, duration_source=source)
         if not isinstance(doc, dict) or not isinstance(doc.get("steps"), list):
             plan["status"] = "missing_steps"
             return plan
         steps = doc["steps"]
-        plan["status"] = "steps_present" if steps else "no_plan"
+        plan["status"] = "steps_present" if steps else "no_steps"
         # Bound input work independently of the output cap, which counts sets.
         for step in steps[:10000]:
             entry = {"supported": False}
@@ -14796,8 +15308,8 @@ class IntervalsSync:
         shift = act.get("workout_shift_secs")
         if plan_reason:
             issues.append(plan_reason)
-        elif plan["status"] == "no_plan":
-            out["status"] = "no_plan"
+        elif plan["status"] in ("no_plan", "no_steps"):
+            out["status"] = plan["status"]
         elif plan["status"] != "steps_present":
             issues.append(plan["status"])
         elif shift is not None and (not self._structure_number(shift) or abs(shift) > 604800):
@@ -14918,6 +15430,8 @@ class IntervalsSync:
     def _structure_summary(block):
         """Small, self-contained comparison data that can outlive interval detail."""
         summary = {"method": "plan_match_v2", "status": block["status"]}
+        if block.get("plan"):
+            summary["plan"] = dict(block["plan"])
         if block.get("steps"):
             rows = []
             for step in block["steps"]:
@@ -15169,6 +15683,9 @@ class IntervalsSync:
                 "name": activity_name,
                 "duration_hours": round((act.get("moving_time") or 0) / 3600, 2),
                 "duration_formatted": self._format_duration(int(act.get("moving_time") or 0)),
+                "moving_time_s": self._fact_number(act.get("moving_time")),
+                "distance_m": self._fact_number(act.get("distance")),
+                "indoor": self._fact_indoor(act),
                 "distance_km": distance_km,
                 "tss": act.get("icu_training_load"),
                 "intensity_factor": act.get("icu_intensity"),
@@ -15299,6 +15816,7 @@ class IntervalsSync:
             has_power = any(isinstance(activity.get(k), (int, float)) and activity[k] > 0
                             for k in ("avg_power", "normalized_power"))
             has_power = has_power or "watts" in (act.get("stream_types") or [])
+            activity["power_curve_expected"] = bool(has_power)
             activity.update(self._build_power_curve_for_activity(act, previous_latest_lookup, has_power))
 
         return formatted
