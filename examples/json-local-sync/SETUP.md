@@ -90,8 +90,8 @@ python3 section11/examples/sync.py --output latest.json
 │   │   ├── reports/
 │   │   │   ├── PRE_WORKOUT_REPORT_TEMPLATE.md
 │   │   │   ├── POST_WORKOUT_REPORT_TEMPLATE.md
-│   │   │   ├── WEEKLY_REPORT_TEMPLATE.md
-│   │   │   └── BLOCK_REPORT_TEMPLATE.md
+│   │   │   ├── 7_DAY_REPORT_TEMPLATE.md
+│   │   │   └── 28_DAY_REPORT_TEMPLATE.md
 │   │   ├── workout-library/
 │   │   │   └── WORKOUT_REFERENCE.md
 │   │   └── ...

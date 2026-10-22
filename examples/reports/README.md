@@ -28,25 +28,15 @@ See templates and examples below for annotated reference.
 
 Post-workout duration displays round to whole minutes, while eligibility gates retain exact duration_formatted. Use labelled facts without middle-dot separators or hyphen continuation lines; power and HR zones each occupy one line with labels first. Weekly totals has four unlabelled groups: Phase; capability/TID; load/recovery; Hours/TSS. Missing fields stay omitted under the template's existing rules.
 
-**Weekly Reports must include:**
-- Session breakdown with compliance status (✅/⚠️/❌)
-- Quality session detail (top 2-3 intensity sessions: target vs actual, decoupling, VI)
-- Polarization with Grey Zone and Quality tracking, plus TID 7d and TID 28d with drift status
-- Durability subsection (7d/28d mean(X) counts, trend, high-drift count)
-- Fitness deltas (CTL, ATL, TSB start → end with Δ)
-- ACWR with acute/chronic components shown
-- Wellness trends with directional arrows and threshold labels
-- Section 11 flags (surfaced immediately, not deferred to block)
+**7-day reports** cover today plus six local dates: sport totals, nonzero readable plan counts, marker-only session lines, selected key-session windows, Zones/TID, capability avg with window/N, fitness, full wellness, separate flag blocks, descriptive fun facts and Next 7 days without clock times. No planned TSS, not-assessed category or power-curve block.
 
-**Block Reports must include:**
-- Week-by-week volume progression with CTL trajectory
-- Compliance with reasons for misses/modifications
-- Key performance markers with target comparison
-- Polarization by week (catches grey zone creep), plus TID 28d as block-scale classification
-- Durability by week (catches aerobic efficiency regression across the block)
-- Wellness block-over-block comparison with assessment labels
-- Phase Progression Check (criteria met Y/N, recommendation, rationale)
-- Next block plan with specific targets
+**28-day reports** show Totals, Plan, Fitness start -> now, one dated block per supplied rolling_7d_chunks window (oldest first), full 28-day Wellness, Intensity, Key sessions, Best efforts with previous values in brackets, 28-day DFA, flags, fun facts and two-paragraph Interpretation. Preserve 14-day step detail and current calendar-week Phase; no ceilings or separate progression section.
+
+**Season reports** use completed configured calendar weeks: Position, phase cycles ending at Deload (null weeks separate), Volume, Fitness with coupled ACWR known coverage, Intensity with dated half averages, matched-month YoY with prior values in brackets, non-empty Notable, season fun facts and Interpretation.
+
+All three use bold dated headers, local Data updated, blank-line groups and one labelled fact per line. Means say avg with window; omit missing/zero-only lines and retain partial/stale coverage. Fun facts precede Interpretation, with equivalents inline from a clear dossier bottle statement or documented banana fallback. Peaks appear in 7-day/Season fun facts; Most work in a week appears only in 28-day/Season.
+
+Permanent request aliases: "weekly report" means 7-day report; "block report" means 28-day report. The four old template/example paths remain managed pointers until the first release after 31 December 2026. Update personal instructions to the new filenames. The configured week start still controls history, Season, phase and planned-week features.
 
 See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference and rounding conventions.  
 See `REPORT_HIERARCHY.md` for how data flows between report levels.
@@ -68,10 +58,10 @@ For fallback data, the single final attribution names the actual provider: "Weat
 | [PRE_WORKOUT_REPORT_EXAMPLES.md](PRE_WORKOUT_REPORT_EXAMPLES.md) | Fictional route, rest-day, indoor, multi-session and outdoor-run examples |
 | [POST_WORKOUT_REPORT_TEMPLATE.md](POST_WORKOUT_REPORT_TEMPLATE.md) | Template structure for post-workout analysis (no data) |
 | [POST_WORKOUT_REPORT_EXAMPLES.md](POST_WORKOUT_REPORT_EXAMPLES.md) | 8 post-workout scenarios plus synthetic new-field excerpts |
-| [WEEKLY_REPORT_TEMPLATE.md](WEEKLY_REPORT_TEMPLATE.md) | Template structure for weekly summaries (no data) |
-| [WEEKLY_REPORT_EXAMPLES.md](WEEKLY_REPORT_EXAMPLES.md) | 2 anonymized example weekly reports |
-| [BLOCK_REPORT_TEMPLATE.md](BLOCK_REPORT_TEMPLATE.md) | Template structure for block reports (no data) |
-| [BLOCK_REPORT_EXAMPLES.md](BLOCK_REPORT_EXAMPLES.md) | 2 anonymized example block reports |
+| [7_DAY_REPORT_TEMPLATE.md](7_DAY_REPORT_TEMPLATE.md) | Template structure for 7-day reports (no data) |
+| [7_DAY_REPORT_EXAMPLES.md](7_DAY_REPORT_EXAMPLES.md) | 2 synthetic example 7-day reports |
+| [28_DAY_REPORT_TEMPLATE.md](28_DAY_REPORT_TEMPLATE.md) | Template structure for 28-day reports (no data) |
+| [28_DAY_REPORT_EXAMPLES.md](28_DAY_REPORT_EXAMPLES.md) | 2 synthetic example 28-day reports |
 | [WEATHER_REPORT_TEMPLATE.md](WEATHER_REPORT_TEMPLATE.md) | On-request five-day planned-route weather |
 | [WEATHER_REPORT_EXAMPLES.md](WEATHER_REPORT_EXAMPLES.md) | Synthetic forecast, outlook and missing-data examples |
 
@@ -100,27 +90,17 @@ Generated **after** a completed session. Includes:
 - Coaching interpretation
 - Descriptive W/kg, work, available exact power peaks, elapsed time and sport-aware pace from sync 3.147; peaks never establish FTP, zones or readiness
 
-### Weekly Summary (~35-45 lines)
-Generated **end of training week** (Saturday or Sunday morning). Includes:
-- Session breakdown with compliance status for every day
-- Quality session detail for top 2-3 intensity sessions
-- Polarization (Z1+Z2, Grey Zone, Quality) with TID 7d and TID 28d + drift status
-- Durability subsection (7d/28d mean(X) counts, trend, high-drift count)
-- Fitness deltas with ramp rate and ACWR breakdown
-- Wellness trends with week-over-week comparison and directional labels
-- Section 11 flags triggered during the week
-- Next week preview with any planned modifications
+### 7-day report
 
-### Block Report (~45-60 lines)
-Generated **end of each 3-5 week block**. Includes:
-- Week-by-week volume and CTL progression
-- Compliance summary with reasons for modifications
-- Performance marker tracking (sweetspot, VO2max, decoupling trends)
-- Polarization by week to catch grey zone creep, plus TID 28d as block-scale classification
-- Durability by week to catch aerobic efficiency regression across the block
-- Wellness block-over-block comparison with assessment labels
-- Phase Progression Check with explicit criteria evaluation
-- Next block plan with targets and key changes
+Generated on request for a rolling seven-date window. Follow [7_DAY_REPORT_TEMPLATE.md](7_DAY_REPORT_TEMPLATE.md) and its complete/sparse synthetic examples.
+
+### 28-day report
+
+Generated on request from four supplied rolling chunks. Follow [28_DAY_REPORT_TEMPLATE.md](28_DAY_REPORT_TEMPLATE.md); its examples preserve the DFA comparison and diagnostic cases.
+
+### Season report
+
+Generated on request from completed calendar weeks with separately labelled current snapshot context and calendar-matched YoY. Follow [SEASON_REPORT_TEMPLATE.md](SEASON_REPORT_TEMPLATE.md) and [SEASON_REPORT_EXAMPLES.md](SEASON_REPORT_EXAMPLES.md).
 
 ---
 
@@ -141,7 +121,7 @@ Some fields appear only when relevant:
 - **Monotony:** Include only if > 2.3; omit entirely when normal
 - **Load/Recovery tolerance note:** Include only when within 0.2 of threshold
 - **Coach notes** (brief contextual tips) are encouraged to humanize recommendations
-- **Quality Session Detail (weekly):** Cap at 2-3 key sessions; if 4+ hard days, prioritize most notable
+- **Key session detail (7-day):** Cap at 2-3 sessions; if 4+ hard days, prioritize most notable
 
 ---
 
@@ -149,5 +129,5 @@ Some fields appear only when relevant:
 
 - Worked report text uses anonymized/placeholder data; replace with actual values from your JSON feed
 - Zone percentages round to nearest whole number (see rounding convention in POST_WORKOUT_REPORT_TEMPLATE.md)
-- Data flows upward between reports: post-workout → weekly → block (see REPORT_HIERARCHY.md)
-- Section 11 flags surface at the weekly level and are summarized with resolution in block reports
+- Reports read current source data at their own scope; see REPORT_HIERARCHY.md for rolling versus calendar windows.
+- Flags surface immediately in the 7-day report and retain documented resolution in the 28-day report.

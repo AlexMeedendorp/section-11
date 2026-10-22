@@ -1,149 +1,129 @@
 # Season Report Examples
 
-Two synthetic, anonymized examples demonstrating the Season Report tier. Both render the trailing-12-month annual arc with YoY metrics-only comparison, per v1 design.
+Synthetic fixtures only. Both examples use Sunday-start completed calendar weeks; the current partial week is excluded. Numbers are invented, not athlete data.
 
-**Anchor convention:** YoY anchor is the **last fully completed calendar month** prior to `metadata.last_updated`. Snapshot date `2026-04-28` → anchor month `2026-03`. The current calendar month (April 2026) is excluded from YoY because partial-month-vs-full-month comparison would distort every delta.
+## Example 1: cycles, a phase gap and current snapshot
 
-**Aggregation convention:** All 180d aggregates use completed weeks only: `weekly_180d[:-1]`. The in-progress current week carries partial hours, partial TSS, partial hard_days, partial ACWR, and `phase_detected: null`; including it would distort the season summary. The current week's phase is appended to the trajectory string for narrative completeness only.
+Eight completed weeks run from 17 May through 11 July. The first three ACWR values are unknown; the remaining five are 0.75, 0.90, 1.10, 1.30 and 1.40. The fictional dossier has no stated bottle.
 
-**Example 1**: Mid-Build cyclist, multi-year data, demonstrates material 2y line surfacing.
-**Example 2**: Sparse prior-year data (newly-tracked athlete), demonstrates `n/a — no prior data` rendering.
+```text
+**Season report: Sun 17 May to Sat 11 July 2026**
+Data updated: 14 Jul 15:30
+History updated: 12 Jul 08:00
 
----
+Eight completed weeks show consistent volume, with more training than last June.
 
-## Example 1: Mid-Build, multi-year athlete
+**Position**
+Season: Mid Season
+Phase: Base, week 3
+Previous phase: Deload
 
-```
-Season Report: 2025-04-28 → 2026-04-28
-Generated: 2026-04-28
-Annual position: Late Base / Build · Build · week 3 of phase
+**Phases**
+17 May-20 Jun: Build 4 weeks, Deload 1
+21-27 Jun: no detected phase
+28 Jun-11 Jul: Base 2 weeks
 
-Annual Position:
-  Current phase: Build (week 3)
-  Previous phase: Base
-  Phase trajectory (180d): Recovery×2 → Base×9 → Build×4 → Recovery×1 → current Build×3
-  Seasonal expectation: Late Base / Build, consistent with April expectations on the
-    Northern Hemisphere arc (see SECTION_11.md Benchmark Index seasonal table).
-    Race season opens within 2 months; CTL trajectory should peak during this Build
-    or a single subsequent Build before the taper window for the A-race.
+**Volume (8 completed weeks)**
+Hours: 40h (avg. 5 h/week over 8 completed weeks)
+TSS: 1880 (avg. 235/week over 8 completed weeks)
+Longest ride: 2.75h, week of 28 Jun
+Longest week: 6.5h, week of 21 Jun
 
-Current Season Trajectory (180d, completed weeks):
-  Volume: 211.6h total / 14380 TSS total | 8.5h/wk avg / 575 TSS/wk avg | 25 weeks tracked
-  CTL: peak 78.2 (week of 2026-03-23) → current 76.4
-  ACWR week-bucket counts: 0 weeks <0.8 / 17 weeks 0.8–1.3 / 6 weeks 1.3–1.5 / 2 weeks >1.5
-  TID 180d (time-weighted): 81% Z1+Z2 / 4% Z3 / 15% Z4+: polarized
-  Hard-day density: avg 1.8/wk | first half 1.6/wk → second half 2.0/wk ↑
-  Longest ride: 4.5h (week of 2026-04-13)
-  Longest week: 12.8h (week of 2026-03-30)
-  Quality session count: 23 weeks with ≥1 hard day (92% of completed weeks)
+**Fitness**
+CTL peak: 44.2, week of 21 Jun
+CTL now: 42.6, 14 Jul
+ACWR below 0.8: 1
+ACWR 0.8 through 1.3: 3
+ACWR above 1.3 through 1.5: 1
+ACWR known: 5 of 8 weeks
 
-Year-over-Year Comparison (anchor: 2026-03 last completed; current vs prior year, calendar-month matched):
-  Anchor month: 2026-03 (last completed)
-  Total hours: 41.2h vs 34.6h (+6.6, +19%) | 3mo: 39.4 vs 32.8
-  Total TSS: 2820 vs 2330 (+490, +21%) | 3mo: 2680 vs 2240
-  CTL peak: 78.2 vs 76.8 (+1.4)
-    2y: 78.2 vs 68.4 (+9.8), material delta vs two years prior
-  CTL end: 76.4 vs 74.1 (+2.3)
-  Z1+Z2: 80% vs 76% (+4pp)
-  Z3: 4% vs 9% (-5pp)
-  Z4+: 16% vs 15% (+1pp)
-  Hard-day density: 1.9/wk vs 1.5/wk (+0.4)
-  Longest ride: 4.2h vs 3.8h (+0.4)
-  Avg HRV: 64 ms vs 61 ms (+3)
-  Avg RHR: 48 bpm vs 50 bpm (-2)
+**Intensity**
+Zones (8 weeks): Z1+Z2 92%, Z3 5%, Z4+ 3% (time-weighted)
+TID 28d (now): Pyramidal (mixed basis)
+Hard days: avg. 1.5/week over 8 completed weeks
+First half (17 May-13 Jun): avg. 1.5 hard days/week
+Second half (14 Jun-11 Jul): avg. 1.5 hard days/week
+Weeks with a hard day: 8 of 8
 
-Notable Patterns:
-  FTP timeline (in window): 2025-06-14, test, 248W; 2025-08-22, auto-update, 252W;
-    2025-11-02, auto-update, 256W; 2026-02-18, test, 264W
-  Data gaps: 2025-08-04 → 2025-08-12, 8 days missing (travel)
-  A-races completed: 2025-09-07, Regional Gran Fondo
-  Next A-race: 2026-06-21, Alpine Classic, D-54
-  Deviations: ACWR breached 1.5 in 2 of 25 completed weeks (both during late-March CTL push)
+**June 2026 (June 2025 in brackets)**
+Hours: 23h (20h)
+Apr-Jun monthly avg. hours: 21h (19h)
+TSS: 1050 (900)
+Apr-Jun monthly avg. TSS: 980 (870)
+CTL peak: 44.2 (40.5)
+CTL end: 43.8 (39.9)
+Z1+Z2: 90% (93%)
+Z3: 6% (4%)
+Z4+: 4% (3%)
+Hard days: June avg. 1.8/week (1.5/week)
+Longest ride: 2.75h (2.5h)
+HRV: June avg. 62 ms (59 ms)
+RHR: June avg. 52 bpm (54 bpm)
 
-Interpretation:
-This season is tracking ahead of last year on every load axis: +19% volume, +21% TSS,
-hard-day density up by ~1 session every 2-3 weeks, polarization cleaner with Z3 grey
-zone roughly halved (9% → 4%). The 1y CTL peak delta is small (+1.4) because last
-season also peaked strongly in March, but the 2y comparison shows a +9.8 jump versus
-two springs ago; the structural fitness ceiling has clearly moved. Current CTL is 1.8
-below peak which fits a deload-then-rebuild rhythm; with 54 days to the A-race the
-remaining build window is sufficient. Focus over the next 3–4 weeks shifts to race-
-specific intensity before the taper window opens, and the two ACWR>1.5 weeks should
-not be repeated inside the final pre-taper block.
-```
+**Notable**
+Deviation: Z3 exceeded 5% in 3 of 8 completed weeks
 
----
+**Fun facts (cycling, descriptive)**
+Max power (1 s): 810 W, 27 May, Ridge circuit
+Max HR: 181 bpm, 27 May, Ridge circuit
 
-## Example 2: Newly-tracked athlete, sparse prior-year
+Longest ride: Meadow route, 28 Jun, 2h45m, 72 km (outdoor)
+Distance: 250 km (indoor)
+Distance: 530 km (outdoor)
+Climbing: 700 m (indoor)
+Climbing: 4300 m (outdoor)
 
-```
-Season Report: 2025-04-28 → 2026-04-28
-Generated: 2026-04-28
-Annual position: Spring base-building · Base · week 6 of phase
+Peak 5 s: 690 W, 27 May, Ridge circuit
+Peak 1 min: 380 W, 27 May, Ridge circuit
+Peak 5 min: 265 W, 25 Jun, Hill circuit
+Peak 20 min: 225 W, 28 Jun, Meadow route
+Peak 60 min: 200 W, 28 Jun, Meadow route
 
-Annual Position:
-  Current phase: Base (week 6)
-  Previous phase: Recovery
-  Phase trajectory (180d): Recovery×3 → Base×6 → current Base×6
-  Seasonal expectation: Late Base, consistent with April expectations on the
-    Northern Hemisphere arc (see SECTION_11.md Benchmark Index seasonal table).
-    No A-race scheduled, so phase progression is open; current trajectory could
-    extend Base or transition to Build per athlete preference and event targets.
+Time in the saddle: 37h
 
-Current Season Trajectory (180d, completed weeks):
-  Volume: 138.4h total / 8680 TSS total | 5.5h/wk avg / 347 TSS/wk avg | 25 weeks tracked
-  CTL: peak 52.1 (week of 2026-04-20) → current 51.8
-  ACWR week-bucket counts: 2 weeks <0.8 / 20 weeks 0.8–1.3 / 3 weeks 1.3–1.5 / 0 weeks >1.5
-  TID 180d (time-weighted): 86% Z1+Z2 / 6% Z3 / 8% Z4+: pyramidal
-  Hard-day density: avg 1.1/wk | first half 0.9/wk → second half 1.3/wk ↑
-  Longest ride: 3.2h (week of 2026-04-06)
-  Longest week: 8.4h (week of 2026-04-20)
-  Quality session count: 17 weeks with ≥1 hard day (68% of completed weeks)
+Work: 26000 kJ (energy of about 247.6 medium bananas)
+Carbs used: 2200 g (about 81.5 medium bananas)
+Most work in a day: 28 Jun, 2100 kJ, 180 g carbs
+Most work in a week: 21 Jun to 27 Jun, 4500 kJ, 400 g carbs
 
-Year-over-Year Comparison (anchor: 2026-03 last completed; current vs prior year, calendar-month matched):
-  Anchor month: 2026-03 (last completed)
-  Total hours: 26.8h vs n/a — no prior data
-  Total TSS: 1640 vs n/a — no prior data
-  CTL peak: 49.4 vs n/a — no prior data
-  CTL end: 48.9 vs n/a — no prior data
-  Z1+Z2: 86% vs n/a — no prior data
-  Z3: 6% vs n/a — no prior data
-  Z4+: 8% vs n/a — no prior data
-  Hard-day density: 1.2/wk vs n/a — no prior data
-  Longest ride: 2.8h vs n/a — no prior data
-  Avg HRV: 58 ms vs n/a — no prior data
-  Avg RHR: 54 bpm vs n/a — no prior data
-
-Notable Patterns:
-  FTP timeline (in window): 2025-11-22, test, 218W; 2026-03-08, auto-update, 226W
-  Data gaps: None in window
-  A-races completed: None in window
-  Next A-race: None scheduled
-  Deviations: Z3 grey zone in 7 of 25 completed weeks (28% of weeks above the 5% target);
-    Hard-day density rising consistently into second half (0.9 → 1.3/wk)
-
-Interpretation:
-First full year of tracked data, so YoY comparison is unavailable across the board;
-the n/a column is not a missing-data warning, it's the design-correct rendering for a
-new athlete and will populate next April. Within the 180d window, trajectory is
-constructive: CTL has built steadily to 52.1 with no ACWR>1.5 weeks, hard-day density
-is rising naturally into the second half (0.9 → 1.3/wk), and TID is broadly pyramidal.
-The 28% grey-zone-week rate is the single pattern worth attention: worth checking
-whether those weeks cluster around specific session types (tempo/SST creep) or
-particular phases. With no A-race scheduled, the Base extension or Build transition
-decision is available; either is supportable from current load and wellness context.
+**Interpretation**
+Completed-week volume and the matched June comparison show a larger training base. Z3 is a recurring pattern to review, while three unknown ACWR weeks limit the load distribution summary. Current TID is a separate 28-day observation and does not establish a Season-wide intensity classification.
 ```
 
----
+## Example 2: short history and partial power coverage
 
-## Notes on these examples
+Two completed Sunday-start weeks are available. One ACWR value is 0.95; the other is unknown. There is no prior-year match. Only retained power and moving-time facts are supplied.
 
-- Both are synthetic. Numbers are coherent within each example but do not represent any real athlete.
-- **Anchor month** in both examples is `2026-03`, the last completed calendar month before the `2026-04-28` snapshot. The current calendar month is excluded from YoY by design.
-- **Aggregates** in both examples are computed over completed weeks only (25 weeks tracked, with the 26th week in progress and excluded). This is reflected in line-item counts ("23 weeks with ≥1 hard day", "17 weeks with ≥1 hard day") and in the ACWR bucket totals summing to 25.
-- **TID aggregation** in both examples is time-weighted (by `total_hours`), not TSS-weighted. The "(time-weighted)" suffix on the TID line makes the aggregation explicit.
-- **Example 1** demonstrates the conditional 2y line: the 1y CTL peak delta is small (+1.4, below the 3-point material threshold) but the 2y delta is +9.8 (well above), so a 2y line surfaces under that single metric only. No 2y line surfaces for hours, TSS, TID, or other metrics where the 1y comparison already conveys the story.
-- **Example 2** demonstrates the sparse case: prior-year cells render `n/a — no prior data`. The YoY block stays in place rather than being suppressed; the empty comparison is itself signal.
-- **Neither example renders a phase claim about prior years.** This is by design; see template Notes.
-- **Capability metrics (durability, EF, sustainability)** are not rendered. These require a `weekly_180d` capability rollup that does not yet exist.
-- **Length:** Example 1 is 53 content lines, Example 2 is 51. Both sit comfortably within the 55–70 norm when the full template chrome (header lines, blank lines, section breaks) is counted in the rendered report.
+```text
+**Season report: Sun 28 June to Sat 11 July 2026**
+Data updated: 14 Jul 15:30
+History updated: 12 Jul 07:00
+
+Two completed weeks are available for a limited Season view.
+
+**Position**
+Phase: Base, week 2
+
+**Phases**
+28 Jun-4 Jul: Base 1 week
+5-11 Jul: no detected phase
+
+**Volume (2 completed weeks)**
+Hours: 8h (avg. 4 h/week over 2 completed weeks)
+TSS: 320 (avg. 160/week over 2 completed weeks)
+
+**Fitness**
+ACWR 0.8 through 1.3: 1
+ACWR above 1.3: none
+ACWR known: 1 of 2 weeks
+
+**Fun facts (cycling, descriptive)**
+Max power (1 s): 540 W, 30 Jun, River path (stale, partial coverage: 1 of 2 expected rides, sampled 5 Jul)
+
+Time in the saddle: 7h
+
+**Interpretation**
+The completed weeks support a volume summary, with only one known coupled ACWR value. No matched prior-year month is available, and the retained partial power observation is descriptive only.
+```
+
+Zero bins, empty Notable lines, absent equivalents and missing metrics are omitted. A phase gap is never bridged. Peaks live in Fun facts, not a separate Best efforts section.

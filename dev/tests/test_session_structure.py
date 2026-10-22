@@ -114,8 +114,8 @@ class Structure(unittest.TestCase):
             self.assertEqual(self.build()["status"], status)
 
     def test_short_tail_and_extension_edges(self):
-        for tail, status in ((30, "followed"), (31, "partly_followed"),
-                             (150, "partly_followed"), (151, "not_followed")):
+        for tail, status in ((30, "followed"), (31, "followed"),
+                             (300, "followed"), (301, "not_followed")):
             self.act, self.event, self.streams = inputs(tail=tail)
             with self.subTest(tail=tail):
                 b = self.build()
@@ -124,8 +124,8 @@ class Structure(unittest.TestCase):
                     self.assertEqual(b["unassigned"][0][:2], [300, 300 + tail])
 
     def test_shortened_preserves_full_plan_and_clipped_actuals(self):
-        for end, status in ((299, "partly_followed"), (250, "partly_followed"),
-                            (150, "partly_followed"), (149, "not_followed")):
+        for end, status in ((299, "followed"), (250, "followed"),
+                            (150, "partly_followed"), (149, "partly_followed")):
             self.act, self.event, self.streams = inputs()
             self.act["elapsed_time"] = end
             self.streams = {k: v[:end + 1] for k, v in self.streams.items()}
@@ -426,7 +426,9 @@ class Placement(unittest.TestCase):
             for day in range(15, 29):
                 self.sync = self.fresh_sync()  # Only committed JSON survives each run.
                 row = self.cycle(datetime(2026, 1, 1, 12, tzinfo=timezone.utc) + timedelta(days=day))
-                self.assertEqual(row["structure_summary"], first["structure_summary"])
+                self.assertEqual(row["structure_summary"]["status"], first["structure_summary"]["status"])
+                self.assertEqual(row["structure_summary"]["steps"], first["structure_summary"]["steps"])
+                self.assertTrue(row["structure_summary"]["assessment_retained"])
                 self.assertFalse(row["has_structure"])
                 self.assertFalse(row["has_intervals"])
                 self.assertFalse(row["has_dfa"])
@@ -478,12 +480,13 @@ class Placement(unittest.TestCase):
         self.assertTrue(all(row[k] for k in ("has_structure", "has_intervals", "has_dfa")))
         self.assertNotIn("dfa_summary", row)
 
-    def test_cold_start_old_activity_is_unknown_without_fetch(self):
+    def test_cold_start_old_paired_activity_is_not_assessed_without_fetch(self):
         with mock.patch.object(Sync, "_fetch_activity_streams", side_effect=AssertionError("old fetch")):
             row = self.cycle(NOW + timedelta(days=20))
         self.assertFalse(row["has_structure"])
         self.assertEqual(row["structure_summary"], {
-            "method": "plan_match_v2", "status": "unknown", "issues": ["detail_unavailable"]})
+            "method": "plan_match_v2", "status": "not_assessed",
+            "plan": {"event_id": "42", "name": None}, "issues": ["detail_unavailable"]})
 
     def test_no_plan_is_distinct_and_fallback_only_when_needed(self):
         self.act.pop("paired_event_id")
@@ -693,7 +696,7 @@ class LiveShape(unittest.TestCase):
         self.assertLess(block["steps"][-1]["observed_window_fraction"], 1)
         self.act["elapsed_time"] -= 1
         self.streams = {k: v[:-1] for k, v in self.streams.items()}
-        self.assertEqual(self.build()["status"], "partly_followed")
+        self.assertEqual(self.build()["status"], "followed")
 
     def test_walk_and_hike_no_fetch_or_stale_fallback_other_sports_keep_it(self):
         for kind in ("Walk", "Hike"):

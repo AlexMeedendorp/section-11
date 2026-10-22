@@ -33,7 +33,7 @@ An open protocol for deterministic, auditable AI-powered endurance coaching. Bui
 | [examples/dfa_a1/NON_GARMIN.md](examples/dfa_a1/NON_GARMIN.md) | DFA a1 requires Garmin + AlphaHRV; other-platform verification guidance |
 | [DOSSIER_TEMPLATE.md](DOSSIER_TEMPLATE.md) | Your stable private athlete context |
 | [examples/](examples/) | Sync guides and fictional JSON schema examples |
-| [examples/reports/](examples/reports/) | Pre-workout, post-workout, weekly, block and on-request weather reports, including route forecasts, weather maps and climbs |
+| [examples/reports/](examples/reports/) | Pre-workout, post-workout, rolling 7-day and 28-day, Season and on-request weather reports |
 | [SETUP_ASSISTANT.md](SETUP_ASSISTANT.md) | Interactive AI-guided setup |
 | [manifest.json](manifest.json) | File versions and update tracking |
 | [LICENSE](LICENSE) | MIT license |
@@ -544,7 +544,7 @@ Also compatible with any platform that exports structured training data.
 ### Daily Check-In
 > "How was today's workout?"
 
-### Weekly Review
+### 7-day Review
 > "Analyze my last 7 days against my targets. What's my compliance rate? Any red flags?"
 
 ### Progression Decision

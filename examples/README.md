@@ -197,9 +197,9 @@ The [reports/](reports/) folder contains Section 11-compliant templates:
 |----------|----------|
 | `PRE_WORKOUT_REPORT_TEMPLATE.md` | Briefing before a session |
 | `POST_WORKOUT_REPORT_TEMPLATE.md` | Analysis after a session |
-| `WEEKLY_REPORT_TEMPLATE.md` | End-of-week summary |
-| `BLOCK_REPORT_TEMPLATE.md` | End-of-block phase assessment |
-| `SEASON_REPORT_TEMPLATE.md` | On-demand annual-arc trajectory + YoY |
+| `7_DAY_REPORT_TEMPLATE.md` | Rolling seven-date summary, on any day |
+| `28_DAY_REPORT_TEMPLATE.md` | Rolling 28-day progression from four supplied chunks |
+| `SEASON_REPORT_TEMPLATE.md` | Completed calendar weeks and calendar-matched YoY |
 | `WEATHER_REPORT_TEMPLATE.md` | On-request five-day planned-route forecast/outlook |
 | `*_EXAMPLES.md` | Anonymized examples showing normal and threshold-breach scenarios |
 

@@ -4,6 +4,9 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.150 - Explicit paired-but-not-assessed summaries after detail expiry.
+  Reuse the fetched events list for plan identity; no additional requests.
+
 Version 3.149 - Coupled 7:28 ACWR throughout weekly history and phase context.
   Distinguish paired plans without steps and retain explicit plan metadata.
   Add descriptive rolling/weekly/season facts with bounded cached season curves.
@@ -4563,7 +4566,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.149"
+    VERSION = "3.150"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -5478,6 +5481,61 @@ class IntervalsSync:
             result["biggest_week"] = self._fact_max(buckets, "work_kj")
         return result
 
+    def _report_wellness(self, wellness, start, end, athlete_units=None):
+        """Observed local-day statistics, not the seven-day display slice."""
+        rows = {w["id"][:10]: w for w in wellness
+                if isinstance(w.get("id"), str) and start <= w["id"][:10] <= end}
+        result = {"start": start, "end": end}
+        for label, key, divisor in (("hrv", "hrv", 1), ("resting_hr", "restingHR", 1),
+                                    ("sleep_hours", "sleepSecs", 3600),
+                                    ("sleep_quality", "sleepQuality", 1), ("weight_kg", "weight", 1)):
+            valid = lambda v: (self._is_valid_hrv(v) if key == "hrv" else
+                               self._structure_number(v) and v > 0)
+            values = [(date, w[key] / divisor) for date, w in sorted(rows.items()) if valid(w.get(key))]
+            nums = [v for _, v in values]
+            result[label] = {"avg": round(statistics.mean(nums), 2) if nums else None,
+                             "min": min(nums) if nums else None, "max": max(nums) if nums else None,
+                             "days": len(nums)}
+            if label == "weight_kg":
+                result[label].update(latest=nums[-1] if nums else None,
+                                     latest_date=values[-1][0] if nums else None)
+                result["weight_display"] = {
+                    k: self._to_display(result[label][k], "weight", athlete_units)
+                    for k in ("avg", "latest")}
+        return result
+
+    def _hard_day_evidence(self, group, formatted_by_id):
+        """Explain the existing preferred-basis daily ladder, without reclassifying."""
+        by_basis, members = {}, []
+        for act in group:
+            zones, basis = self._get_activity_zones(act, sport_family=self.SPORT_FAMILIES.get(act.get("type")))
+            if zones and basis:
+                totals = by_basis.setdefault(basis, {})
+                for key, seconds in zones.items():
+                    totals[key] = totals.get(key, 0) + seconds
+                row = formatted_by_id.get(str(act.get("id")), {})
+                members.append({"activity_id": act.get("id"), "name": act.get("name"),
+                                "basis": basis, "targets_intensity": (row.get("plan_pairing") or {}).get("targets_intensity"),
+                                "cycling": self.SPORT_FAMILIES.get(act.get("type")) == "cycling",
+                                "z3_s": zones.get("z3", 0)})
+        hard, basis = self._classify_hard_day(by_basis)
+        if not hard:
+            return None
+        triggers = []
+        for source, rungs in (("power", ((3, 1800), (4, 600), (5, 300), (6, 120), (7, 60))),
+                              ("hr", ((4, 600), (5, 300)))):
+            zones = by_basis.get(source, {})
+            for zone, minimum in rungs:
+                seconds = sum(zones.get("z" + str(z), 0) for z in range(zone, 8))
+                if seconds >= minimum:
+                    triggers.append({"basis": source, "rung": "z" + str(zone) + ("+" if zone < 7 else ""),
+                                     "seconds": seconds, "threshold_s": minimum})
+        z3_rides = [m for m in members if m["basis"] == "power" and m["z3_s"] > 0]
+        only_z3 = len(triggers) == 1 and triggers[0]["basis"] == "power" and triggers[0]["rung"] == "z3+"
+        return {"basis": basis, "triggers": triggers, "activities": members,
+                "power_z3_only_non_intensity": bool(only_z3 and z3_rides and all(
+                    m["cycling"] and m["targets_intensity"] is False for m in z3_rides))}
+
     def _rolling_7d_chunks(self, activities, wellness, formatted, today, current_ctl):
         """Four disjoint rolling weeks; reuse metric gates, never phase detection."""
         anchor = datetime.strptime(today, "%Y-%m-%d")
@@ -5491,16 +5549,13 @@ class IntervalsSync:
             by_date = defaultdict(list)
             for act in acts:
                 by_date[act["start_date_local"][:10]].append(act)
-            hard_days = 0
-            for group in by_date.values():
-                by_basis = {}
-                for act in group:
-                    z, basis = self._get_activity_zones(act, sport_family=self.SPORT_FAMILIES.get(act.get("type")))
-                    if z and basis:
-                        totals = by_basis.setdefault(basis, {})
-                        for key, seconds in z.items():
-                            totals[key] = totals.get(key, 0) + seconds
-                hard_days += int(bool(self._classify_hard_day(by_basis)[0]))
+            formatted_by_id = {str(a.get("id")): a for a in formatted}
+            hard_day_details = []
+            for date, group in sorted(by_date.items()):
+                evidence = self._hard_day_evidence(group, formatted_by_id)
+                if evidence:
+                    hard_day_details.append({"date": date, **evidence})
+            hard_days = len(hard_day_details)
             durability = self._calculate_durability(acts, acts)
             ef = self._calculate_efficiency_factor(acts, acts)
             hrrc = self._calculate_hrrc_trend(acts, acts)
@@ -5517,6 +5572,8 @@ class IntervalsSync:
                        for key in ("z1", "z2", "z3", "z4_plus", "total")},
                     "zone_basis": zones["zone_basis"]},
                 "hard_days": hard_days,
+                "hard_day_details": hard_day_details,
+                "wellness": self._report_wellness(wellness, start, end),
                 "durability_mean": durability["mean_decoupling_7d"],
                 "durability_qualifying": durability["qualifying_sessions_7d"],
                 "ef_mean": ef["mean_ef_7d"], "ef_qualifying": ef["qualifying_sessions_7d"],
@@ -6038,7 +6095,7 @@ class IntervalsSync:
                 entry["weather_summary"] = act["weather_summary"]
             if isinstance(act.get("structure_summary"), dict):
                 entry["structure_summary"] = act["structure_summary"]
-            for key in ("power_curve", "power_curve_status", "power_curve_error"):
+            for key in ("power_curve", "power_curve_status", "power_curve_error", "plan_pairing", "dfa_rollup"):
                 if key in act:
                     entry[key] = act[key]
             if entry:
@@ -9258,13 +9315,12 @@ class IntervalsSync:
         
         # Fetch planned workouts (EXTENDED: include past 7 days for Consistency Index, 90 days ahead for race calendar)
         print("Fetching planned workouts (past + future for Consistency Index + race calendar)...")
-        # v3.121: the fetch reaches back to interval retention depth so the exact
-        # planned-workout pairing map covers every activity still in intervals.json.
+        # Current identity spans 28 days; step/stream retention remains 14 days.
         # past_events keeps its original days_back slice — the Consistency Index
         # denominator must not move as a side effect of widening this fetch.
         past_events_cutoff = (datetime.now() - timedelta(days=days_back - 1)).strftime("%Y-%m-%d")
         oldest_events = (datetime.now() - timedelta(
-            days=max(days_back - 1, self.INTERVAL_RETENTION_DAYS))).strftime("%Y-%m-%d")
+            days=max(days_back - 1, days_for_acwr - 1, self.INTERVAL_RETENTION_DAYS))).strftime("%Y-%m-%d")
         newest_ahead = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
         events = self._intervals_get("events", {"oldest": oldest_events, "newest": newest_ahead, "resolve": "true"})
         
@@ -9676,7 +9732,7 @@ class IntervalsSync:
                 activities_extended, interval_activity_ids,
                 temp_unit=temp_unit, wind_unit=wind_unit, speed_unit=speed_unit,
                 previous_latest_lookup=previous_latest_lookup,
-                athlete_units=athlete_units
+                athlete_units=athlete_units, paired_events=events
             ),
             "wellness_data": self._format_wellness(wellness, athlete_units),
             "planned_workouts": formatted_planned_workouts,
@@ -9687,6 +9743,16 @@ class IntervalsSync:
 
         data["rolling_7d_chunks"] = self._rolling_7d_chunks(
             activities_extended, wellness_extended, data["recent_activities"], today, ctl)
+        report_start = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=27)).strftime("%Y-%m-%d")
+        data["wellness_28d"] = self._report_wellness(wellness_extended, report_start, today, athlete_units)
+        data["derived_metrics"]["capability"]["dfa_a1_profile_28d"] = self._dfa_28d_profile(
+            data["recent_activities"], report_start, today)
+        data["derived_metrics"]["capability"]["sustainability_profile"] = self._calculate_sustainability_profile(
+            sustainability_curves, sus_window, power_model, sport_settings,
+            wellness, wellness_extended, athlete.get("icu_weight"),
+            activities=[dict(raw, date=raw.get("start_date_local", ""),
+                             power_curve=row.get("power_curve"))
+                        for raw, row in zip(activities_extended, data["recent_activities"])])
         data["fun_facts"] = {"scope": "cycling", "rolling_7d": data["rolling_7d_chunks"][0]["fun_facts"],
             "rolling_28d": self._build_fun_facts(
             data["recent_activities"], (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=27)).strftime("%Y-%m-%d"),
@@ -11577,7 +11643,7 @@ class IntervalsSync:
                      "Null when either window has fewer than 3 valid anchor durations.")
         }
 
-    def _calculate_dfa_a1_profile(self) -> Optional[Dict]:
+    def _calculate_dfa_a1_profile(self, intervals_data=None, all_sessions=False) -> Optional[Dict]:
         """
         Build dfa_a1_profile for latest.json capability block.
 
@@ -11589,7 +11655,8 @@ class IntervalsSync:
 
         Returns None if no intervals data or no DFA-equipped sessions exist.
         """
-        intervals_data = getattr(self, "_intervals_data", None)
+        if intervals_data is None:
+            intervals_data = getattr(self, "_intervals_data", None)
         if not intervals_data:
             return None
         activities = intervals_data.get("activities", [])
@@ -11669,7 +11736,7 @@ class IntervalsSync:
             by_family.setdefault(family, []).append(a)
 
         for family, acts in by_family.items():
-            window = acts[: self.DFA_TRAILING_WINDOW_N]
+            window = acts if all_sessions else acts[: self.DFA_TRAILING_WINDOW_N]
             n = len(window)
             if n == 0:
                 continue
@@ -11800,7 +11867,7 @@ class IntervalsSync:
             # Sport-level confidence: coarse, max across THRESHOLD markers only (lt1, lt2).
             # easy_guard is a compliance guard, deliberately EXCLUDED — it populates on easy
             # rides and would inflate threshold-calibration confidence (v3.114). Consumed by the
-            # agent + BLOCK_REPORT gate; per-marker estimate presence + reason are authoritative.
+            # agent + 28_DAY_REPORT gate; per-marker estimate presence + reason are authoritative.
             # v3.122: these are ELIGIBLE-session counts, not dwell counts.
             crossing_n = max(lt1_eligible, lt2_eligible)
             if crossing_n >= 6:
@@ -11852,13 +11919,33 @@ class IntervalsSync:
             "trailing_by_sport": trailing_by_sport,
         }
 
+    def _dfa_28d_profile(self, activities, start, end):
+        rows = []
+        for activity in activities:
+            retained = activity.get("dfa_rollup") or {}
+            if (start <= activity.get("date", "")[:10] <= end
+                    and retained.get("schema_version") == 2 and retained.get("dfa")
+                    and retained.get("date") == activity.get("date")):
+                rows.append({"activity_id": activity.get("id"), "date": activity["date"][:10],
+                             "start_datetime": activity["date"],
+                             "name": activity.get("name"), "type": activity.get("type"),
+                             "dfa": retained["dfa"]})
+        profile = self._calculate_dfa_a1_profile(
+            {"schema_version": 2, "activities": rows}, all_sessions=True)
+        if profile:
+            profile["window"] = {"start": start, "end": end, "days": 28}
+            profile["recorded_sessions"] = len(rows)
+            profile["coverage_note"] = "Available retained DFA summaries only; no historical backfill."
+        return profile
+
     def _calculate_sustainability_profile(self, sustainability_curves: Dict,
                                            sustainability_window: Tuple,
                                            power_model: Dict,
                                            sport_settings: Dict,
                                            wellness_7d: List[Dict],
                                            wellness_extended: List[Dict],
-                                           icu_weight: float = None) -> Dict:
+                                           icu_weight: float = None,
+                                           activities: List[Dict] = None) -> Dict:
         """
         Build per-sport sustainability profile for race estimation (v3.91).
         
@@ -11873,9 +11960,9 @@ class IntervalsSync:
         Non-cycling power sports get actual MMP only (no published duration
         factors, no sport-specific CP/W' values).
         
-        Indoor/outdoor handling (cycling only): fetches Ride and VirtualRide
-        separately, takes max at each anchor. Source flag indicates which
-        environment produced the best effort.
+        Indoor/outdoor handling (cycling only): max across fetched curves,
+        attributed through activity identity and its indoor flag, never the
+        request type. Unknown identity/environment withholds FTP models.
         
         Weight fallback chain: today's wellness → most recent in wellness
         history → athlete.icu_weight → null (all W/kg fields null).
@@ -11951,10 +12038,7 @@ class IntervalsSync:
         cycling_settings = sport_settings.get("cycling", {})
         
         # Use athlete-set FTP from sportSettings (not eFTP)
-        cycling_ftp = cycling_settings.get("ftp")
-        if not cycling_ftp:
-            # Fallback to indoor FTP if outdoor not set
-            cycling_ftp = cycling_settings.get("ftp_indoor")
+        activity_by_id = {str(a["id"]): a for a in (activities or []) if a.get("id") is not None}
         
         cycling_w_prime = power_model.get("w_prime")  # In joules from API
         
@@ -11988,6 +12072,7 @@ class IntervalsSync:
             for label, duration_secs in anchors_map.items():
                 best_watts = None
                 best_source = None
+                best_activity = None
                 
                 for ptype, pdata in power_curves_by_type.items():
                     curves_list = pdata.get("list", []) if isinstance(pdata, dict) else []
@@ -12003,15 +12088,30 @@ class IntervalsSync:
                         idx = secs.index(duration_secs)
                         val = watts[idx] if idx < len(watts) else None
                         if val is not None and val > 0:
+                            ids = curve.get("activity_ids") or curve.get("activity_id") or []
+                            identity = ids[idx] if isinstance(ids, list) and idx < len(ids) else None
+                            observed = activity_by_id.get(str(identity)) if identity is not None else None
+                            if observed is None:
+                                # Exact cached per-activity observations can identify a tied
+                                # maximum without trusting the aggregate request's type label.
+                                matches = [a for a in (activities or [])
+                                           if sustainability_window[0] <= a.get("date", "")[:10] <= sustainability_window[1]
+                                           and self.SPORT_FAMILIES.get(a.get("type", "")) == sport_family
+                                           and (a.get("power_curve") or {}).get(str(duration_secs)) == val]
+                                observed = min(matches, key=lambda a: str(a["id"])) if matches else None
                             if best_watts is None or val > best_watts:
                                 best_watts = val
-                                if is_cycling:
-                                    if self._is_indoor_cycling(ptype):
-                                        best_source = "observed_indoor"
-                                    else:
-                                        best_source = "observed_outdoor"
-                                else:
-                                    best_source = "observed"
+                                best_activity = observed
+                            elif val == best_watts and observed is not None:
+                                if best_activity is None or str(observed["id"]) < str(best_activity["id"]):
+                                    best_activity = observed
+                indoor = (best_activity or {}).get("indoor")
+                best_source = ("observed_indoor" if indoor is True else "observed_outdoor"
+                               if indoor is False else "observed_unknown") if is_cycling else "observed"
+                if best_watts is None:
+                    best_source = None
+                cycling_ftp = (cycling_settings.get("ftp_indoor") if indoor is True else
+                               cycling_settings.get("ftp") if indoor is False else None)
                 
                 # --- Extract max sustained HR at this anchor ---
                 best_hr = None
@@ -12065,10 +12165,8 @@ class IntervalsSync:
                 if best_watts is not None and cp_model_watts is not None and cp_model_watts > 0:
                     model_divergence_pct = round((best_watts - cp_model_watts) / cp_model_watts * 100, 1)
                 
-                # --- Best effort date (not available from aggregate curves) ---
-                # The power-curves endpoint returns aggregate MMP, not per-activity.
-                # Date/recency fields would require cross-referencing recent_activities,
-                # which isn't passed this deep. Omitted by design — the AI can cross-ref.
+                # Attribute only an identified observation; aggregate request types
+                # alone do not establish a date or environment.
                 
                 anchor_data = {
                     "actual_watts": best_watts,
@@ -12076,10 +12174,13 @@ class IntervalsSync:
                     "actual_hr": best_hr,
                     "pct_lthr": pct_lthr,
                     "source": best_source,
+                    "activity_id": (best_activity or {}).get("id"),
+                    "date": (best_activity or {}).get("date", "")[:10] or None,
                 }
                 
                 # Cycling gets model layers
                 if is_cycling:
+                    anchor_data["ftp_used"] = cycling_ftp
                     anchor_data["coggan_watts"] = coggan_watts
                     anchor_data["coggan_wpkg"] = coggan_wpkg
                     anchor_data["cp_model_watts"] = cp_model_watts
@@ -12109,7 +12210,8 @@ class IntervalsSync:
             
             # Cycling-only fields at sport block level
             if is_cycling:
-                sport_block["ftp_used"] = cycling_ftp
+                used = {a["ftp_used"] for a in anchors.values() if a.get("actual_watts") is not None}
+                sport_block["ftp_used"] = next(iter(used)) if len(used) == 1 else None
                 sport_block["w_prime_used"] = cycling_w_prime
                 sport_block["ftp_staleness_days"] = ftp_staleness_days
                 sport_block["model_trust_note"] = (
@@ -15074,7 +15176,7 @@ class IntervalsSync:
                 print(f"  Could not create update issue: {e}")
     
     # Structure shares interval retention, but not interval/DFA interpretation.
-    STRUCTURE_VERSION = 3
+    STRUCTURE_VERSION = 4
     STRUCTURE_MAX_STEPS = 20
     STRUCTURE_MAX_EFFORTS = 8
 
@@ -15082,6 +15184,96 @@ class IntervalsSync:
     def _structure_number(value):
         return (isinstance(value, (int, float)) and not isinstance(value, bool)
                 and math.isfinite(value) and abs(value) <= 1e12)
+
+    def _plan_duration_check(self, planned, actual):
+        valid = lambda v: self._structure_number(v) and 0 < v <= 604800
+        planned = planned if valid(planned) else None
+        actual = actual if valid(actual) else None
+        tolerance = max(planned * .05, 300) if planned is not None else None
+        delta = actual - planned if planned is not None and actual is not None else None
+        return {"planned_s": planned, "actual_s": actual, "delta_s": delta,
+                "tolerance_s": tolerance,
+                "within_tolerance": abs(delta) <= tolerance if delta is not None else None}
+
+    def _plan_targets_intensity(self, event, act):
+        """Explicit Z3+ intent only; never infer intensity from a workout name."""
+        doc = event.get("workout_doc") if isinstance(event, dict) else None
+        steps = doc.get("steps") if isinstance(doc, dict) else None
+        if not isinstance(steps, list):
+            return None
+        if not steps:
+            return False
+        pending, assessed, unknown = list(steps), [], False
+        for _ in range(10000):
+            if not pending:
+                break
+            step = pending.pop()
+            if not isinstance(step, dict):
+                unknown = True
+                continue
+            if isinstance(step.get("steps"), list):
+                pending.extend(step["steps"])
+                continue
+            known = False
+            for kind in ("power", "hr"):
+                target = step.get(kind)
+                if not isinstance(target, dict):
+                    continue
+                units = str(target.get("units", "")).lower()
+                values = [target[k] for k in ("value", "min", "max", "start", "end")
+                          if self._structure_number(target.get(k))]
+                zone = target.get("zone")
+                if self._structure_number(zone):
+                    assessed.append(zone >= 3)
+                    known = True
+                elif values and units in ("zone", "zones", "power_zone", "hr_zone"):
+                    assessed.append(max(values) >= 3)
+                    known = True
+                elif values and kind == "power" and units in ("%", "%ftp", "percent_ftp"):
+                    assessed.append(max(values) > 75)
+                    known = True
+                else:
+                    resolved = step.get("_" + kind, target)
+                    absolute = (isinstance(resolved, dict) and
+                                (resolved is not target or units in ("w", "watts", "bpm")))
+                    nums = [resolved[k] for k in ("value", "min", "max", "start", "end")
+                            if absolute and self._structure_number(resolved.get(k))]
+                    bounds = act.get("icu_power_zones" if kind == "power" else "icu_hr_zones")
+                    boundary = bounds[1] if isinstance(bounds, list) and len(bounds) > 1 else None
+                    if not self._structure_number(boundary) and kind == "power":
+                        ftp = act.get("icu_ftp")
+                        boundary = ftp * .75 if self._structure_number(ftp) and ftp > 0 else None
+                    if nums and self._structure_number(boundary) and boundary > 0:
+                        assessed.append(max(nums) > boundary)
+                        known = True
+            unknown |= not known
+        if any(assessed):
+            return True
+        return False if assessed and not unknown and not pending else None
+
+    def _current_plan_pairing(self, act, event_map, reverse_map):
+        """Refresh current identity for every sport using already-fetched events."""
+        paired = act.get("paired_event_id")
+        reverse = reverse_map.get(str(act.get("id")), [])
+        if paired is None and len(reverse) == 1:
+            paired = reverse[0].get("id")
+        matches = event_map.get(str(paired), []) if paired is not None else []
+        conflict = (len(matches) > 1 or len(reverse) > 1 or
+                    (paired is not None and any(str(e.get("id")) != str(paired) for e in reverse)))
+        event = matches[0] if len(matches) == 1 and not conflict else None
+        intent = self._structure_plan(dict(act, paired_event_id=paired), event)
+        if conflict:
+            intent = {"status": "ambiguous_pairing"}
+        reference = {"event_id": str(paired)[:80], "name": None} if paired is not None else None
+        if reference is not None:
+            reference.update(intent.get("reference", {}))
+        return {"paired": paired is not None, "plan": reference,
+                "status": intent["status"],
+                "duration": self._plan_duration_check((reference or {}).get("duration_s"), act.get("moving_time")),
+                "targets_intensity": self._plan_targets_intensity(event, act)
+                    if "reference" in intent else None,
+                "definition_key": self._structure_fingerprint(event.get("workout_doc"))
+                    if "reference" in intent else None}
 
     @staticmethod
     def _structure_date(value):
@@ -15371,15 +15563,16 @@ class IntervalsSync:
                     result.update(duration_s=step["duration_s"], observed_window_fraction=round(fraction, 4))
                 results.append(result)
                 cursor = end
-            if abs(delta) > total * .5 or disagrees > (agrees + disagrees) / 2:
+            duration_off = abs(delta) > max(total * .05, 300)
+            if (duration_off and abs(delta) > total * .5) or disagrees > (agrees + disagrees) / 2:
                 out["status"] = "not_followed"
-                issues.append("gross_duration_difference" if abs(delta) > total * .5 else "most_steps_disagree")
-            elif agrees == len(results) and 0 <= delta <= 30 and not incomplete:
+                issues.append("gross_duration_difference" if duration_off and abs(delta) > total * .5 else "most_steps_disagree")
+            elif agrees == len(results) and not duration_off:
                 out["status"] = "followed"
             else:
                 out["status"] = "partly_followed"
                 issues.append("insufficient_power_coverage" if low_coverage or not agrees + disagrees
-                              else "shortened_or_extended" if incomplete or not 0 <= delta <= 30
+                              else "shortened_or_extended" if duration_off
                               else "some_steps_disagree")
             if out["status"] in ("followed", "partly_followed"):
                 out.update(method="paired_plan_windows", steps=results)
@@ -15566,7 +15759,8 @@ class IntervalsSync:
                            temp_unit: str = "C", wind_unit: str = "MPS",
                            speed_unit: str = "KPH",
                            previous_latest_lookup: Optional[Dict[str, Dict]] = None,
-                           athlete_units: Optional[Dict[str, str]] = None) -> List[Dict]:
+                           athlete_units: Optional[Dict[str, str]] = None,
+                           paired_events: Optional[List[Dict]] = None) -> List[Dict]:
         """Format activities for LLM analysis.
         
         Unit kwargs default to metric for backward compatibility with any caller
@@ -15580,6 +15774,14 @@ class IntervalsSync:
         interval_activity_ids = interval_activity_ids or set()
         previous_latest_lookup = previous_latest_lookup or {}
         athlete_units = athlete_units or {"wind": "m/s", "temp": "c", "rain": "mm"}
+        # Current identity/duration only: no stream fetch or new step assessment.
+        event_map = defaultdict(list)
+        reverse_map = defaultdict(list)
+        for event in paired_events or []:
+            if isinstance(event, dict) and event.get("id") is not None:
+                event_map[str(event["id"])].append(event)
+                if event.get("paired_activity_id") is not None:
+                    reverse_map[str(event["paired_activity_id"])].append(event)
         # v3.100: O(1) lookup from intervals.json entries for has_intervals/has_dfa split.
         intervals_by_id = {
             str(e.get("activity_id")): e
@@ -15740,6 +15942,45 @@ class IntervalsSync:
             activity["structure_summary"] = (self._structure_summary(structure) if structure else
                 (previous_latest_lookup.get(str(act.get("id"))) or {}).get("structure_summary") or
                 {"method": "plan_match_v2", "status": "unknown", "issues": ["detail_unavailable"]})
+            pairing = self._current_plan_pairing(act, event_map, reverse_map)
+            # The bounded detail preparation may already have resolved an exact event
+            # missing from the batch response. Reuse that current, non-stale reference.
+            if (structure and pairing["paired"] and len(pairing["plan"]) == 2
+                    and (structure.get("plan") or {}).get("event_id") == pairing["plan"]["event_id"]
+                    and pairing["status"] not in ("ambiguous_pairing", "pairing_conflict")
+                    and (structure.get("cache") or {}).get("status") not in ("stale", "unavailable")):
+                pairing["plan"] = dict(structure["plan"])
+                pairing["duration"] = self._plan_duration_check(pairing["plan"].get("duration_s"), act.get("moving_time"))
+            activity["plan_pairing"] = pairing
+            activity["z3_time"] = {
+                "power_s": power_zones.get("z3_time"), "hr_s": hr_zones.get("z3_time")}
+            summary = dict(activity["structure_summary"])
+            old_plan = summary.get("plan") or {}
+            old_pairing = (previous_latest_lookup.get(str(act.get("id"))) or {}).get("plan_pairing") or {}
+            same_pair = pairing["paired"] and old_plan.get("event_id") == pairing["plan"]["event_id"]
+            changed = (old_pairing.get("definition_key") is not None
+                       and pairing.get("definition_key") is not None
+                       and old_pairing["definition_key"] != pairing["definition_key"])
+            assessed = summary.get("status") in ("followed", "partly_followed", "not_followed")
+            if pairing["paired"]:
+                conflict = pairing["status"] in ("ambiguous_pairing", "pairing_conflict")
+                if not structure and (not assessed or not same_pair or changed or conflict):
+                    previous = summary if assessed else summary.get("retained_step_assessment")
+                    summary = {"method": "plan_match_v2",
+                               "status": "no_steps" if pairing["status"] == "no_steps" else "not_assessed"}
+                    if summary["status"] == "not_assessed":
+                        summary["issues"] = ["detail_unavailable"]
+                    if previous:
+                        summary["retained_step_assessment"] = previous
+                summary["plan"] = pairing["plan"]
+                if pairing["status"] in ("ambiguous_pairing", "pairing_conflict"):
+                    summary["issues"] = list(dict.fromkeys(summary.get("issues", []) + [pairing["status"]]))
+                if not structure and assessed and same_pair and not changed and not conflict:
+                    summary["assessment_retained"] = True
+            elif assessed or old_plan:
+                summary = {"method": "plan_match_v2", "status": "no_plan",
+                           "retained_step_assessment": summary}
+            activity["structure_summary"] = summary
             if act.get("type") in ("Walk", "Hike"):
                 activity["has_structure"] = False
                 activity["structure_summary"] = {"method": "plan_match_v2", "status": "unknown",
@@ -15759,6 +16000,22 @@ class IntervalsSync:
                     if _dfa.get("quality", {}).get("sufficient"):
                         activity["dfa_summary"] = self._build_dfa_summary(
                             _dfa, schema_version=(self._intervals_data or {}).get("schema_version"))
+            # Retain compact DFA inputs for the 28-day rollup, never streams or intervals.
+            # A fresh entry (including absent/insufficient DFA) supersedes old evidence.
+            if _entry:
+                if _entry.get("dfa"):
+                    block = _entry["dfa"]
+                    activity["dfa_rollup"] = {
+                        "schema_version": (self._intervals_data or {}).get("schema_version"),
+                        "date": activity["date"],
+                        "dfa": {key: block[key] for key in (
+                            "quality", "avg", "drift", "drift_quality", "tiz_easy",
+                            "tiz_endurance", "tiz_tempo", "tiz_supra", "easy_guard_crossing",
+                            "lt1_crossing", "lt2_crossing") if key in block}}
+            else:
+                retained = (previous_latest_lookup.get(str(act.get("id"))) or {}).get("dfa_rollup")
+                if isinstance(retained, dict) and retained.get("date") == activity["date"]:
+                    activity["dfa_rollup"] = retained
 
             # Terrain summary (v3.107) — fetched on first encounter, copied
             # forward thereafter via previous_latest_lookup. Indoor activities
