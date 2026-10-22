@@ -32,7 +32,7 @@ class ReportProducers(unittest.TestCase):
         self.sync.data_dir = Path(tmp.name)
         self.sync._intervals_data = {}
         self.sync.week_start_day = 6
-        self.act = {"id": "s1", "type": "Ride", "name": "Synthetic easy", "indoor": True,
+        self.act = {"id": "s1", "type": "Ride", "name": "Synthetic easy", "trainer": True,
                     "start_date_local": "2026-07-01T08:00:00", "moving_time": 5520,
                     "elapsed_time": 5520, "paired_event_id": 42, "icu_ftp": 240}
         self.event = {"id": 42, "paired_activity_id": "s1", "name": "Easy plan",
@@ -163,13 +163,14 @@ class ReportProducers(unittest.TestCase):
         window = ("2026-06-01", "2026-07-12")
         curve = {"list": [{"id": "r." + ".".join(window), "secs": [300, 1200, 3600],
                             "watts": [300, 250, 210], "activity_ids": ["s1"] * 3}]}
-        for indoor, source, ftp in ((True, "observed_indoor", 220), (False, "observed_outdoor", 240),
-                                    (None, "observed_unknown", None)):
+        for activity_type, trainer, source, ftp in (("VirtualRide", True, "observed_indoor", 220),
+                                                    ("Ride", False, "observed_outdoor", 240),
+                                                    ("Ride", "false", "observed_unknown", None)):
             for types in (("Ride", "VirtualRide"), ("VirtualRide", "Ride")):
                 result = self.sync._calculate_sustainability_profile(
                     {"cycling": {"power": {k: curve for k in types}}}, window,
                     {"w_prime": 18000}, {"cycling": {"ftp": 240, "ftp_indoor": 220}}, [], [], 70,
-                    activities=[dict(self.act, date="2026-07-01", indoor=indoor)])
+                    activities=[dict(self.act, date="2026-07-01", type=activity_type, trainer=trainer)])
                 anchors = result["cycling"]["anchors"]
                 for anchor in anchors.values():
                     if anchor["actual_watts"] is not None:

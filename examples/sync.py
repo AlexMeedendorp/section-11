@@ -4,7 +4,7 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
-Version 3.150 - Explicit paired-but-not-assessed summaries after detail expiry.
+Version 3.151 - Inclusive calendar spans and homogeneous-window sustainability attribution.
   Reuse the fetched events list for plan identity; no additional requests.
 
 Version 3.149 - Coupled 7:28 ACWR throughout weekly history and phase context.
@@ -4566,7 +4566,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.150"
+    VERSION = "3.151"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -9257,9 +9257,15 @@ class IntervalsSync:
         # Extract per-sport-family thesholds from user settings
         sport_settings = self._build_sport_thresholds(athlete)
         
-        # Fetch extended activity range for ACWR
-        print(f"Fetching activities (extended {days_for_acwr} days for ACWR)...")
-        activities_extended = self._intervals_get("activities", {"oldest": oldest_extended, "newest": newest})
+        # One listing covers sustainability attribution as well as ACWR. Keep the
+        # original 28-day slice for every existing load/report/detail consumer.
+        oldest_sustainability = (datetime.now() - timedelta(
+            days=self.SUSTAINABILITY_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
+        print("Fetching activities (ACWR + sustainability window)...")
+        activities_sustainability = self._intervals_get("activities", {
+            "oldest": min(oldest_extended, oldest_sustainability), "newest": newest})
+        activities_extended = [a for a in activities_sustainability
+                               if a.get("start_date_local", "")[:10] >= oldest_extended]
         
         # Filter to display range for recent_activities
         activities_display = [a for a in activities_extended 
@@ -9331,11 +9337,15 @@ class IntervalsSync:
         # stays at days_back for the Consistency Index; this one reaches retention.
         pairing_events = [e for e in events if e.get("start_date_local", "")[:10] <= today]
         future_events = [e for e in events if e.get("start_date_local", "")[:10] >= today]
-        near_future_events = [e for e in future_events if e.get("start_date_local", "")[:10] <= (datetime.now() + timedelta(days=42)).strftime("%Y-%m-%d")]
+        planned_cutoff = (datetime.now() + timedelta(days=42)).strftime("%Y-%m-%d")
+        near_future_events = [e for e in events
+                              if (e.get("start_date_local") or "")[:10]
+                              and e["start_date_local"][:10] <= planned_cutoff
+                              and self._calendar_end_date(e) >= today]
         
         # Health context (v3.128, issue #27). Calendar SICK / INJURED markers reach
-        # planned_workouts only while dated today or later, so a multi-day marker
-        # vanishes the day after it starts, while its calendar marking still spans it.
+        # planned_workouts now retains returned in-progress spans, but cannot see
+        # markers whose start precedes the main events request's lookback floor.
         # The builder runs its own filtered fetch with a year-long lookback; `events` is
         # passed as the degraded fallback if that fetch fails.
         print("Building health context...")
@@ -9747,12 +9757,14 @@ class IntervalsSync:
         data["wellness_28d"] = self._report_wellness(wellness_extended, report_start, today, athlete_units)
         data["derived_metrics"]["capability"]["dfa_a1_profile_28d"] = self._dfa_28d_profile(
             data["recent_activities"], report_start, today)
+        activity_curves = {str(row["id"]): row.get("power_curve") for row in data["recent_activities"]}
         data["derived_metrics"]["capability"]["sustainability_profile"] = self._calculate_sustainability_profile(
             sustainability_curves, sus_window, power_model, sport_settings,
             wellness, wellness_extended, athlete.get("icu_weight"),
             activities=[dict(raw, date=raw.get("start_date_local", ""),
-                             power_curve=row.get("power_curve"))
-                        for raw, row in zip(activities_extended, data["recent_activities"])])
+                             power_curve=activity_curves.get(str(raw.get("id"))))
+                        for raw in activities_sustainability],
+            activities_window=(min(oldest_extended, oldest_sustainability), newest))
         data["fun_facts"] = {"scope": "cycling", "rolling_7d": data["rolling_7d_chunks"][0]["fun_facts"],
             "rolling_28d": self._build_fun_facts(
             data["recent_activities"], (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=27)).strftime("%Y-%m-%d"),
@@ -11945,7 +11957,8 @@ class IntervalsSync:
                                            wellness_7d: List[Dict],
                                            wellness_extended: List[Dict],
                                            icu_weight: float = None,
-                                           activities: List[Dict] = None) -> Dict:
+                                           activities: List[Dict] = None,
+                                           activities_window: Tuple = None) -> Dict:
         """
         Build per-sport sustainability profile for race estimation (v3.91).
         
@@ -11961,8 +11974,9 @@ class IntervalsSync:
         factors, no sport-specific CP/W' values).
         
         Indoor/outdoor handling (cycling only): max across fetched curves,
-        attributed through activity identity and its indoor flag, never the
-        request type. Unknown identity/environment withholds FTP models.
+        attributed through activity identity and the shared _fact_indoor classifier,
+        never the request type. Without identity, a complete homogeneous cycling
+        window can establish environment only; unknown/mixed results withhold FTP models.
         
         Weight fallback chain: today's wellness → most recent in wellness
         history → athlete.icu_weight → null (all W/kg fields null).
@@ -12039,6 +12053,17 @@ class IntervalsSync:
         
         # Use athlete-set FTP from sportSettings (not eFTP)
         activity_by_id = {str(a["id"]): a for a in (activities or []) if a.get("id") is not None}
+        window_indoor = None
+        if (activities_window and activities_window[0] <= sustainability_window[0]
+                and activities_window[1] >= sustainability_window[1]):
+            cycling_activities = [a for a in (activities or [])
+                                  if self.SPORT_FAMILIES.get(a.get("type", "")) == "cycling"
+                                  and (not a.get("date") or
+                                       sustainability_window[0] <= a["date"][:10] <= sustainability_window[1])]
+            if cycling_activities and all(a.get("date") for a in cycling_activities):
+                flags = {self._fact_indoor(a) for a in cycling_activities}
+                if len(flags) == 1 and None not in flags:
+                    window_indoor = next(iter(flags))
         
         cycling_w_prime = power_model.get("w_prime")  # In joules from API
         
@@ -12105,7 +12130,9 @@ class IntervalsSync:
                             elif val == best_watts and observed is not None:
                                 if best_activity is None or str(observed["id"]) < str(best_activity["id"]):
                                     best_activity = observed
-                indoor = (best_activity or {}).get("indoor")
+                indoor = self._fact_indoor(best_activity or {})
+                if is_cycling and best_activity is None and best_watts is not None:
+                    indoor = window_indoor
                 best_source = ("observed_indoor" if indoor is True else "observed_outdoor"
                                if indoor is False else "observed_unknown") if is_cycling else "observed"
                 if best_watts is None:
@@ -12165,8 +12192,8 @@ class IntervalsSync:
                 if best_watts is not None and cp_model_watts is not None and cp_model_watts > 0:
                     model_divergence_pct = round((best_watts - cp_model_watts) / cp_model_watts * 100, 1)
                 
-                # Attribute only an identified observation; aggregate request types
-                # alone do not establish a date or environment.
+                # A homogeneous window establishes environment, never an anchor's
+                # identity/date. Aggregate request types establish neither.
                 
                 anchor_data = {
                     "actual_watts": best_watts,
@@ -16964,6 +16991,9 @@ class IntervalsSync:
                 "workout_summary": summary,
                 **self._planned_route_fields(evt)
             }
+            end_date = self._calendar_end_date(evt)
+            if end_date > evt_date:
+                entry["end_date"] = end_date
 
             if coach_notes:
                 entry["coach_notes"] = coach_notes
@@ -16988,6 +17018,27 @@ class IntervalsSync:
         self._summary_stats = stats
         return result
     
+    @staticmethod
+    def _calendar_end_date(evt: Dict) -> str:
+        """Inclusive last calendar-marked day, shared with health context."""
+        start = (evt.get("start_date_local") or "")[:10]
+        end_date = start
+        end_raw = evt.get("end_date_local") or ""
+        if end_raw:
+            end_day = end_raw[:10]
+            end_time = end_raw.split("T")[1][:5] if "T" in end_raw else "00:00"
+            if end_time == "00:00":
+                try:
+                    end_date = (datetime.strptime(end_day, "%Y-%m-%d")
+                                - timedelta(days=1)).strftime("%Y-%m-%d")
+                except ValueError:
+                    end_date = start
+            else:
+                end_date = end_day
+            if end_date < start:
+                end_date = start
+        return end_date
+
     def _build_health_context(self, fallback_events: List[Dict], latest_wellness: Dict,
                               today: str, fallback_oldest: str) -> Dict:
         """
@@ -17071,23 +17122,7 @@ class IntervalsSync:
             if not start:
                 continue
 
-            # Exclusive end -> inclusive last CALENDAR-MARKED day. A non-midnight end time means
-            # the marker covers that calendar day, so it stays inclusive.
-            end_date = start
-            end_raw = evt.get("end_date_local") or ""
-            if end_raw:
-                end_day = end_raw[:10]
-                end_time = end_raw.split("T")[1][:5] if "T" in end_raw else "00:00"
-                if end_time == "00:00":
-                    try:
-                        end_date = (datetime.strptime(end_day, "%Y-%m-%d")
-                                    - timedelta(days=1)).strftime("%Y-%m-%d")
-                    except ValueError:
-                        end_date = start
-                else:
-                    end_date = end_day
-                if end_date < start:
-                    end_date = start
+            end_date = self._calendar_end_date(evt)
 
             entry = {
                 "event_id": evt.get("id"),
