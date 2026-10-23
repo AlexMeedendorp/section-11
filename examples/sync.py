@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.152 - Cached, bounded activity power-vs-hr detail with measured halves
+  and qualified paired-plan power context. Existing durability gates/means stay.
+  Pairs with protocol/skill v11.86 and structured-work Sweetspot report guidance.
+
 Version 3.151 - Inclusive calendar spans and homogeneous-window sustainability attribution.
   Reuse the fetched events list for plan identity; no additional requests.
 
@@ -4566,7 +4570,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.151"
+    VERSION = "3.152"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -4865,6 +4869,8 @@ class IntervalsSync:
         # share the existing four-extra-attempt budget (at most twelve sends).
         self._power_curve_fetches_used = 0
         self._power_curve_run_cache = {}
+        self._decoupling_fetches_used = 0
+        self._decoupling_run_cache = {}
     
     @property
     def script_hash(self) -> str:
@@ -5334,6 +5340,229 @@ class IntervalsSync:
         result = dict(self._power_curve_run_cache[key])
         if "power_curve" in result:
             result["power_curve"] = within_duration(result["power_curve"])
+        return result
+
+    DECOUPLING_MAX_ACTIVITIES = 8
+    DECOUPLING_DETAIL_VERSION = 1
+
+    def _fetch_activity_power_vs_hr(self, activity_id: str) -> tuple:
+        """Sibling of the curve read; only 404/410 are terminal cache truth."""
+        if self._decoupling_fetches_used >= self.DECOUPLING_MAX_ACTIVITIES:
+            return ("transient", "request_budget")
+        self._decoupling_fetches_used += 1
+        url = f"{self.INTERVALS_BASE_URL}/activity/{activity_id}/power-vs-hr"
+        headers = {"Authorization": f"Basic {self.intervals_auth}",
+                   "Accept": "application/json"}
+        try:
+            response = self._read_with_retry(
+                lambda: requests.get(url, headers=headers,
+                                     timeout=self.INTERVALS_READ_TIMEOUT))
+        except requests.exceptions.RequestException:
+            return ("transient", "transport_error")
+        if response.status_code in (404, 410):
+            return ("terminal_error", f"http_{response.status_code}")
+        if response.status_code != 200:
+            return ("transient", f"http_{response.status_code}")
+        try:
+            data = response.json()
+        except ValueError:
+            return ("transient", "parse_error")
+        detail = self._decoupling_detail(data)
+        return ("ok", detail) if detail is not None else ("transient", "unexpected_shape")
+
+    @classmethod
+    def _decoupling_power_trend(cls, early, late):
+        delta = late - early
+        limit = max(5.0, early * .05)
+        return "rising" if delta > limit else "falling" if delta < -limit else "steady"
+
+    @classmethod
+    def _decoupling_detail(cls, data):
+        """Compact observed bucket facts; upstream HR is already lag-aligned.
+
+        Bucket watts/HR are rounded upstream. Their ratio is a reconstruction,
+        not a replacement for the authoritative higher-precision half ratios.
+        No fit curves, model correction or raw series enter latest.json.
+        """
+        number = cls._structure_number
+        if not isinstance(data, dict):
+            return None
+        series = data.get("series")
+        indices = [data.get(k) for k in ("start", "mid", "end")]
+        if (not isinstance(series, list) or not 2 <= len(series) <= 10080
+                or any(type(v) is not int for v in indices)
+                or not 0 <= indices[0] < indices[1] < indices[2] <= len(series)):
+            return None
+        size, warmup, cooldown, lag = [data.get(k) for k in
+                                     ("bucketSize", "warmup", "cooldown", "hrLag")]
+        if (not number(size) or not 0 < size <= 3600
+                or any(not number(v) or not 0 <= v <= 604800 for v in (warmup, cooldown, lag))):
+            return None
+        ratios = [data.get(k) for k in ("powerHrFirst", "powerHrSecond")]
+        upstream = data.get("decoupling")
+        if (any(not number(v) or v <= 0 for v in ratios) or not number(upstream)
+                or abs((ratios[0] - ratios[1]) / ratios[0] * 100 - upstream) > .001):
+            return None
+        selected = series[indices[0]:indices[2]]
+        previous_end = None
+        for bucket in selected:
+            if not isinstance(bucket, dict):
+                return None
+            start, secs, moving = [bucket.get(k) for k in ("start", "secs", "movingSecs")]
+            if (not number(start) or not 0 <= start <= 604800
+                    or not number(secs) or not 0 < secs <= 604800 - start
+                    or not number(moving) or not 0 <= moving <= secs
+                    or (previous_end is not None and start < previous_end)):
+                return None
+            previous_end = start + secs
+            for key in ("watts", "hr"):
+                value = bucket.get(key)
+                if value is not None and (not number(value) or not 0 <= value <= 10000):
+                    return None
+        start_s = selected[0]["start"]
+        mid_s = series[indices[1]]["start"]
+        end_s = selected[-1]["start"] + selected[-1]["secs"]
+        halves = []
+        for a, b, left, right in ((indices[0], indices[1], start_s, mid_s),
+                                   (indices[1], indices[2], mid_s, end_s)):
+            buckets = series[a:b]
+            paired = [v for v in buckets if v.get("watts") is not None
+                      and v.get("hr") is not None and v["hr"] > 0]
+            if not paired or right <= left:
+                return None
+            # Upstream secs can bridge a recording gap and exceed bucketSize.
+            # Cap nominal support: never extrapolate bucket power through that
+            # excess or claim that bucket availability proves sensor coverage.
+            support = lambda v: min(v["secs"], v["movingSecs"], size)
+            paired_s = sum(support(v) for v in paired)
+            halves.append({
+                "duration_s": sum(v["secs"] for v in buckets),
+                "span_s": right - left,
+                "paired_s": paired_s,
+                "bucket_coverage_pct": round(paired_s / (right - left) * 100, 3),
+                "avg_power_w": statistics.mean(v["watts"] for v in paired),
+                "avg_hr_bpm": statistics.mean(v["hr"] for v in paired),
+                "work_kj": sum(v["watts"] * support(v) for v in paired) / 1000,
+            })
+        early, late = halves
+        if early["avg_power_w"] <= 0:
+            return None
+        changes = {}
+        for field in ("avg_power_w", "avg_hr_bpm", "work_kj", "duration_s"):
+            before, after = early[field], late[field]
+            changes[field] = {"absolute": round(after - before, 3),
+                              "pct": round((after - before) / before * 100, 3) if before else None}
+        ratio1 = early["avg_power_w"] / early["avg_hr_bpm"]
+        ratio2 = late["avg_power_w"] / late["avg_hr_bpm"]
+        trend = cls._decoupling_power_trend(early["avg_power_w"], late["avg_power_w"])
+        for half in halves:
+            for field in ("avg_power_w", "avg_hr_bpm", "work_kj"):
+                half[field] = round(half[field], 3)
+        return {"method": "intervals_power_vs_hr_v1",
+                "window": {"bucket_size_s": size, "start_bucket": indices[0],
+                           "mid_bucket": indices[1], "end_bucket": indices[2],
+                           "start_s": start_s, "mid_s": mid_s, "end_s": end_s,
+                           "warmup_s": warmup, "cooldown_s": cooldown, "hr_lag_s": lag},
+                "early": early, "late": late, "change": changes,
+                "power_hr_first": ratios[0], "power_hr_second": ratios[1],
+                "upstream_decoupling": upstream,
+                "bucket_decoupling": round((ratio1 - ratio2) / ratio1 * 100, 6),
+                "power_trend": trend, "comparability": trend + "_power"}
+
+    @classmethod
+    def _decoupling_plan_context(cls, summary):
+        """Conservative target contrast over supplied measured step-work time.
+
+        Summary rows do not carry clock bounds or roles. Do not invent those:
+        repeat recoveries are excluded, and ranges must separate even at their
+        nearest edges. This flag is context only, never formal adherence.
+        """
+        number = cls._structure_number
+        if (not isinstance(summary, dict) or summary.get("method") != "plan_match_v2"
+                or summary.get("status") not in ("followed", "partly_followed")
+                or not (summary.get("plan") or {}).get("event_id")
+                or summary.get("omitted_steps")
+                or any(x in summary.get("issues", []) for x in
+                       ("pairing_conflict", "ambiguous_pairing", "stale", "detail_unavailable"))):
+            return None
+        rows = summary.get("steps")
+        if not isinstance(rows, list) or not rows:
+            return None
+        targets = []
+        for row in rows:
+            if (not isinstance(row, list) or len(row) not in (4, 5)
+                    or not number(row[0]) or row[0] <= 0 or not number(row[2])
+                    or row[2] < 0 or type(row[3]) is not bool):
+                return None
+            band = row[1] if isinstance(row[1], list) else [row[1], row[1]]
+            if (len(band) != 2 or any(not number(v) for v in band)
+                    or not 0 <= band[0] <= band[1] <= 3000):
+                return None
+            targets.append((row[0], band))
+        total = sum(t[0] for t in targets)
+        halves = []
+        for left, right in ((0, total / 2), (total / 2, total)):
+            sums, cursor = [0, 0], 0
+            for duration, band in targets:
+                overlap = max(0, min(right, cursor + duration) - max(left, cursor))
+                for j in (0, 1):
+                    sums[j] += overlap * band[j]
+                cursor += duration
+            halves.append([v / (right - left) for v in sums])
+        early, late = halves
+        rising = late[0] - early[1] > max(5, early[1] * .05)
+        falling = early[0] - late[1] > max(5, early[0] * .05)
+        return {"basis": "qualified_step_work_time_halves",
+                "early_target_w": [round(v, 3) for v in early],
+                "late_target_w": [round(v, 3) for v in late],
+                "changes_power": rising or falling}
+
+    def _build_decoupling_for_activity(self, act, previous_lookup, has_power, has_hr, summary):
+        if (not has_power or not has_hr or act.get("id") is None
+                or self.SPORT_FAMILIES.get(act.get("type")) != "cycling"):
+            return {}
+        # Source revisions, time/trim settings and source measures, not formatting
+        # preferences or the mutable plan assessment. No periodic success refetch.
+        fields = ("id", "type", "start_date", "start_date_local", "elapsed_time", "moving_time",
+                  "icu_sync_date", "icu_intervals_edited", "icu_warmup_time", "icu_cooldown_time",
+                  "decoupling", "icu_average_watts", "average_watts", "avg_watts", "average_power", "avgWatts",
+                  "average_heartrate", "avg_hr", "average_heart_rate", "avgHr", "icu_average_hr",
+                  "icu_joules", "stream_types", "recording_stops", "icu_recording_time")
+        fingerprint = self._structure_fingerprint({k: act.get(k) for k in fields})
+        key = (str(act["id"]), fingerprint)
+        prev = previous_lookup.get(key[0], {})
+        cache = prev.get("decoupling_cache") or {}
+        if (cache.get("version") == self.DECOUPLING_DETAIL_VERSION
+                and cache.get("activity_key") == fingerprint
+                and (isinstance(prev.get("decoupling_detail"), dict) or cache.get("status") == "failed")):
+            result = {k: prev[k] for k in ("decoupling_detail", "decoupling_cache") if k in prev}
+        else:
+            if key not in self._decoupling_run_cache:
+                status, payload = self._fetch_activity_power_vs_hr(key[0])
+                result = {}
+                if (status == "ok" and self._structure_number(act.get("decoupling"))
+                        and abs(act["decoupling"] - payload["upstream_decoupling"]) > .001):
+                    status = "transient"  # two upstream reads disagree; retry next sync
+                if status in ("ok", "terminal_error"):
+                    result["decoupling_cache"] = {"version": self.DECOUPLING_DETAIL_VERSION,
+                        "activity_key": fingerprint, "status": "ok" if status == "ok" else "failed"}
+                    if status == "ok":
+                        result["decoupling_detail"] = payload
+                    else:
+                        result["decoupling_cache"]["error"] = payload
+                self._decoupling_run_cache[key] = result
+            result = self._decoupling_run_cache[key]
+        # JSON-shaped deep copy keeps plan recalculation from mutating the cache.
+        result = json.loads(json.dumps(result))
+        detail = result.get("decoupling_detail")
+        if detail is not None:
+            detail["comparability"] = detail["power_trend"] + "_power"
+            detail.pop("plan_comparison", None)
+            context = self._decoupling_plan_context(summary)
+            if context:
+                detail["plan_comparison"] = context
+                if context["changes_power"]:
+                    detail["comparability"] = "plan_changes_power"
         return result
 
     @staticmethod
@@ -6095,7 +6324,8 @@ class IntervalsSync:
                 entry["weather_summary"] = act["weather_summary"]
             if isinstance(act.get("structure_summary"), dict):
                 entry["structure_summary"] = act["structure_summary"]
-            for key in ("power_curve", "power_curve_status", "power_curve_error", "plan_pairing", "dfa_rollup"):
+            for key in ("power_curve", "power_curve_status", "power_curve_error", "plan_pairing", "dfa_rollup",
+                        "decoupling_detail", "decoupling_cache"):
                 if key in act:
                     entry[key] = act[key]
             if entry:
@@ -11133,9 +11363,7 @@ class IntervalsSync:
             qualifying = []
             for act in activities:
                 # Raw API field names (before _format_activities)
-                dec = act.get("icu_hr_decoupling")
-                if dec is None:
-                    dec = act.get("decoupling")
+                dec = act.get("decoupling")
                 vi = act.get("icu_variability_index")
                 mt = act.get("moving_time", 0) or 0
 
@@ -14639,9 +14867,7 @@ class IntervalsSync:
             # Durability (VI<=1.05, VI>0, mt>=5400, decoupling not None)
             _dur_vals = []
             for _a in _week_acts:
-                _dec = _a.get("icu_hr_decoupling")
-                if _dec is None:
-                    _dec = _a.get("decoupling")
+                _dec = _a.get("decoupling")
                 _vi = _a.get("icu_variability_index")
                 _mt = _a.get("moving_time", 0) or 0
                 if (_dec is not None and _vi is not None
@@ -15850,7 +16076,7 @@ class IntervalsSync:
             calories = act.get("calories") or act.get("icu_calories")
             variability_index = act.get("icu_variability_index")
             # v3.139: 0.0 % decoupling is a real value; fall through only on absent/None.
-            decoupling = _first_set(act, "icu_hr_decoupling", "decoupling")
+            decoupling = act.get("decoupling")
             
             avg_speed_ms = act.get("average_speed")
             max_speed_ms = act.get("max_speed")
@@ -16102,6 +16328,14 @@ class IntervalsSync:
             has_power = has_power or "watts" in (act.get("stream_types") or [])
             activity["power_curve_expected"] = bool(has_power)
             activity.update(self._build_power_curve_for_activity(act, previous_latest_lookup, has_power))
+
+        # New endpoint runs last so existing reads retain their retry opportunities.
+        for act, activity in zip(activities, formatted):
+            has_hr = (self._structure_number(activity.get("avg_hr")) and activity["avg_hr"] > 0
+                      or "heartrate" in (act.get("stream_types") or []))
+            activity.update(self._build_decoupling_for_activity(
+                act, previous_latest_lookup, activity["power_curve_expected"], has_hr,
+                activity["structure_summary"]))
 
         return formatted
     

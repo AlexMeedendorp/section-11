@@ -1,6 +1,6 @@
 ---
 name: section-11
-description: Evidence-based endurance coaching protocol (v11.85). Use when analyzing training data, reviewing sessions, generating pre/post-workout or requested weather reports, planning workouts, answering training questions, or giving endurance coaching advice. Always read or fetch athlete JSON data before responding to any training question.
+description: Evidence-based endurance coaching protocol (v11.86). Use when analyzing training data, reviewing sessions, generating pre/post-workout or requested weather reports, planning workouts, answering training questions, or giving endurance coaching advice. Always read or fetch athlete JSON data before responding to any training question.
 ---
 
 # Section 11 - AI Coaching Protocol
@@ -76,7 +76,7 @@ Load the coaching protocol using this precedence:
 
 If both root and `section11/` copies exist, prefer the root copy.
 
-**Current version:** 11.85
+**Current version:** 11.86
 
 ## External Sources
 
@@ -99,6 +99,9 @@ Each source answers its own domain; the order is not a ranking across domains. S
 Read `latest.json.data_overview` first to discover companions and route-weather/map availability. Resolve its relative paths against the latest file's source; for folderless Manual uploads match by filename. Presence does not establish AI access. Weather briefs use local zone-labelled times and 16-point compass directions per SECTION_11. Report weather times use HH:MM, adding a zone only when different from the athlete's or a UTC fallback; the Data updated header, maps and data retain zone labels. Read and show the matching PNG pages in their listed order; identify any missing page and retain text. Show only pages actually read; maps are never downloads or additions to the artifact ZIP.
 
 - Whole-session average power and NP never establish main-set power, in reports, comparison or prescription. Read `recent_activities[].structure_summary`: compare the same identified windows and keep targets separate from actuals. Check method/status and issues. Load `intervals.json` for detailed analysis when `has_structure: true`; its `session_structure` carries window metrics. An expired full block leaves a last-captured summary, not a fresh verification. Thirds/WORK efforts are descriptive; broad window agreement is not formal adherence. If the required structure or role is unavailable, say so and obtain it.
+
+- Structured Session profile uses qualified work-step actual power relative to the activity's applicable FTP, with authoritative work roles and adequate coverage. Sweetspot is 88–94% FTP work even when whole-session VI exceeds 1.05; missing actuals/roles/FTP cannot support that label. Unstructured Sweetspot retains IF 0.88–0.94 and 0 < VI ≤1.05. This does not relax decoupling/EF or progression gates.
+- Under post-workout Decoupling, show available `decoupling_detail` early/late power and HR and its comparability context. `plan_changes_power` means keep the number with “plan changes power; no drift verdict”. Decoupling uses average power; EF uses NP. Warm-up/cool-down and HR lag describe the analysed window; the ≥90 min gate still uses whole-ride moving time and VI ≤1.05 and >0. Bucket-derived values are estimates; do not fit/subtract expected drift or explain away falling power with rising HR. The 7d/28d durability aggregates stay unchanged.
 
 - Read or fetch latest.json before any training question. Check the data directory first, then the connected repo (if a connector is available), then uploaded or attached files, then the configured raw URLs (in the project instructions or, when a dossier is used, its source configuration).
 - Read or fetch history.json when trend analysis, phase context, or longitudinal comparison is needed. Same precedence.

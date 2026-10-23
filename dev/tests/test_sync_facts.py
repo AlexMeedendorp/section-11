@@ -329,11 +329,11 @@ class RollingChunks(FactsCase):
 
     def test_capability_means_match_existing_7d_gates_and_sample_minima(self):
         acts = [ride("i1", moving_time=5400, icu_variability_index=1.05,
-                     icu_hr_decoupling=0, icu_efficiency_factor=0, icu_hrr={"value": 0, "hrr": 99}),
+                     decoupling=0, icu_efficiency_factor=0, icu_hrr={"value": 0, "hrr": 99}),
                 ride("i2", moving_time=5400, icu_variability_index=1,
-                     icu_hr_decoupling=-2, icu_efficiency_factor=2, icu_hrr={"hrr": 30}),
+                     decoupling=-2, icu_efficiency_factor=2, icu_hrr={"hrr": 30}),
                 ride("i3", moving_time=5399, icu_variability_index=1.051,
-                     icu_hr_decoupling=99, icu_efficiency_factor=99, icu_hrr=-1)]
+                     decoupling=99, icu_efficiency_factor=99, icu_hrr=-1)]
         chunk = self.chunks(acts)[0]
         self.assertEqual((chunk["durability_mean"], chunk["durability_qualifying"]), (-1, 2))
         self.assertEqual((chunk["ef_mean"], chunk["ef_qualifying"]), (1, 2))

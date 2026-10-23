@@ -346,7 +346,7 @@ class Cache(unittest.TestCase):
     def test_format_integration_preserves_aggregate_and_ascent(self):
         self.sync = Sync("athlete_test", "key_test")
         self.sync._intervals_data = {}
-        self.act.update(icu_average_watts=200, icu_weighted_avg_watts=220, icu_hr_decoupling=0,
+        self.act.update(icu_average_watts=200, icu_weighted_avg_watts=220, decoupling=0,
                         total_elevation_gain=0, distance=10000)
         with mock.patch.object(self.sync, "_build_terrain_for_activity", return_value={}), \
                 mock.patch.object(self.sync, "_build_weather_for_activity", return_value={}), \

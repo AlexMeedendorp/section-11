@@ -60,7 +60,7 @@ Target: [identified step/set prescription]
 Actual: [same-window observed power and duration]
 
 Long ride: [date, name, duration, supported observation]
-Tempo whole-ride decoupling: [dated series, each eligible whole-ride value]
+Tempo whole-ride decoupling: [dated series, each eligible whole-ride value; mark plan_changes_power values "plan changes power"]
 
 **Best efforts (last 28 days, previous 28 days in brackets)**
 5 s: [W, date] ([previous W])
@@ -97,7 +97,7 @@ Easy-state guard: [eligible estimate and N, descriptive]
 - Pairing comes from plan_pairing for every sport. "Rides: 12 of 12 planned ✅" counts paired activities, not adherence. Checked against plan includes assessed step statuses and paired no-step activities with a non-null duration result; only followed steps or within-tolerance no-step durations contribute to its followed numerator. Do not substitute a duration check for a structured plan assessment. Exclude unassessed/unknown results from the checked denominator; never show not-assessed counts. Explain material retained-step coverage without inventing assessments: full detail remains 14 days; older step results are last captured. Pairing identity/duration refresh across 28 days.
 - Fitness uses exact dated start-of-period and current CTL/ATL/TSB. Start -> now is allowed here. If the start is missing, show only the dated current value. No seven-day ramp, FTP, eFTP, W/kg, ceilings or separate progression section.
 - Each chunk's hours, TSS, ctl_end, zone_distribution, hard_days, hard_day_details, capability means/N and wellness are supplied. Normalize zone hours only against the supplied total. Never infer Seiler TID from Coggan zones. Hard-day reasons use actual rung/basis: e.g. "Hard days: 3 (10 Jul intervals; 12 and 13 Jul by power Z3 only)" only when hard_day_details supports that distinction. No reclassification; unknown plan intensity stays unknown.
-- Chunk Durability/EF/HRRc say 7-day avg and N. HRRc only when present, numbers only, no trend words. All producer eligibility gates and per-session decoupling >=90 min/VI <=1.05 and EF cycling >=20 min/power+HR/VI <=1.05 gates remain.
+- Chunk Durability/EF/HRRc say 7-day avg and N. HRRc only when present, numbers only, no trend words. All producer eligibility gates and per-session decoupling >=90 min/VI <=1.05 and EF cycling >=20 min/power+HR/VI <=1.05 gates remain. A per-session value with `decoupling_detail.comparability: plan_changes_power` stays in the series, marked "plan changes power", without a drift verdict or trend claim from that value; chunk Durability means are unchanged.
 - Wellness uses latest.json.wellness_28d, not seven-day wellness_data or a mean of chunk means. Each metric's own observed-day count is authoritative. Weight uses weight_kg.avg/days/latest/latest_date with display conversion; keep the existing current_status.weight slope gate independently. Feel/RPE use available exact-window recent_activities with N; no missing values become zero.
 - Intensity uses derived_metrics.seiler_tid_28d with its basis. Phase is current derived_metrics.phase_detection only, still based on configured calendar weeks.
 - Key-session header markers and plan identity follow 7_DAY_REPORT_TEMPLATE.md. Use exact identified target/actual windows. Long-ride observations and a tempo whole-ride decoupling series remain clearly distinct from main-set measures. No invented target power from session average/NP.

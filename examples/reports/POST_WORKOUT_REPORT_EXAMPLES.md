@@ -3,7 +3,7 @@
 > Anonymized examples showing standard post-workout report format.  
 > See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference. Legacy examples do not supply recorded elevation, so Ascent is omitted. Missing matched-step data is stated explicitly; aggregate numbers are preserved. The fictional field excerpts below illustrate the new producer contract without inventing step actuals for those legacy reports.
 
-The eight legacy scenarios retain their supplied measurements and omit new fields that were not captured. Their timestamps use explicitly labelled UTC fallback because no athlete timezone is supplied. The new-field excerpts are synthetic, including their temperature, elapsed time, W/kg and curve points; they are not Daniel's captured responses.
+The legacy scenarios retain their supplied aggregate measurements and omit new fields that were not captured. Example 7 explicitly adds fictional qualified work-step evidence to demonstrate the structured Sweetspot rule. Their timestamps use explicitly labelled UTC fallback because no athlete timezone is supplied. The new-field excerpts are synthetic, including their temperature, elapsed time, W/kg and curve points; they are not Daniel's captured responses.
 
 ---
 
@@ -75,6 +75,23 @@ Executed structure: fixed_elapsed_thirds, no_plan; power unavailable
 ```
 
 The same ascent rule applies to indoor walks and all ride/run types. When `display.elevation` is null, omit Ascent; a recorded zero remains visible. Walk/Hike omit Executed structure. Shortened or partly-followed windows must distinguish original planned amount from measured time, each agreement flag and any unobserved steps. A not-followed plan uses descriptive fallback and does not present projected step actuals as execution. A synthetic set descriptor `[8,30,10]` can be reported as “8 × 30 s, measured work 232 s, target 280 W, actual 279 W, match true”; it is not 232 seconds of continuous work.
+
+## Decoupling detail excerpts (fictional, separate records)
+
+These snippets illustrate source-supplied half values. Real reports omit the line when detail is unavailable. Decoupling and EF gates remain unchanged; neither a low VI nor a small half difference establishes formal adherence.
+
+```text
+Decoupling: 5.26%
+Early → late: 180 → 180 W, HR 108 → 114
+
+Decoupling: 2.22%
+Early → late: 180 → 200 W, HR 110 → 125; plan changes power; no drift verdict
+
+Decoupling: 13.91%
+Early → late: 200 → 180 W, HR 110 → 115; falling power
+```
+
+The first record is an unpaired 120-minute ride with VI 1.02, a 600 s warm-up and 60 s cool-down exclusion, and 15 s HR lag; those exclusions do not change its whole-ride eligibility. The second has qualified step targets changing across step-work halves; its raw value stays visible even if the whole ride passes the gate. The last has lower power and higher HR, which is adverse coupling rather than a power-change explanation. Bucket-derived work and coverage remain contextual estimates. These ratios illustrate arithmetic, not exact reconstruction of rounded real bucket data.
 
 ## Example 1: Clean Endurance Day (Multi-Session)
 
@@ -522,7 +539,7 @@ Ride: Recovery 1h, Z1 only
 
 ## Example 7: Sweet Spot Session with Consonant DFA Reading
 
-Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficient session data and passing timing/coverage/gap checks. The only drift reason is `short_session`; 3% supra does not trigger the >15% veto.
+Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficient session data and passing timing/coverage/gap checks. The only drift reason is `short_session`; 3% supra does not trigger the >15% veto. This revised synthetic example adds an exact paired plan identifying four 10-minute work steps at 245 W, activity-applicable indoor FTP 272 W, and qualified plan_match_v2 actual means of 245 / 247 / 246 / 245 W, each over 599 measured seconds with 100% power coverage. Each is 90.1–90.8% FTP. Recovery/warm-up/cool-down roles are supplied by that fictional prescription, not inferred from lower power. This evidence licenses the Session profile, not formal completion or progression.
 
 ```
 **Post-workout: Tuesday 10 February**
@@ -539,12 +556,12 @@ Planned: 1h25m
 Distance: 42.85 km
 
 Power: 195 W avg, 215 W NP
-Executed structure: matched work-step actuals unavailable in this legacy example
+Executed structure: paired_plan_windows, followed; 4 × 10m planned work at 245 W, measured work 9m59s each, actual means 245 / 247 / 246 / 245 W, 100% power coverage; work roles supplied by paired intent
 IF: 0.79
 Power zones: Z1 22%, Z2 28%, Z3 8%, Z4 38%, Z5 3%, Z6 1%
 Grey Zone (Z3): 8%
 Quality (Z4+): 42%
-Session profile: Sweetspot
+Session profile: Sweetspot (qualified work steps 90.1–90.8% of activity FTP 272 W)
 Variability Index: 1.10
 
 HR: 142 avg, 158 max
@@ -582,7 +599,8 @@ Hours: 8h12m
 TSS: 295
 
 **Interpretation**
-Step-power adherence is not established by these aggregates. DFA a1 sat predominantly
+Qualified work-step actuals support Sweetspot despite whole-session VI 1.10 and IF 0.79;
+formal adherence is not established by broad window agreement. DFA a1 sat predominantly
 in the 0.5–0.75 tempo band (44%) where sweet spot work should land per the protocol
 threshold mapping; internal intensity matched prescription. Drift +0.04 is descriptive only
 because the recording is under 90 minutes; the 3% supra share does not trigger the supra

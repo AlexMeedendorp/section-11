@@ -1,10 +1,14 @@
 # Section 11 - AI Coach Protocol
 
-**Protocol Version:** 11.85  
-**Last Updated:** 2026-10-22
+**Protocol Version:** 11.86  
+**Last Updated:** 2026-10-23
 **License:** [MIT](https://opensource.org/licenses/MIT)
 
 ### Changelog
+
+**v11.86 - Activity decoupling detail and structured Sweetspot (2026-10-23, sync.py v3.152):**
+
+Latest activity rows can carry the upstream analysed window, lag-aligned early/late power and HR, observed bucket work and coverage, changes and plan-power context. Requests are bounded and fingerprint-cached. Decoupling uses average power; EF uses NP. Raw values and durability aggregates stay unchanged, while planned power changes suppress an individual drift verdict. Structured Session profile uses qualified work-step actuals relative to the applicable FTP; unstructured Sweetspot retains the VI ceiling.
 
 **v11.85 - Calendar spans and sustainability environment (2026-10-22, sync.py v3.151):**
 
@@ -531,6 +535,27 @@ Sync 3.147 adds the following fields to `latest.json.recent_activities[]`. Every
 Only activities with positive average/normalized power or a watts stream request a curve. Successful curves and terminal results copy forward from the previous latest.json, including across unit changes; neither is re-fetched. Same-run results, including failures, are memoized by activity ID. Up to eight new curves are admitted per sync instance, using existing Basic auth, (5, 30) connect/read timeouts and the shared safe-read retry policy. With the shared four-extra-attempt budget, these add at most twelve HTTP attempts per sync; cache hits cost none. New curve reads run after existing activity enrichments. No separate cache file or history mutation is introduced.
 
 The Max power line uses power_curve["1"]; Peaks uses the five longer durations that exist. These are descriptive values for this activity only, never tests, bests or capability, and never a basis for FTP, zone or readiness changes. Work continues to use work_kj. Reports do not add Carbs eaten.
+
+#### Activity decoupling detail
+
+From sync.py v3.152, recent cycling activities with power and HR may carry `decoupling_detail` beside the unchanged activity `decoupling`. It comes only from `/activity/{id}/power-vs-hr`, not from intervals.json or a model fit. Omit detail when the response is unavailable or invalid; absence means unknown, never zero drift. No raw bucket series or fit curves are retained.
+
+| Detail field | Meaning |
+|---|---|
+| `method` | `intervals_power_vs_hr_v1` |
+| `window` | `bucket_size_s`, half-open `start_bucket` / `mid_bucket` / `end_bucket`, observed `start_s` / `mid_s` / `end_s`, `warmup_s`, `cooldown_s` and `hr_lag_s`. Seconds are from the upstream response; HR is already shifted later upstream and is not shifted again |
+| `early`, `late` | `duration_s` sums supplied bucket secs; `span_s` includes timestamp gaps. `avg_power_w` and `avg_hr_bpm` are arithmetic means of buckets with usable power and positive HR, including zero watts. For each paired bucket, nominal supported time is min(secs, movingSecs, bucket_size_s): secs can span a pause longer than bucketSize. `paired_s` sums that bounded time; `bucket_coverage_pct` is paired_s / span_s, not raw sensor completeness. `work_kj` sums watts × bounded time / 1000: a conservative bucket estimate, never extrapolated through gap excess or missing buckets |
+| `change` | Late minus early `absolute` and early-relative `pct` changes for avg_power_w, avg_hr_bpm, work_kj and duration_s. A zero denominator yields null, never an invented percentage |
+| `power_hr_first`, `power_hr_second`, `upstream_decoupling` | Authoritative upstream half ratios and decoupling. `(power_hr_first - power_hr_second) / power_hr_first × 100` reproduces the upstream percentage within source precision |
+| `bucket_decoupling` | Reconstruction from displayed bucket means; bucket rounding can make it differ from upstream_decoupling. Do not replace the activity value or call this an exact reconstruction |
+| `power_trend`, `comparability` | Measured halves are steady, rising or falling. A change must exceed both 5 W and 5% of early power to be rising/falling; boundaries are steady. Comparability is steady_power, rising_power or falling_power, overridden by plan_changes_power when the qualified plan comparison changes power |
+| `plan_comparison` | Optional `basis: qualified_step_work_time_halves`, early_target_w / late_target_w bands and changes_power. Use only plan_match_v2 followed/partly_followed rows with an exact plan identity, qualified actuals and no omitted steps. Weight targets by supplied measured step duration; repeat rows contribute work-bout time only. Compare first/second halves of that step-work time, not invented clock bounds or roles. Bands must differ beyond both 5 W and 5% even at their nearest edges. Missing or unusable comparison means unknown plan context, not evidence of a constant plan |
+
+The step-work comparison is separate from the upstream analysis window: it signals a changing prescription, not which portion of decoupling a plan caused. Display the measured halves directly under Decoupling, adding the human-readable flag “plan changes power; no drift verdict” when present. Do not use an expected-from-power model, subtract a fitted bias, or attribute falling power with rising HR to power change: that is adverse coupling. Qualify incomplete bucket coverage and unavailable plan context. The detail provides context, not a new physiological eligibility test.
+
+The existing ≥5400 s gate uses the **whole ride's moving time**, including warm-up/cool-down. Upstream user/per-ride exclusions narrow only the analysed window; do not use it to shorten or lengthen that gate. Existing 7d/28d durability averages, counts and thresholds remain unchanged, including qualifying progressive rides; interpret them with this context rather than silently filtering them.
+
+`decoupling_cache` is producer bookkeeping (`version`, activity_key, status; error only for a terminal failure). An unchanged retained fingerprint with success or HTTP 404/410 incurs no new read. Source revision, duration, trim or power/HR changes invalidate it; upstream changes invisible to the activity payload cannot be detected. Transient HTTP/transport/parse/shape failures and budget skips retry next sync. Up to eight new activity reads per instance run after existing enrichments, with the existing Authorization/Accept headers, timeout and shared four-extra-attempt budget: at most twelve new sends, zero at unchanged steady state. Plan context is recalculated from the current summary without another request. The cache and detail appear only in latest.json.
 
 #### Completed Session Structure
 
@@ -1245,12 +1270,12 @@ Reports use a structured line-by-line format per session, not bullet-point summa
    - Power zones (% breakdown)
    - Grey Zone (Z3): X%
    - Quality (Z4+): X%
-   - Session profile (activities with zone data; classify the executed session as specified in the post-workout template)
+   - Session profile (qualified structured work-step actuals relative to applicable FTP; otherwise executed zone data, as specified in the post-workout template)
    - Variability Index (cycling with power; assessment labels apply to steady-state only; omit the label for interval sessions where high VI is expected)
    - HR: Avg, Max
    - HR zones (% breakdown)
    - Cadence (avg)
-   - Decoupling (assessment label only when the session passes the per-session gate under *Evidence handling*: ≥ 90 min with VI ≤ 1.05 and > 0; otherwise the value without drift interpretation)
+   - Decoupling (assessment label only when the session passes the per-session gate under *Evidence handling*: ≥ 90 min with VI ≤ 1.05 and > 0, and no plan_changes_power flag; otherwise the value without drift interpretation). Directly below, show available early/late power and HR from decoupling_detail with the comparability flag
    - EF (when power and HR available; interpret only when the session passes the per-session gate under *Evidence handling*: ≥ 20 min with VI ≤ 1.05 and > 0)
    - HRRc (bpm; omit when null)
    - DFA a1 (when a session-level `dfa` block is present; follow the post-workout template's quality and drift-state rules, including a quality notice without readings for insufficient data)
@@ -1479,6 +1504,8 @@ Check, in order:
 - `effort_response` is null for three distinguishable reasons, and `intensity_factor` is emitted per activity so the cause is always knowable: `rpe` absent or ≤ 0 → not usable; `rpe` usable and `intensity_factor` absent → IF unavailable; `rpe` usable and `intensity_factor` below 65 → outside the calibrated band range **by design**. The third case is the expected result of a genuinely easy session and is not a data gap. On typical endurance sessions it is the common case.
 - Power-to-HR evidence is valid per session only under the gates that already govern the aggregates. Check `variability_index` and `duration_formatted` before quoting either. `moving_time` is not emitted, and `duration_hours` is rounded to two decimals so it cannot reproduce the boundary: 1h29m50s rounds to 1.50 and would pass a ≥ 1.5 test while sitting 10 s under the gate. `duration_formatted` is exact to the second. Decoupling requires ≥ 90 min (5400 s) with `variability_index` ≤ 1.05 and > 0; Efficiency Factor requires ≥ 20 min (1200 s) with the same VI ceiling. A short or surgy session still carries a decoupling number; it is not evidence. A per-session eligibility flag would remove the string parsing (a later code change, not this release).
 - The per-session comparator is `recent_activities[]`. `capability.durability` is not sport-filtered; `capability.efficiency_factor` is cycling-only. Both aggregate different sessions and are context only. Compare like-for-like execution, modality, environment and intensity rather than treating either mean as a direct session match. Beyond the retained activity window there is no per-session response history; `daily_90d` carries load and wellness only.
+- Decoupling uses average-power/HR half ratios; EF uses whole-session NP / average HR. Warm-up/cool-down exclusions and HR lag belong to the upstream analysed-window context. `decoupling_detail.comparability: plan_changes_power` keeps the number visible but precludes a drift verdict even when the existing duration/VI gate passes. The raw halves are observations, not a fitted correction. Falling power while HR rises remains adverse coupling. Aggregate durability is unchanged.
+- For a structured Session profile, use qualified executed work-step mean power relative to the FTP applicable to that activity and environment. Require identified work roles from authoritative paired intent, supported step mapping/actuals, adequate coverage and known FTP; targets or the workout name alone do not qualify. Sweetspot work is 88–94% FTP inclusive. Consistent qualified work steps in that band can be labelled Sweetspot despite whole-session VI >1.05 or diluted IF; materially different work intensities are Mixed or their supported executed class. Missing roles, actuals or FTP means the work-step classification is unavailable: use executed zones descriptively, without assuming Sweetspot. For unstructured sessions the existing Sweetspot rule remains IF 0.88–0.94 with VI ≤1.05 and >0. This changes Session profile only, never decoupling/EF gates, formal adherence or progression rules.
 - No intra-day HRV re-read substitutes for the morning value. Acute post-exercise HRV is dominated by the preceding session and recovery conditions (Plews et al. 2013). DFA a1 and HRRc remain outside the readiness ladder under their existing rules.
 - Athlete self-report is often more sensitive than common objective markers for detecting acute training response (Saw et al. 2016), which is why it sits near the top of this checklist. That does not contradict the underreporting caution above: self-report escalates freely and de-escalates only under the existing constraints.
 
@@ -2812,7 +2839,7 @@ Any training modification requires reconfirming **HRV**, **RHR**, and **subjecti
 
 | **Metric**                | **Formula / Method**                                                    | **Target Range**   | **Purpose / Interpretation**                                     |
 |---------------------------|-------------------------------------------------------------------------|--------------------|------------------------------------------------------------------|
-| HR–Power Decoupling (%)   | [(HR₂nd_half / Power₂nd_half) / (HR₁st_half / Power₁st_half) − 1] × 100 | < 5 %              | Aerobic efficiency metric; <5 % drift = stable HR–power coupling |
+| HR–Power Decoupling (%)   | (pHr₁ − pHr₂) / pHr₁ × 100, where pHr = average power / average HR in each upstream analysed half | < 5 % | Average-power basis, unlike EF's NP basis; label only under the per-session gates and comparability rule. User/per-ride warm-up/cool-down settings narrow the analysed window, not the whole-ride duration gate |
 | Efficiency Factor (EF)    | NP ÷ Avg HR (Coggan)                                                    | Individual / fitness-dependent | Aerobic efficiency trend; rising EF at same intensity = improving fitness. Compare like-for-like sessions only |
 | Durability Index (DI)     | `Avg Power last hour ÷ Avg Power first hour`                            | ≥ 0.95             | Quantifies fatigue resistance during endurance sessions          |
 | Fatigue Index Ratio (FIR) | `Best 20 min Power ÷ Best 60 min Power`                                 | 1.10 – 1.15        | Indicates sustainable power profile and fatigue decay            |

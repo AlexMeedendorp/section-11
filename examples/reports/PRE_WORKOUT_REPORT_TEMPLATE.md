@@ -168,7 +168,7 @@ ACWR: start-of-day [X.XX]; live post-session value excluded from this decision
 ```
 
 - Current Feel must be solicited, not read from `recent_activities[].feel`
-- Quote decoupling or EF only when the session passes its gate (`variability_index` ≤ 1.05 and > 0; `duration_formatted` ≥ 90 min for decoupling, ≥ 20 min for EF). Otherwise state that the evidence is not eligible rather than omitting the line silently
+- Quote decoupling or EF only when the session passes its gate (`variability_index` ≤ 1.05 and > 0; `duration_formatted` ≥ 90 min for decoupling, ≥ 20 min for EF). Otherwise state that the evidence is not eligible rather than omitting the line silently. A passing session with `decoupling_detail.comparability: plan_changes_power` keeps its value as "plan changes power", without a drift verdict
 - `effort_response: null` is expected on an easy session and is not a data gap. The classifier is calibrated only at IF ≥ 0.65; `intensity_factor` is emitted on a 0–100+ percentage scale, so the cut-off reads as 65 in the JSON and 0.65 as a decimal IF
 
 When comparing completed work to today's prescription, read `recent_activities[].structure_summary` and compare the same identified windows using actual means and durations. Keep intended targets separate, check method/status and issues, and state unavailable structure or roles. No detail fetch is required for this summary comparison. If more detail is needed and `has_structure` is true, load the activity's `session_structure` from intervals.json. After detail expiry the summary is the last captured comparison, not a fresh check. Whole-session average/NP cannot establish main-set power; broad window agreement is not formal adherence or permission to progress.
