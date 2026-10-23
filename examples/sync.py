@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.155 - Short bout and sprint adherence: per-bout rows for compressed sets,
+  adherence rows for short steps and peak-window sprint evidence in 14-day detail.
+  Pairs with protocol/skill v11.90.
+
 Version 3.154 - Multi-night sleep context: 28-night median reference against the seven
   recent nights from one widened 35-date wellness read; existing consumers keep 28 dates.
   Low confidence, never readiness. Pairs with protocol/skill v11.89.
@@ -4578,7 +4582,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.154"
+    VERSION = "3.155"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -15812,7 +15816,7 @@ class IntervalsSync:
                 print(f"  Could not create update issue: {e}")
     
     # Structure shares interval retention, but not interval/DFA interpretation.
-    STRUCTURE_VERSION = 4
+    STRUCTURE_VERSION = 5
     STRUCTURE_MAX_STEPS = 20
     STRUCTURE_MAX_EFFORTS = 8
 
@@ -16117,6 +16121,91 @@ class IntervalsSync:
                 means[1], means[2], *coverage,
                 round(100 * zero / durations[0], 2) if durations[0] else None]
 
+    def _structure_bouts(self, windows, times, watts):
+        """Exact completion/adherence evidence in one monotone sample pass.
+
+        Windows are ordered, non-overlapping bouts/steps on recording time.
+        Standard bounds retain the one-second exclusion; the caller selects
+        adherence start by prescribed duration, with the same end. Schema is in
+        SECTION_11; no rounding, gap filling or final-sample extrapolation.
+        """
+        rows, i = [], 0
+        for nominal, start, end, adherence_start in windows:
+            observed, adherence_observed, joules, zero = 0.0, 0.0, 0.0, 0.0
+            while i + 1 < len(times) and times[i + 1] <= start:
+                i += 1
+            while i + 1 < len(times) and times[i] < end:
+                t = times[i]
+                sample_end = min(t + 1, times[i + 1], end)
+                value = watts[i]
+                if self._structure_number(value) and value >= 0:
+                    observed += max(0, sample_end - max(t, start))
+                    dt = max(0, sample_end - max(t, adherence_start))
+                    adherence_observed += dt
+                    joules += value * dt
+                    if value == 0:
+                        zero += dt
+                if times[i + 1] > end:
+                    break
+                i += 1
+            rows.append([nominal, start, end, observed, adherence_start,
+                         adherence_observed, joules if adherence_observed else None,
+                         zero if adherence_observed else None])
+        return rows
+
+    def _structure_sprints(self, windows, times, watts, source_times):
+        """Observed standard means and best contiguous W-second means, unrounded.
+
+        Piecewise-constant sample support matches standard windows. A peak
+        cannot bridge missing power or an original recording-stop gap, even
+        though plan alignment compresses the latter out of recording time.
+        """
+        from bisect import bisect_right
+
+        rows, i = [], 0
+        for start, end, width in windows:
+            runs, observed, joules = [], 0.0, 0.0
+            while i + 1 < len(times) and times[i + 1] <= start:
+                i += 1
+            while i + 1 < len(times) and times[i] < end:
+                a, b = max(times[i], start), min(times[i] + 1, times[i + 1], end)
+                value = watts[i]
+                if b > a and self._structure_number(value) and value >= 0:
+                    observed += b - a
+                    joules += value * (b - a)
+                    if (not runs or runs[-1][-1][1] != a
+                            or (i and source_times[i] - source_times[i - 1] > 1)):
+                        runs.append([])
+                    runs[-1].append((a, b, value))
+                if times[i + 1] > end:
+                    break
+                i += 1
+            best_start, best_j = None, None
+            for run in runs:
+                if run[-1][1] - run[0][0] < width:
+                    continue
+                edges = [run[0][0]] + [b for _, b, _ in run]
+                prefix = [0.0]
+                for a, b, value in run:
+                    prefix.append(prefix[-1] + value * (b - a))
+
+                def integral(t):
+                    j = bisect_right(edges, t) - 1
+                    return prefix[j] + (run[j][2] * (t - edges[j]) if j < len(run) else 0)
+
+                # A sliding integral changes slope only at a support boundary
+                # or W seconds before one. Include both, also for fractional
+                # timestamp spacing, rather than counting samples.
+                starts = sorted({t for t in edges if t + width <= edges[-1]}
+                                | {t - width for t in edges if t - width >= edges[0]})
+                for at in starts:
+                    energy = integral(at + width) - integral(at)
+                    if best_j is None or energy > best_j:
+                        best_start, best_j = at, energy
+            rows.append([joules / observed if observed else None, best_start,
+                         best_j / width if best_j is not None else None])
+        return rows
+
     def _build_session_structure(self, act, event, streams, raw_intervals=None,
                                  plan_reason=None):
         if act.get("type") in ("Walk", "Hike"):
@@ -16165,6 +16254,8 @@ class IntervalsSync:
             # measurements at the recording end and expose their fraction.
             delta = plan_horizon - ((shift or 0) + total)
             results, agrees, disagrees, low_coverage = [], 0, 0, False
+            bout_windows, evidence_steps = [], []
+            sprint_windows, sprint_steps = [], []
             incomplete = False
             for step in plan["steps"]:
                 end = cursor + step["duration_s"]
@@ -16192,6 +16283,20 @@ class IntervalsSync:
                 result = {"target_w": target, "actual": row, "match": agreement}
                 if "repeat" in step:
                     result.update(repeat=step["repeat"], work_s=work_span)
+                    evidence_steps.append((result, len(bout_windows), reps, True))
+                    for n, (start, stop) in enumerate(ranges):
+                        aligned = cursor + n * (work + rest)
+                        bout_windows.append((aligned - offset, start, stop,
+                                             clip(min(aligned + (2 if work <= 60 else 1),
+                                                      aligned + work))))
+                elif step["duration_s"] <= 60:
+                    evidence_steps.append((result, len(bout_windows), 1, False))
+                    bout_windows.append((cursor - offset, a, b, clip(min(cursor + 2, end))))
+                sprint_duration = work if "repeat" in step else step["duration_s"]
+                if sprint_duration <= 20:
+                    width = max(3, math.ceil(.30 * sprint_duration))
+                    sprint_steps.append((result, len(sprint_windows), len(ranges), width))
+                    sprint_windows.extend((start, stop, width) for start, stop in ranges)
                 if not adequate:
                     for index in (2, 3, 4, 5, 9):
                         row[index] = None
@@ -16211,7 +16316,26 @@ class IntervalsSync:
                               else "shortened_or_extended" if duration_off
                               else "some_steps_disagree")
             if out["status"] in ("followed", "partly_followed"):
-                out.update(method="paired_plan_windows", steps=results)
+                # The marker also identifies checked long-only blocks, so old
+                # version-5 caches cannot conceal missing step/sprint evidence.
+                out.update(method="paired_plan_windows", steps=results, bout_metrics_version=4)
+                if bout_windows:
+                    bouts = self._structure_bouts(bout_windows, recorded, values["watts"])
+                    for result, first, count, is_set in evidence_steps:
+                        if is_set:
+                            result["bouts"] = bouts[first:first + count]
+                        else:
+                            result["adherence"] = bouts[first][4:]
+                if sprint_windows:
+                    sprints = self._structure_sprints(sprint_windows, recorded, values["watts"], times)
+                    for result, first, count, width in sprint_steps:
+                        target = result["target_w"]
+                        result["sprint_target_w"] = target[0] if isinstance(target, list) else target
+                        result["sprint_window_s"] = width
+                        if "repeat" in result:
+                            result["sprints"] = sprints[first:first + count]
+                        else:
+                            result["sprint"] = sprints[first]
                 if shift:
                     out["shift_s"] = shift
                 unassigned = []
@@ -16313,6 +16437,7 @@ class IntervalsSync:
             event_key = self._structure_fingerprint(matches) if matches else None
             due = self._structure_date(cache.get("next_refresh_at"))
             if (old.get("version") == self.STRUCTURE_VERSION and cache.get("activity_key") == activity_key
+                and (old.get("method") != "paired_plan_windows" or old.get("bout_metrics_version") == 4)
                     and cache.get("event_key") == event_key and due and now < due):
                 result[aid] = old
                 continue

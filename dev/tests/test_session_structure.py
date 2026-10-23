@@ -502,7 +502,8 @@ class Placement(unittest.TestCase):
     def test_dropped_fields_and_default_flags_are_absent(self):
         row = self.capture()
         block = self.sync._intervals_data["activities"][0]["session_structure"]
-        self.assertEqual(set(block), {"version", "method", "status", "plan", "steps", "cache"})
+        self.assertEqual(set(block), {"version", "method", "status", "plan", "steps", "cache", "bout_metrics_version"})
+        self.assertEqual(block["bout_metrics_version"], 4)
         self.assertEqual(set(block["plan"]), {"event_id", "updated", "duration_s", "duration_source"})
         for step in block["steps"]:
             self.assertEqual(set(step), {"target_w", "actual", "match"})
