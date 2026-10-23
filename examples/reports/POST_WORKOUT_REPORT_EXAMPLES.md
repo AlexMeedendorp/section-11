@@ -27,6 +27,7 @@ Power: 152 W avg (2.03 W/kg), 156 W NP
 Max power: 420 W
 Peaks: 5s 390 W, 1m 230 W, 5m 190 W, 20m 160 W
 Executed structure: paired_plan_windows, followed; measured 0:01–10:00 target 120 W, actual 119 W; 10:01–30:00 target 180 W, actual 179 W; 30:01–45:00 target 140 W, actual 139 W; all windows agree, 100% power coverage. Roles unspecified; formal adherence unavailable
+Compliance: not evaluable; main-work role not established from the paired plan
 
 Work: 410 kJ
 
@@ -111,6 +112,7 @@ Distance: 76.42 km
 
 Power: 155 W avg, 156 W NP
 Executed structure: unavailable in this legacy example; step-power adherence not established
+Compliance: not evaluable; no matched step windows
 IF: 0.57
 Power zones: Z1 12%, Z2 88%
 Grey Zone (Z3): 0%
@@ -135,6 +137,7 @@ Start: 12:45
 Moving time: 15m
 
 Executed structure: no matched plan windows supplied
+Compliance: not evaluable; no matched step windows
 
 HR: 125 avg, 141 max
 HR zones: Z1 68%, Z2 32%
@@ -208,6 +211,7 @@ Distance: 58.37 km
 
 Power: 142 W avg, 162 W NP
 Executed structure: unavailable in this legacy example; whole-session zones remain descriptive
+Compliance: not evaluable; no matched step windows
 IF: 0.66
 Power zones: Z1 30%, Z2 36%, Z3 23%, Z4 9%, Z5 2%
 Grey Zone (Z3): 23%
@@ -234,6 +238,7 @@ Moving time: 12m
 Planned: 10m
 
 Executed structure: no matched plan windows supplied
+Compliance: not evaluable; no matched step windows
 
 HR: 128 avg, 142 max
 HR zones: Z1 65%, Z2 35%
@@ -302,6 +307,7 @@ Distance: 48.23 km
 
 Power: 178 W avg, 205 W NP
 Executed structure: unavailable in this legacy example; three planned efforts do not establish three executed steps
+Compliance: not evaluable; no matched step windows
 IF: 0.80
 Power zones: Z1 28%, Z2 31%, Z3 3%, Z4 33%, Z5 4%, Z6 1%
 Grey Zone (Z3): 3%
@@ -368,6 +374,7 @@ Distance: 45.14 km
 
 Power: 148 W avg, 149 W NP
 Executed structure: ride shortened; matched step windows unavailable in this legacy example
+Compliance: not evaluable; no matched step windows (ride shortened)
 IF: 0.56
 Power zones: Z1 19%, Z2 81%
 Grey Zone (Z3): 0%
@@ -480,6 +487,7 @@ Terrain: rolling (8 m/km)
 
 Power: 168 W avg, 171 W NP
 Executed structure: continuous easy/endurance confirmed by the supplied scenario context; plan-window mapping unavailable
+Compliance: not evaluable; no matched step windows
 IF: 0.71
 Power zones: Z1 18%, Z2 78%, Z3 4%
 Grey Zone (Z3): 4%
@@ -539,7 +547,7 @@ Ride: Recovery 1h, Z1 only
 
 ## Example 7: Sweet Spot Session with Consonant DFA Reading
 
-Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficient session data and passing timing/coverage/gap checks. The only drift reason is `short_session`; 3% supra does not trigger the >15% veto. This revised synthetic example adds an exact paired plan identifying four 10-minute work steps at 245 W, activity-applicable indoor FTP 272 W, and qualified plan_match_v2 actual means of 245 / 247 / 246 / 245 W, each over 599 measured seconds with 100% power coverage. Each is 90.1–90.8% FTP. Recovery/warm-up/cool-down roles are supplied by that fictional prescription, not inferred from lower power. This evidence licenses the Session profile, not formal completion or progression.
+Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficient session data and passing timing/coverage/gap checks. The only drift reason is `short_session`; 3% supra does not trigger the >15% veto. This revised synthetic example adds an exact paired plan identifying four 10-minute work steps at 245 W, activity-applicable indoor FTP 272 W, and qualified plan_match_v2 actual means of 245 / 247 / 246 / 245 W, each over 599 measured seconds with 100% power coverage. Each is 90.1–90.8% FTP. Recovery/warm-up/cool-down roles are supplied by that fictional prescription, not inferred from lower power. Under the recording-time completion convention the four fully observed 599-second windows establish completion, and every mean is inside the asymmetric power band, so the compliance line reports 4/4 on target. Progression still requires its own gate.
 
 ```
 **Post-workout: Tuesday 10 February**
@@ -557,6 +565,7 @@ Distance: 42.85 km
 
 Power: 195 W avg, 215 W NP
 Executed structure: paired_plan_windows, followed; 4 × 10m planned work at 245 W, measured work 9m59s each, actual means 245 / 247 / 246 / 245 W, 100% power coverage; work roles supplied by paired intent
+Compliance: main work completed, 4/4 steps on target (+0 / +2 / +1 / +0 W)
 IF: 0.79
 Power zones: Z1 22%, Z2 28%, Z3 8%, Z4 38%, Z5 3%, Z6 1%
 Grey Zone (Z3): 8%
@@ -632,6 +641,7 @@ Terrain: flat (3 m/km)
 
 Power: 210 W avg, 238 W NP
 Executed structure: matched work-step actuals unavailable in this legacy example
+Compliance: not evaluable; no matched step windows
 IF: 0.88
 Power zones: Z1 16%, Z2 22%, Z3 5%, Z4 52%, Z5 4%, Z6 1%
 Grey Zone (Z3): 5%

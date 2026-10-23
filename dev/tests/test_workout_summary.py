@@ -38,7 +38,7 @@ What this module guards:
      Markers are positional placeholders: an unmarked summary must list every step
      with its duration and primary target.
   6. Report consumption. The PRE and POST templates name the producer's markers,
-     keep the labelled-recovery rule and the stated scope of an unmarked summary,
+     keep evidence-based role interpretation and the scope of an unmarked summary,
      and for a null or marked summary fall back to the description field each row
      tier actually carries. This is static text-to-producer checking; no report is
      rendered.
@@ -1282,12 +1282,20 @@ class TestReportTemplateFallbackContract(unittest.TestCase):
                 self.assertNotIn("If workout_summary is null, use description_preview.", line)
                 self.assertNotIn("omit warmup/cooldown/recovery steps", line)
 
-    def test_labelled_recovery_rule_is_kept(self):
+    def test_main_work_roles_require_prescription_evidence(self):
         for name, line in self.lines.items():
             with self.subTest(name):
-                self.assertIn("omit a warm-up, cool-down or recovery step only where the plan "
-                              "labels it so, since a lower target alone does not make a step "
-                              "recovery", line)
+                self.assertIn("SECTION_11's Main work rule", line)
+                self.assertIn("prescription structure, durations and targets", line)
+                self.assertIn("name or description as context only", line)
+                self.assertIn("workout step text is optional", line)
+                self.assertIn("only when that role is clear from this evidence", line)
+                self.assertIn("A lower target alone is insufficient", line)
+                self.assertIn("sustained endurance work or an active connector "
+                              "must not disappear", line)
+                self.assertIn("If the distinction is ambiguous, retain the relevant "
+                              "steps and state the uncertainty", line)
+                self.assertNotIn("only where the plan labels it so", line)
 
     def test_unmarked_summary_scope_is_stated_not_overclaimed(self):
         for name, line in self.lines.items():
