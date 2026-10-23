@@ -1,10 +1,14 @@
 # Section 11 - AI Coach Protocol
 
-**Protocol Version:** 11.91  
+**Protocol Version:** 11.92  
 **Last Updated:** 2026-10-23
 **License:** [MIT](https://opensource.org/licenses/MIT)
 
 ### Changelog
+
+**v11.92 - Shared streams for intervals and session structure (2026-10-23, sync.py v3.157):**
+
+When activity detail is rebuilt, intervals detail and session structure now share one unfiltered /streams response per activity per sync. Each consumer receives its own filtered lists. A rate limit (429) with its Retry-After and a missing activity (404/410) are also shared, so the second consumer applies its existing failure and backoff rules without another request in that run. After any other temporary failure (timeout, network, server error or malformed response) the second consumer may request once more, and that result is then shared. Output schemas, cache invalidation rules and retry ladders are unchanged; a shared rate limit can change the run's results. Terrain's separate filtered stream request is unchanged.
 
 **v11.91 - Authored plan identity and ride-day power basis (2026-10-23, sync.py v3.156):**
 

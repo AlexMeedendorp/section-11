@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.157 - Shared /streams response per activity per sync run for the intervals
+  detail and session structure, with private filtered copies. 429 and 404/410 are shared;
+  after other transient failures the next consumer may retry once. Pairs with protocol/skill v11.92.
+
 Version 3.156 - Authored plan identity: definition_key v2 over canonical authored
   structure only; %FTP targets on the ride-day FTP basis. Pairs with protocol/skill v11.91.
 
@@ -4585,7 +4589,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.156"
+    VERSION = "3.157"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -5169,12 +5173,62 @@ class IntervalsSync:
                                           network, timeout, parse error,
                                           unexpected response shape
 
+        Within one sync run (v3.157) a successful /streams response is requested
+        once per activity and reused by every consumer, each filtering its own
+        stream types from a private copy. A 429 with its Retry-After and a 404/410
+        are shared too; after any other transient failure the next consumer may
+        request once more, and that second result is then shared.
+
         Note on cache invalidation: streams are fetched once per activity. If the
         underlying FIT is reprocessed in AlphaHRV's mobile app and re-uploaded,
         the cached rollup will be stale. Rare in practice; workaround is to delete
         intervals.json.
         """
         self._last_retry_after_secs = None
+        memo = getattr(self, "_stream_responses", None)
+        if not isinstance(memo, dict):
+            memo = self._stream_responses = {}
+        entry = memo.get(activity_id)
+        if entry is None or (entry[2] < 2 and self._stream_failure_retryable(entry[0])):
+            attempts = 1 if entry is None else entry[2] + 1
+            result = self._request_activity_streams(activity_id)
+            entry = (result, self._last_retry_after_secs, attempts)
+            memo[activity_id] = entry
+        (kind, value), retry_after, _attempts = entry
+        self._last_retry_after_secs = retry_after
+        if kind != "data":
+            return value
+        wanted = set(types)
+        out = {}
+        for s in value:
+            stype = s.get("type")
+            if stype in wanted:
+                sdata = s.get("data")
+                if isinstance(sdata, list):
+                    out[stype] = list(sdata)
+        if not out:
+            return ("no_data", {})
+        return ("ok", out)
+
+    @staticmethod
+    def _stream_failure_retryable(result: tuple) -> bool:
+        """True for a transient /streams failure other than 429 (v3.157).
+
+        A rate limit is shared so nobody asks again in the same run, and 404/410
+        are definitive. After a timeout, network, server or malformed response the
+        next consumer may try once more; that second result is then shared.
+        """
+        kind, value = result
+        return kind == "result" and value[0] == "transient" and value[1] != "http_429"
+
+    def _request_activity_streams(self, activity_id: str) -> tuple:
+        """
+        Make the single /streams request for one activity.
+
+        Returns ("data", stream_list) for a 200 list response, otherwise
+        ("result", (status, payload)) using _fetch_activity_streams' statuses.
+        Sets _last_retry_after_secs on 429.
+        """
         url = f"{self.INTERVALS_BASE_URL}/activity/{activity_id}/streams"
         headers = {
             "Authorization": f"Basic {self.intervals_auth}",
@@ -5183,31 +5237,21 @@ class IntervalsSync:
         try:
             response = requests.get(url, headers=headers, timeout=30)
         except requests.exceptions.Timeout:
-            return ("transient", "timeout")
+            return ("result", ("transient", "timeout"))
         except requests.exceptions.RequestException as e:
-            return ("transient", f"network: {str(e)[:80]}")
+            return ("result", ("transient", f"network: {str(e)[:80]}"))
 
         status_code = response.status_code
         if status_code == 200:
             try:
                 data = response.json()
             except ValueError:
-                return ("transient", "parse_error")
+                return ("result", ("transient", "parse_error"))
             if not isinstance(data, list):
-                return ("transient", "unexpected_shape")
-            wanted = set(types)
-            out = {}
-            for s in data:
-                stype = s.get("type")
-                if stype in wanted:
-                    sdata = s.get("data")
-                    if isinstance(sdata, list):
-                        out[stype] = sdata
-            if not out:
-                return ("no_data", {})
-            return ("ok", out)
+                return ("result", ("transient", "unexpected_shape"))
+            return ("data", data)
         elif status_code in (404, 410):
-            return ("terminal_error", f"http_{status_code}")
+            return ("result", ("terminal_error", f"http_{status_code}"))
         else:
             # Conservative: all other non-2xx (incl. 401/403/5xx/429) treated as
             # transient. Better to retry than permanently cache an auth/config flake.
@@ -5215,7 +5259,7 @@ class IntervalsSync:
             if status_code == 429:
                 self._last_retry_after_secs = self._parse_retry_after(
                     response.headers.get("Retry-After"))
-            return ("transient", f"http_{status_code}")
+            return ("result", ("transient", f"http_{status_code}"))
 
     def _fetch_terrain_streams(self, activity_id: str) -> tuple:
         """
@@ -9444,6 +9488,8 @@ class IntervalsSync:
     
     def collect_training_data(self, days_back: int = 7) -> Dict:
         """Collect all training data for LLM analysis"""
+        # v3.157: stream responses are reused only within this sync run.
+        self._stream_responses = {}
         # Extended range for ACWR calculation (need 28 days minimum)
         days_for_acwr = 28
         oldest_extended = (datetime.now() - timedelta(days=days_for_acwr - 1)).strftime("%Y-%m-%d")
