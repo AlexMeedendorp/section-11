@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.154 - Multi-night sleep context: 28-night median reference against the seven
+  recent nights from one widened 35-date wellness read; existing consumers keep 28 dates.
+  Low confidence, never readiness. Pairs with protocol/skill v11.89.
+
 Version 3.153 - Live Deload from day-aligned executed load against the same weekdays
   of the prior three weeks, restored next-week rebound confidence and week-phrase name
   support (low to medium only). Pairs with protocol/skill v11.88.
@@ -4574,7 +4578,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.153"
+    VERSION = "3.154"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -9508,8 +9512,15 @@ class IntervalsSync:
         print("Fetching wellness data...")
         wellness = self._intervals_get("wellness", {"oldest": oldest_display, "newest": newest})
         
-        # Extended wellness for baselines (use full 28 days if available)
-        wellness_extended = self._intervals_get("wellness", {"oldest": oldest_extended, "newest": newest})
+        # One fresh 35-date read for sleep context. Every existing consumer keeps
+        # its exact 28-date input, in source order, including duplicate rows.
+        oldest_sleep = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=34)).strftime("%Y-%m-%d")
+        wellness_sleep = self._intervals_get("wellness", {"oldest": oldest_sleep, "newest": newest})
+        sleep_context = self._build_sleep_context(
+            wellness_sleep, today, athlete.get("timezone"), datetime.now(timezone.utc))
+        wellness_extended = [w for w in wellness_sleep if isinstance(w, dict)
+                             and isinstance(w.get("id"), str)
+                             and oldest_extended <= w["id"] <= newest]
         
         # Fetch today's wellness for live estimates (eFTP, W', P-max, VO2max, etc.)
         print("Fetching today's wellness (eFTP, W', P-max, VO2max)...")
@@ -9855,6 +9866,16 @@ class IntervalsSync:
                 "display_formatting": "For durations and sleep, always display the '_formatted' fields (e.g., sleep_formatted, duration_formatted, total_training_formatted) instead of converting decimal '_hours' values. The formatted fields are pre-calculated from raw seconds and avoid rounding errors.",
                 "data_period": f"Last {days_back} days (including today)",
                 "extended_data_note": f"ACWR and baselines calculated from {days_for_acwr} days of data",
+                "sleep_context_note": (
+                    "Read top-level sleep_context for descriptive multi-night sleep context. "
+                    "Fresh 35-date wellness read; disjoint 28-night median plus seven dated nights. "
+                    "repeat_context requires the latest three nights each strictly below that median "
+                    "and their combined difference >=3600 seconds. Read status, reason, dates, "
+                    "coverage and source_updated_at; unknown timezone or date mismatch is unavailable. "
+                    "Use supplied formatted durations. Low confidence, not sleep debt or a readiness "
+                    "signal; never add it to counts, P0/P1 or Go/Modify/Skip. Fragmentation comes only "
+                    "from explicit dated athlete statements in the current conversation, never sync."
+                ),
                 "dfa_drift_note": (
                     "DFA drift uses original_index_thirds_v1 in intervals schema 2. Read drift_quality "
                     "and quality.coverage_by_third in detailed blocks, summaries and latest_session. "
@@ -9905,6 +9926,7 @@ class IntervalsSync:
             "athlete_notes": athlete_notes,
             "alerts": alerts,
             "readiness_decision": readiness_decision,
+            "sleep_context": sleep_context,
             "health_context": health_context,
             "history": history_info,
             "summary": self._compute_activity_summary(activities_display, days_back, athlete_units),
@@ -10013,6 +10035,138 @@ class IntervalsSync:
             data["current_status"]["weight"] = weight_signal
 
         return data
+
+    def _build_sleep_context(self, wellness, as_of_date, timezone_name, source_updated_at):
+        """Bounded context from raw wellness seconds; never a readiness input.
+
+        Keep original wellness date labels. The existing sync clock supplies D;
+        withhold comparison if its date is not current in the athlete's zone.
+        No history/latest carry-forward, imputation, or fragmentation inference.
+        """
+        day = datetime.strptime(as_of_date, "%Y-%m-%d")
+        dates = [(day - timedelta(days=i)).strftime("%Y-%m-%d")
+                 for i in range(34, -1, -1)]
+        alignment_reason = None
+        zone = None
+        try:
+            if not isinstance(timezone_name, str) or not timezone_name:
+                raise ValueError("missing timezone")
+            zone = ZoneInfo(timezone_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            alignment_reason = "unknown_timezone"
+        if source_updated_at.tzinfo is None or source_updated_at.utcoffset() is None:
+            alignment_reason = alignment_reason or "unknown_date_alignment"
+        elif zone is not None and source_updated_at.astimezone(zone).strftime("%Y-%m-%d") != as_of_date:
+            alignment_reason = "current_date_mismatch"
+
+        rows = defaultdict(list)
+        input_reason = None
+        if not isinstance(wellness, list):
+            input_reason = "source_unavailable" if wellness is None else "invalid_input"
+            wellness = []
+        for row in wellness:
+            date = row.get("id") if isinstance(row, dict) else None
+            try:
+                if not isinstance(date, str) or datetime.strptime(date, "%Y-%m-%d").strftime("%Y-%m-%d") != date:
+                    raise ValueError("invalid wellness date")
+            except ValueError:
+                input_reason = "invalid_input"
+                continue
+            if dates[0] <= date <= dates[-1]:
+                rows[date].append(row)
+
+        def duration_fields(seconds, prefix):
+            return {prefix + "_seconds": seconds,
+                    prefix + "_hours": round(seconds / 3600, 2) if seconds is not None else None,
+                    prefix + "_formatted": self._format_duration(int(seconds) // 60 * 60)
+                    if seconds is not None else None}
+
+        nights = []
+        for date in dates:
+            matches = rows[date]
+            seconds, reason = None, None
+            if len(matches) > 1:
+                reason = "ambiguous_duplicate"
+            elif matches:
+                value = matches[0].get("sleepSecs")
+                if value is None:
+                    reason = "missing_duration"
+                elif type(value) not in (int, float):
+                    reason = "nonnumeric_duration"
+                elif type(value) is float and not math.isfinite(value):
+                    reason = "nonfinite_duration"
+                elif not 0 < value <= 86400:
+                    reason = "out_of_range_duration"
+                else:
+                    seconds = value
+            nights.append({"date": date, **duration_fields(seconds, "sleep"),
+                           "status": "invalid" if reason else "observed" if matches else "missing",
+                           "reason": reason})
+
+        def coverage(part):
+            return {"start": part[0]["date"], "end": part[-1]["date"],
+                    "observed_nights": sum(n["status"] == "observed" for n in part),
+                    "expected_nights": len(part),
+                    "missing_dates": [n["date"] for n in part if n["status"] == "missing"],
+                    "invalid_dates": [{"date": n["date"], "reason": n["reason"]}
+                                      for n in part if n["status"] == "invalid"]}
+
+        reference_nights, recent_nights = nights[:28], nights[28:]
+        reference, recent = coverage(reference_nights), coverage(recent_nights)
+        median = (statistics.median(n["sleep_seconds"] for n in reference_nights)
+                  if reference["observed_nights"] == 28 else None)
+        reference.update(duration_fields(median, "median"))
+        comparable = median is not None and not (alignment_reason or input_reason)
+        for night in recent_nights:
+            night["below_reference"] = (night["sleep_seconds"] < median
+                if comparable and night["status"] == "observed" else None)
+        recent["nights"] = recent_nights
+        recent["below_reference_nights"] = (sum(n["below_reference"] is True for n in recent_nights)
+                                             if comparable else None)
+        mean = (statistics.mean(n["sleep_seconds"] for n in recent_nights)
+                if recent["observed_nights"] == 7 else None)
+        recent.update(duration_fields(mean, "mean"))
+        latest_three = recent_nights[-3:]
+        latest_complete = all(n["status"] == "observed" for n in latest_three)
+        repeat, run, boundary, difference = None, None, None, None
+        run_dates = []
+        if comparable and latest_complete:
+            difference = sum(median - n["sleep_seconds"] for n in latest_three)
+            repeat = all(n["below_reference"] for n in latest_three) and difference >= 3600
+            run = 0
+            for night in reversed(recent_nights):
+                if night["status"] != "observed":
+                    boundary = night["status"]
+                    break
+                if not night["below_reference"]:
+                    boundary = "observed_not_below"
+                    break
+                run += 1
+                run_dates.insert(0, night["date"])
+            if run == 7:
+                boundary = "window_start"
+        recent.update({"latest_three_difference_sum_seconds": difference,
+                       "consecutive_observed_below_reference": run,
+                       "run_formatted": "at least 7" if run == 7 else str(run) if run is not None else None,
+                       "run_dates": run_dates, "run_boundary": boundary})
+        reason = alignment_reason or input_reason
+        if reason is None and median is None:
+            reason = "incomplete_reference"
+        if reason is None and not latest_complete:
+            reason = "incomplete_latest_three"
+        status = "not_assessed" if reason else "assessed"
+        if reason is None and recent["observed_nights"] < 7:
+            status, reason = "partial_recent", "partial_recent_window"
+        return {"schema_version": 1,
+                "calculation_version": "disjoint_28d_median_latest3_3600s_v1",
+                "as_of_date": as_of_date,
+                "timezone": {"value": timezone_name if isinstance(timezone_name, str) else None,
+                             "source": "athlete_timezone" if zone is not None else "unknown"},
+                "source_updated_at": source_updated_at.isoformat(),
+                "source": "Intervals.icu wellness.sleepSecs",
+                "status": status, "reason": reason, "confidence": "low",
+                "readiness_eligible": False, "reference": reference,
+                "recent": recent, "repeat_context": repeat}
 
     def _build_sport_thresholds(self, athlete: dict) -> dict:
         """

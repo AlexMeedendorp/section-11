@@ -21,6 +21,8 @@ For always-fresh data (agentic coaches, heartbeat checks), a machine that stays 
 
 ### How the AI reads your data
 
+Each successful updated sync produces `latest.json.sleep_context` from one fresh 35-date wellness window (D−34..D); existing baselines and reports still use their original 28-date slice. No new file, sleep cache or state must persist between runs, and no history refresh is needed for this field. The AI discovers it through `READ_THIS_FIRST.sleep_context_note` in the same latest export. It is low-confidence context only, with explicit coverage and unavailable states, never a readiness signal. An unknown athlete timezone or current-date mismatch withholds comparison. See [Multi-night sleep context](../../SECTION_11.md#recovery-metrics-integration-hrv--rhr--sleep--feel).
+
 - **Agentic platforms** (OpenClaw, Claude Code, Cowork, Codex CLI, Gemini CLI, Hermes): read files directly from whatever filesystem their runtime can reach. Where that runtime is this machine, it is the simplest path. Some run on a provider-hosted computer instead, which cannot see your data directory; check before assuming.
 - **Sessions with no runtime filesystem** (ChatGPT, Gemini, Perplexity and similar chat apps): sync.py writes to a cloud-synced folder (Google Drive, OneDrive, Dropbox), and the AI reads via its connector. Your computer or server does the syncing; the AI just reads the result. A provider-hosted agentic runtime uses the same bridge for the same reason. Note: cloud connector support for `.json` varies by platform; see the [connector table](../../README.md#platform-setup).
 
