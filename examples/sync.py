@@ -4,6 +4,9 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.156 - Authored plan identity: definition_key v2 over canonical authored
+  structure only; %FTP targets on the ride-day FTP basis. Pairs with protocol/skill v11.91.
+
 Version 3.155 - Short bout and sprint adherence: per-bout rows for compressed sets,
   adherence rows for short steps and peak-window sprint evidence in 14-day detail.
   Pairs with protocol/skill v11.90.
@@ -4582,7 +4585,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.155"
+    VERSION = "3.156"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -15819,6 +15822,8 @@ class IntervalsSync:
     STRUCTURE_VERSION = 5
     STRUCTURE_MAX_STEPS = 20
     STRUCTURE_MAX_EFFORTS = 8
+    PLAN_KEY_VERSION = 2
+    STRUCTURE_FTP_UNITS = ("%", "%ftp", "percent_ftp")
 
     @staticmethod
     def _structure_number(value):
@@ -15912,8 +15917,9 @@ class IntervalsSync:
                 "duration": self._plan_duration_check((reference or {}).get("duration_s"), act.get("moving_time")),
                 "targets_intensity": self._plan_targets_intensity(event, act)
                     if "reference" in intent else None,
-                "definition_key": self._structure_fingerprint(event.get("workout_doc"))
-                    if "reference" in intent else None}
+                "definition_key": self._plan_definition_key(event.get("workout_doc"))
+                    if "reference" in intent else None,
+                "definition_key_version": self.PLAN_KEY_VERSION}
 
     @staticmethod
     def _structure_date(value):
@@ -15927,6 +15933,71 @@ class IntervalsSync:
     def _structure_fingerprint(value):
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                                          default=str).encode()).hexdigest()
+
+    def _plan_definition_key(self, doc):
+        """Hash authored numeric structure, never endpoint-resolved settings.
+
+        Preserve array order and nested repetitions. A key is not an archive
+        of coaching text, roles or essential secondary instructions.
+        """
+        if not isinstance(doc, dict) or not isinstance(doc.get("steps"), list):
+            return None
+        count = 0
+
+        def scalar(value):
+            if value is None or isinstance(value, (str, bool)):
+                return value
+            if self._structure_number(value):
+                return int(value) if value == int(value) else value
+            raise ValueError("Invalid definition scalar")
+
+        def step(value, depth=0):
+            nonlocal count
+            count += 1
+            if count > 10000 or depth > 64 or not isinstance(value, dict):
+                raise ValueError("Invalid or oversized definition")
+            result = {k: scalar(value[k]) for k in
+                      ("duration", "distance", "reps", "repeat", "ramp") if k in value}
+            for kind in ("power", "hr", "pace", "cadence"):
+                if kind in value:
+                    target = value[kind]
+                    result[kind] = ({k: scalar(target[k]) for k in
+                                     ("value", "start", "end", "min", "max", "units", "zone", "ramp")
+                                     if k in target} if isinstance(target, dict) else scalar(target))
+            if "steps" in value:
+                if not isinstance(value["steps"], list):
+                    raise ValueError("Invalid nested steps")
+                result["steps"] = [step(child, depth + 1) for child in value["steps"]]
+            return result
+
+        try:
+            canonical = {"steps": [step(s) for s in doc["steps"]]}
+            if "duration" in doc:
+                canonical["duration"] = scalar(doc["duration"])
+            return self._structure_fingerprint(canonical)
+        except (ValueError, RecursionError):
+            return None
+
+    def _structure_ftp_basis(self, act):
+        """Ride-specific FTP, then same-environment history at the local date."""
+        ftp = act.get("icu_ftp")
+        if self._structure_number(ftp) and ftp > 0:
+            return {"source": "activity.icu_ftp", "ftp": ftp}
+        indoor = self._fact_indoor(act)
+        date = self._fact_date(act.get("start_date_local"))
+        if indoor is not None and date and getattr(self, "data_dir", None) is not None:
+            environment = "indoor" if indoor else "outdoor"
+            history = self._load_ftp_history()
+            entries = history.get(environment) if isinstance(history, dict) else None
+            if isinstance(entries, dict):
+                eligible = [d for d, value in entries.items()
+                            if self._fact_date(d) == d and d <= date
+                            and self._structure_number(value) and value > 0]
+                if eligible:
+                    at = max(eligible)
+                    return {"source": "ftp_history", "ftp": entries[at],
+                            "environment": environment, "date": at}
+        return {"source": "intervals_resolved"}
 
     def _structure_plan(self, act, event, reason=None):
         """Normalize paired intent for computation; never emit raw definitions."""
@@ -15968,6 +16039,21 @@ class IntervalsSync:
                 if (isinstance(prescribed, dict)
                         and prescribed.get("units") not in self.SUMMARY_WATT_UNITS):
                     target = step.get("_power")
+                    if str(prescribed.get("units", "")).lower() in self.STRUCTURE_FTP_UNITS:
+                        if "power_target_basis" not in plan:
+                            basis = self._structure_ftp_basis(act)
+                            resolved_ftp = doc.get("ftp")
+                            if ("ftp" in basis and self._structure_number(resolved_ftp)
+                                    and resolved_ftp > 0 and resolved_ftp != basis["ftp"]):
+                                basis["plan_ftp"] = resolved_ftp
+                            plan["power_target_basis"] = basis
+                        ftp = plan["power_target_basis"].get("ftp")
+                        if ftp is not None:
+                            # Preserve own ranges; resolved start/end is only a band.
+                            target = {k: prescribed[k] * ftp / 100
+                                      if self._structure_number(prescribed[k]) else None
+                                      for k in ("value", "min", "max") if k in prescribed}
+                            target["units"] = "w"
                 allowed = {"duration", "power", "_power", "hr", "_hr", "cadence", "_cadence",
                            "text", "description", "role", "ramp"}
                 if self._structure_number(duration) and 1 <= duration <= 604800:
@@ -16217,6 +16303,8 @@ class IntervalsSync:
                "status": "unknown"}
         if "reference" in plan:
             out["plan"] = plan["reference"]
+        if "power_target_basis" in plan:
+            out["power_target_basis"] = plan["power_target_basis"]
         if plan["steps"]:
             out["steps"] = plan["steps"]
         if plan.get("omitted_steps"):
@@ -16430,6 +16518,10 @@ class IntervalsSync:
             entry = interval_map.get(aid) or {}
             old = entry.get("session_structure") or {}
             cache = old.get("cache") or {}
+            old_basis = old.get("power_target_basis")
+            basis = self._structure_ftp_basis(act) if old_basis else None
+            basis_matches = not old_basis or {k: v for k, v in old_basis.items()
+                                              if k != "plan_ftp"} == basis
             activity_key = self._structure_fingerprint({k: act.get(k) for k in
                 ("id", "paired_event_id", "start_date", "elapsed_time", "moving_time", "icu_sync_date",
                  "icu_intervals_edited", "icu_average_watts", "icu_joules", "workout_shift_secs",
@@ -16437,6 +16529,7 @@ class IntervalsSync:
             event_key = self._structure_fingerprint(matches) if matches else None
             due = self._structure_date(cache.get("next_refresh_at"))
             if (old.get("version") == self.STRUCTURE_VERSION and cache.get("activity_key") == activity_key
+                    and cache.get("plan_key_version") == self.PLAN_KEY_VERSION and basis_matches
                 and (old.get("method") != "paired_plan_windows" or old.get("bout_metrics_version") == 4)
                     and cache.get("event_key") == event_key and due and now < due):
                 result[aid] = old
@@ -16456,7 +16549,7 @@ class IntervalsSync:
                         retry_after = self._parse_retry_after(response.headers.get("Retry-After")) or 0
                 if reason:
                     failures.append(reason)
-            plan_key = self._structure_fingerprint(event.get("workout_doc")) if isinstance(event, dict) else None
+            plan_key = self._plan_definition_key(event.get("workout_doc")) if isinstance(event, dict) else None
             status, streams = self._fetch_activity_streams(aid, ["time", "watts", "heartrate", "cadence"])
             retry_after = max(retry_after, getattr(self, "_last_retry_after_secs", None) or 0)
             if status != "ok":
@@ -16500,7 +16593,9 @@ class IntervalsSync:
             attempts = min(3, int(cache.get("failures", 0)) + 1) if failures else 0
             delay = max((3600, 21600, 86400)[attempts - 1], retry_after) if failures else 86400
             block["cache"] = {"activity_key": activity_key, "event_key": event_key,
-                              "plan_key": plan_key or cache.get("plan_key"),
+                              "plan_key": plan_key or (cache.get("plan_key")
+                                  if cache.get("plan_key_version") == self.PLAN_KEY_VERSION else None),
+                              "plan_key_version": self.PLAN_KEY_VERSION,
                               "sampled_at": cache.get("sampled_at") if status != "ok" else now.isoformat(),
                               "next_refresh_at": (now + timedelta(seconds=delay)).isoformat()}
             if failures:
@@ -16712,6 +16807,9 @@ class IntervalsSync:
                     and (structure.get("cache") or {}).get("status") not in ("stale", "unavailable")):
                 pairing["plan"] = dict(structure["plan"])
                 pairing["duration"] = self._plan_duration_check(pairing["plan"].get("duration_s"), act.get("moving_time"))
+                cache = structure.get("cache") or {}
+                if cache.get("plan_key_version") == self.PLAN_KEY_VERSION:
+                    pairing["definition_key"] = cache.get("plan_key")
             activity["plan_pairing"] = pairing
             activity["z3_time"] = {
                 "power_s": power_zones.get("z3_time"), "hr_s": hr_zones.get("z3_time")}
@@ -16719,7 +16817,8 @@ class IntervalsSync:
             old_plan = summary.get("plan") or {}
             old_pairing = (previous_latest_lookup.get(str(act.get("id"))) or {}).get("plan_pairing") or {}
             same_pair = pairing["paired"] and old_plan.get("event_id") == pairing["plan"]["event_id"]
-            changed = (old_pairing.get("definition_key") is not None
+            changed = (old_pairing.get("definition_key_version") == self.PLAN_KEY_VERSION
+                       and old_pairing.get("definition_key") is not None
                        and pairing.get("definition_key") is not None
                        and old_pairing["definition_key"] != pairing["definition_key"])
             assessed = summary.get("status") in ("followed", "partly_followed", "not_followed")

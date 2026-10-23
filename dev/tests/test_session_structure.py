@@ -507,7 +507,8 @@ class Placement(unittest.TestCase):
         self.assertEqual(set(block["plan"]), {"event_id", "updated", "duration_s", "duration_source"})
         for step in block["steps"]:
             self.assertEqual(set(step), {"target_w", "actual", "match"})
-        self.assertEqual(set(block["cache"]), {"activity_key", "event_key", "plan_key", "sampled_at", "next_refresh_at"})
+        self.assertEqual(set(block["cache"]), {"activity_key", "event_key", "plan_key", "plan_key_version",
+                                             "sampled_at", "next_refresh_at"})
         self.assertEqual(row["structure_summary"], {"method": "plan_match_v2", "status": "followed",
             "plan": {"event_id": "42", "updated": "2026-01-01T09:00:00Z", "duration_s": 300,
                      "duration_source": "workout_doc.duration"},

@@ -668,6 +668,10 @@ class BoutCache(unittest.TestCase):
             self.event["workout_doc"]["steps"][0]["text"] = "changed definition"
             changed = self.prepare(self.previous(rebuilt))
             self.assertEqual(fetch.call_count, 3)
+            self.assertEqual(changed["cache"]["plan_key"], rebuilt["cache"]["plan_key"])
+            self.event["workout_doc"]["steps"][0]["power"]["value"] += 1
+            changed = self.prepare(self.previous(changed))
+            self.assertEqual(fetch.call_count, 4)
             self.assertNotEqual(changed["cache"]["plan_key"], rebuilt["cache"]["plan_key"])
         with mock.patch.object(self.sync, "_fetch_activity_streams", return_value=("transient", "unavailable")):
             stale = self.prepare(self.previous(changed), base.NOW + timedelta(days=1))
