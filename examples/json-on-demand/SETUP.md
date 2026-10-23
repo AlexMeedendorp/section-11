@@ -120,6 +120,8 @@ From now on, just tap **🔄 Sync Now** in your repo's README.
 
 ## Usage
 
+**Calendar naming:** To let the calendar support a deload week, name its sessions with "Deload" or "Recovery week", for example "Recovery week - easy ride". Single recovery rides inside normal weeks are not read as a deload week. Names support the phase assessment; they do not establish it on their own.
+
 ### From your phone
 
 Open your repo in a browser → tap **🔄 Sync Now** → **Run workflow**. When the run completes, download the artifact or refresh, sync, or re-import through your connector as required.

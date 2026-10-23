@@ -118,6 +118,8 @@ With sync 3.146, every data companion lives next to the file selected by `--outp
 
 ## Connect Your Agent
 
+**Calendar naming:** To let the calendar support a deload week, name its sessions with "Deload" or "Recovery week", for example "Recovery week - easy ride". Single recovery rides inside normal weeks are not read as a deload week. Names support the phase assessment; they do not establish it on their own.
+
 Point your agent at `~/training-data/`; this is your data directory. The agent sees personal files (dossier, JSON data) at the root, and the full protocol, templates, and tools in `section11/`.
 
 On platforms where the agent workspace is separate from the data directory (e.g., OpenClaw's workspace is typically `~/clawd/`), set the `Data directory` field in DOSSIER.md so the skill knows where to find files.

@@ -10,7 +10,7 @@ Data updated: [local timestamp]
 
 [One-line summary]
 
-Phase: [current phase and duration]
+Phase now: [current detected phase and supplied duration; state material uncertainty]
 
 **Totals**
 [Sport]: [time, sessions, TSS; one line per sport]

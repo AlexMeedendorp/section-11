@@ -346,6 +346,8 @@ Benchmark Index = (Current FTP - FTP 8 weeks ago) / FTP 8 weeks ago
 
 ## Usage with AI
 
+**Calendar naming:** To let the calendar support a deload week, name its sessions with "Deload" or "Recovery week", for example "Recovery week - easy ride". Single recovery rides inside normal weeks are not read as a deload week. Names support the phase assessment; they do not establish it on their own.
+
 Once set up, configure your AI platform using the instructions in the [main README](../../README.md#web-chat-setup).
 
 **Private repository with a GitHub connector or authenticated repository access (recommended):** If your AI platform has a GitHub connector, connect your data repo directly and ask the AI to read the files by path: `latest.json`, `history.json`, `intervals.json`, `routes.json` and `saved_workouts.json`, plus `ftp_history.json` when needed. It can read any other committed files the same way. No raw URLs are needed. Whether the AI sees new commits automatically, or needs you to refresh, sync or re-import, depends on the platform; see the [connector table](../../README.md#platform-setup). If you commit `DOSSIER.md` and `SECTION_11.md` to the repo as well, one connection covers your data, your dossier and the protocol. Check what the connector is actually scoped to. Where it exposes only the JSON, supply `SECTION_11.md` and the dossier separately.

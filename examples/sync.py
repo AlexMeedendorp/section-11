@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.153 - Live Deload from day-aligned executed load against the same weekdays
+  of the prior three weeks, restored next-week rebound confidence and week-phrase name
+  support (low to medium only). Pairs with protocol/skill v11.88.
+
 Version 3.152 - Cached, bounded activity power-vs-hr detail with measured halves
   and qualified paired-plan power context. Existing durability gates/means stay.
   Pairs with protocol/skill v11.86 and structured-work Sweetspot report guidance.
@@ -4570,7 +4574,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.152"
+    VERSION = "3.153"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -9867,7 +9871,7 @@ class IntervalsSync:
                     "strictly below -0.2; without that context use descriptive wording. DFA remains "
                     "Tier 2 and never changes readiness, phase progression or configured thresholds."
                 ),
-                "capability_metrics_note": "The 'capability' block in derived_metrics contains durability trend (aggregate decoupling 7d/28d), efficiency factor trend (aggregate EF 7d/28d), HRRc trend (heart rate recovery 7d/28d), TID comparison (7d vs 28d distribution drift), power curve delta (MMP shift at anchor durations across 28d windows — energy system adaptation direction), HR curve delta (max sustained HR shift at anchor durations — cardiac adaptation, cross-sport), sustainability profile (per-sport power/HR sustainability table for race estimation — 42d window, sport-filtered), and DFA a1 profile (per-session non-linear HRV index from AlphaHRV Connect IQ field — latest_session + trailing_by_sport with crossing-band easy_guard / LT1 / LT2 estimates). These measure HOW the athlete expresses fitness, not just load. Use these for coaching context alongside traditional load metrics. Durability and EF trend direction matters more than absolute values. HRRc is display only — higher = better parasympathetic recovery. Power curve delta rotation_index reveals whether gains are sprint-biased (positive) or endurance-biased (negative). HR curve delta is ambiguous — rising max sustained HR may indicate fitness or fatigue; cross-reference with resting HRV/HR and RPE. Sustainability profile provides race estimation lookup: actual MMP, Coggan predicted (cycling only), CP/W' model (cycling only), model_divergence_pct (actual vs CP — divergence IS the coaching signal). CP/W' is primary for durations ≤20min; Coggan duration factors are the established reference for ≥60min. Source flag (observed_outdoor/observed_indoor) matters for cycling race estimation — indoor MMP is typically 3-5% lower. DFA a1 profile: three self-describing markers (each estimate + crossing block carries marker_dfa_a1) — easy_guard (a1 1.0, a conservative easy-state guard, NOT a threshold), lt1 (a1 0.75, HRVT1 / aerobic threshold), lt2 (a1 0.5, HRVT2 / anaerobic threshold). The literature threshold markers (0.75 / 0.5) are cycling-validated only - non-cycling sports get rollups but validated=False. Every estimate requires a SUSTAINED contiguous crossing: each session's easy_guard_crossing / lt1_crossing / lt2_crossing carries a reason (ok / no_samples_in_band / insufficient_total_dwell / no_contiguous_dwell); scattered in-band time does not produce an estimate. v3.122: dwell is not sufficient. Each crossing also carries estimate_eligible / estimate_reason / n_eligible_segments - a1 reflects the prior 200 beats while watts is instantaneous, so a crossing recorded across varying power blends work and recovery into a number that is not usable as a threshold estimate. avg_hr / avg_watts stay populated on a dwell-qualified but estimate-ineligible crossing as descriptive evidence (a dwell-failed crossing has null averages as before); read estimate_eligible, never infer from absence. Compact lt1_/lt2_ summary fields and all trailing rollups consume eligible crossings only. HR is pooled across sessions; watts are split by environment for cycling (watts_outdoor, watts_indoor with per-environment n_sessions) - only lt2 is ever measured against a configured threshold: lt2_estimate.watts_outdoor against current_status.thresholds.sports.cycling.ftp, lt2_estimate.watts_indoor against current_status.thresholds.sports.cycling.ftp_indoor, and pooled lt2_estimate.hr against current_status.thresholds.sports.cycling.lthr. Non-cycling sports keep pooled watts. easy_guard_estimate, lt1_estimate and lt2_estimate are each gated INDEPENDENTLY - null when that marker has fewer than 3 estimate-ELIGIBLE marker-sessions (v3.122 - not merely dwell-qualified; see easy_guard_eligible_sessions / lt1_eligible_sessions / lt2_eligible_sessions alongside the *_crossing_sessions counts, and note that any gap between them means at least one dwell-qualified marker-session was estimate-rejected). An estimate is null whenever minimum estimate-eligible session depth is not met. If at least one eligible session exists, trailing_by_sport.{sport}.easy_guard_reason / lt1_reason / lt2_reason is insufficient_sessions. If none exists, the staged reason identifies the dominant blocker: dwell failure, incomplete coverage, excessive artifacts, non-positive mean power, or non-stationary power. Do NOT read a null estimate as 'the athlete did not sustain that marker' - read the reason. IMPORTANT: easy_guard is a conservative easy-state compliance guard, NOT an LT1/aerobic-threshold estimate - never compare it to the athlete's configured thresholds and never treat it as a calibration or staleness signal. Only lt2 (0.5) has a configured counterpart and can therefore produce a threshold-comparison coaching observation. lt1 (0.75) is descriptive only: no configured LT1 threshold exists to measure it against, so it never produces a delta, though it may motivate a formal retest. lt1 (0.75) populates only on rides that sustain aerobic-threshold intensity, so it is often null on easy/deload riding - that is expected, not a data gap. Sport-level confidence is a coarse orientation string derived from the maximum eligible-session depth across the THRESHOLD markers lt1 and lt2, with easy_guard excluded - it is orientation only and MUST NOT gate any LT2 comparison, which gates on lt2's own eligible-session depth; per-marker estimate presence + reason are authoritative. DFA a1 is a Tier-2 interpretive signal - does NOT enter the readiness P0-P3 ladder, does NOT affect the Phase Progression Check, and never auto-updates the configured thresholds; it surfaces a threshold comparison only from lt2, never from lt1 or easy_guard. Quality gate: refuse to interpret any DFA output when latest_session.sufficient=false. Each lt2 comparison is independently complete only with all three of a non-null estimate value, its own matching depth of at least 4, and a non-null configured comparator: lt2_estimate.hr with lt2_estimate.n_sessions and current_status.thresholds.sports.cycling.lthr; lt2_estimate.watts_outdoor with lt2_estimate.n_sessions_outdoor and .ftp; lt2_estimate.watts_indoor with lt2_estimate.n_sessions_indoor and .ftp_indoor. A missing cycling entry and a null comparator fail completeness identically. Depth in one environment never licenses a comparison in the other. Surface a delta only where a complete comparison differs by more than 5%; otherwise report the empirical estimate descriptively. Report no notable delta only when at least one lt2 comparison is complete and every complete difference is 5% or less. Where no comparison is complete, omit the comparison entirely; never use no notable delta as a substitute for the absence of a valid comparison. easy_guard is NOT gated on confidence (it is excluded from it) - interpret easy_guard_estimate from its own reason / n_sessions / quality when present, but never as a calibration signal. See SECTION_11.md DFA a1 Protocol for full interpretation rules.",
+                "capability_metrics_note": "The 'capability' block in derived_metrics contains durability trend (aggregate decoupling 7d/28d), efficiency factor trend (aggregate EF 7d/28d), HRRc trend (heart rate recovery 7d/28d), TID comparison (7d vs 28d distribution drift), power curve delta (MMP shift at anchor durations across 28d windows — energy system adaptation direction), HR curve delta (max sustained HR shift at anchor durations — cardiac adaptation, cross-sport), sustainability profile (per-sport power/HR sustainability table for race estimation — 42d window, sport-filtered), and DFA a1 profile (per-session non-linear HRV index from AlphaHRV Connect IQ field — latest_session + trailing_by_sport with crossing-band easy_guard / LT1 / LT2 estimates). These measure HOW the athlete expresses fitness, not just load. Use these for coaching context alongside traditional load metrics. Durability and EF trend direction matters more than absolute values. HRRc is display only — higher = better parasympathetic recovery. Power curve delta rotation_index reveals whether gains are sprint-biased (positive) or endurance-biased (negative). HR curve delta is ambiguous — rising max sustained HR may indicate fitness or fatigue; cross-reference with resting HRV/HR and RPE. Sustainability profile provides race estimation lookup: actual MMP, Coggan predicted (cycling only), CP/W' model (cycling only), model_divergence_pct (actual vs CP — divergence IS the coaching signal). CP/W' is primary for durations ≤20min; Coggan duration factors are the established reference for ≥60min. Source flag (observed_outdoor/observed_indoor) matters for cycling race estimation — indoor MMP is typically 3-5% lower. DFA a1 profile: three self-describing markers (each estimate + crossing block carries marker_dfa_a1) — easy_guard (a1 1.0, a conservative easy-state guard, NOT a threshold), lt1 (a1 0.75, HRVT1 / aerobic threshold), lt2 (a1 0.5, HRVT2 / anaerobic threshold). The literature threshold markers (0.75 / 0.5) are cycling-validated only - non-cycling sports get rollups but validated=False. Every estimate requires a SUSTAINED contiguous crossing: each session's easy_guard_crossing / lt1_crossing / lt2_crossing carries a reason (ok / no_samples_in_band / insufficient_total_dwell / no_contiguous_dwell); scattered in-band time does not produce an estimate. v3.122: dwell is not sufficient. Each crossing also carries estimate_eligible / estimate_reason / n_eligible_segments - a1 reflects the prior 200 beats while watts is instantaneous, so a crossing recorded across varying power blends work and recovery into a number that is not usable as a threshold estimate. avg_hr / avg_watts stay populated on a dwell-qualified but estimate-ineligible crossing as descriptive evidence (a dwell-failed crossing has null averages as before); read estimate_eligible, never infer from absence. Compact lt1_/lt2_ summary fields and all trailing rollups consume eligible crossings only. HR is pooled across sessions; watts are split by environment for cycling (watts_outdoor, watts_indoor with per-environment n_sessions) - only lt2 is ever measured against a configured threshold: lt2_estimate.watts_outdoor against current_status.thresholds.sports.cycling.ftp, lt2_estimate.watts_indoor against current_status.thresholds.sports.cycling.ftp_indoor, and pooled lt2_estimate.hr against current_status.thresholds.sports.cycling.lthr. Non-cycling sports keep pooled watts. easy_guard_estimate, lt1_estimate and lt2_estimate are each gated INDEPENDENTLY - null when that marker has fewer than 3 estimate-ELIGIBLE marker-sessions (v3.122 - not merely dwell-qualified; see easy_guard_eligible_sessions / lt1_eligible_sessions / lt2_eligible_sessions alongside the *_crossing_sessions counts, and note that any gap between them means at least one dwell-qualified marker-session was estimate-rejected). An estimate is null whenever minimum estimate-eligible session depth is not met. If at least one eligible session exists, trailing_by_sport.{sport}.easy_guard_reason / lt1_reason / lt2_reason is insufficient_sessions. If none exists, the staged reason identifies the dominant blocker: dwell failure, incomplete coverage, excessive artifacts, non-positive mean power, or non-stationary power. Do NOT read a null estimate as 'the athlete did not sustain that marker' - read the reason. IMPORTANT: easy_guard is a conservative easy-state compliance guard, NOT an LT1/aerobic-threshold estimate - never compare it to the athlete's configured thresholds and never treat it as a calibration or staleness signal. Only lt2 (0.5) has a configured counterpart and can therefore produce a threshold-comparison coaching observation. lt1 (0.75) is descriptive only: no configured LT1 threshold exists to measure it against, so it never produces a delta, though it may motivate a formal retest. lt1 (0.75) populates only on rides that sustain aerobic-threshold intensity, so it is often null on easy/deload riding - that is expected, not a data gap. Sport-level confidence is a coarse orientation string derived from the maximum eligible-session depth across the THRESHOLD markers lt1 and lt2, with easy_guard excluded - it is orientation only and MUST NOT gate any LT2 comparison, which gates on lt2's own eligible-session depth; per-marker estimate presence + reason are authoritative. DFA a1 is a Tier-2 interpretive signal - does NOT enter the readiness P0-P3 ladder, does NOT classify training phase or establish phase progression, and never auto-updates the configured thresholds; it surfaces a threshold comparison only from lt2, never from lt1 or easy_guard. Quality gate: refuse to interpret any DFA output when latest_session.sufficient=false. Each lt2 comparison is independently complete only with all three of a non-null estimate value, its own matching depth of at least 4, and a non-null configured comparator: lt2_estimate.hr with lt2_estimate.n_sessions and current_status.thresholds.sports.cycling.lthr; lt2_estimate.watts_outdoor with lt2_estimate.n_sessions_outdoor and .ftp; lt2_estimate.watts_indoor with lt2_estimate.n_sessions_indoor and .ftp_indoor. A missing cycling entry and a null comparator fail completeness identically. Depth in one environment never licenses a comparison in the other. Surface a delta only where a complete comparison differs by more than 5%; otherwise report the empirical estimate descriptively. Report no notable delta only when at least one lt2 comparison is complete and every complete difference is 5% or less. Where no comparison is complete, omit the comparison entirely; never use no notable delta as a substitute for the absence of a valid comparison. easy_guard is NOT gated on confidence (it is excluded from it) - interpret easy_guard_estimate from its own reason / n_sessions / quality when present, but never as a calibration signal. See SECTION_11.md DFA a1 Protocol for full interpretation rules.",
                 "readiness_decision_note": "The 'readiness_decision' block contains a pre-computed go/modify/skip recommendation with priority level (P0=safety, P1=overload, P2=fatigue, P3=green), individual signal statuses, phase-adjusted thresholds, and structured modification guidance. Use this as the baseline for pre-workout recommendations. Override only under the override rules in SECTION_11.md (Feel/RPE Override): athlete-reported state escalates unconditionally, de-escalation is P2-only, P0/P1 are not overridable. signals.acwr is the START-OF-DAY value from derived_metrics.acwr_start_of_day - the same 7d/28d windows with today's activities excluded - so it does not move when a workout is completed today. derived_metrics.acwr stays live and today-inclusive: retrospective load context only (acwr_readiness_eligible false), never used to approve, modify or veto a later same-day session or tomorrow's. Tomorrow is decided from tomorrow morning's readiness output, whose start-of-day value will include today's training. ACWR alone no longer forces P1 - a Skip needs start-of-day ACWR >= 1.5 plus a corroborating Tier-1 signal, and uncorroborated ACWR counts as an ordinary P2 amber/red. signals.hrv may carry an optional reason: 'rmssd_missing_sdnn_available' means the latest wellness record has no usable rMSSD but does carry SDNN. SDNN is a different metric and is explanatory metadata only - never a readiness input, never treated as HRV. Report HRV as unavailable and name the cause.",
                 "health_context_note": "The 'health_context' block carries athlete-reported illness and injury markers. It is CONTEXT, NOT a readiness input - readiness_decision is physiological only and can legitimately read 'go' while clarification_required is true. Calendar markers are matched on the canonical Intervals.icu category (SICK / INJURED), never on the event title. end_date is already converted to the INCLUSIVE last CALENDAR-MARKED day (not the last day the athlete was unwell); Intervals stores an exclusive end. IMPORTANT: end_date_local is the end of the calendar MARKING, not evidence that the illness or injury ended - illness is normally marked for the current day because recovery cannot be predicted. There is deliberately no 'active' field, because a false value would read as 'recovered'. Read marker_active (a marker spans today), recent_marker (a marker ended within recent_window_days and none spans today - recovery status UNKNOWN), and clarification_required. When clarification_required is true, do not give an unqualified full-program recommendation: acknowledge a current marker and establish severity; after a recent marker, ask whether the athlete has recovered rather than assuming it; this escalates only and is never grounds to relax an existing Skip, and never by itself an automatic Skip. wellness_injury is the CURRENT value only (the full series is in wellness_data[].injury and history.json daily_90d[].injury) and contributes to clarification_required only when freshness is 'current' and value >= 3; a 'stale' value is visible context that triggers nothing. source_status 'partial' means the dedicated health fetch failed and the block was built from the narrower main event fetch - marker_active and recent_marker are OMITTED in that case because they were not established, an empty current/recent list is NOT evidence of no marker, and clarification_required stays true. A span beginning before lookback_days is not visible; absence is never proof of no illness.",
                 "zone_preference": self.zone_preference if self.zone_preference else "default (power preferred, HR fallback)",
@@ -10261,8 +10265,6 @@ class IntervalsSync:
         """
         
         # Defaults for phase detection inputs
-        if formatted_planned_workouts is None:
-            formatted_planned_workouts = []
         if race_calendar is None:
             race_calendar = {"next_race": None, "all_races": [], "taper_alert": {"active": False}, "race_week": {"active": False}}
         
@@ -10536,7 +10538,7 @@ class IntervalsSync:
         weekly_rows = []
         for ws, we in week_boundaries:
             week_acts = [a for a in activities_28d
-                         if ws <= (a.get("start_date_local", "")[:10]) <= we]
+                         if ws <= (a.get("start_date_local", "")[:10]) <= min(we, today)]
             
             w_tss = sum((a.get("icu_training_load", 0) or 0) for a in week_acts)
             w_primary_tss = sum(
@@ -10607,13 +10609,29 @@ class IntervalsSync:
         if len(weekly_rows) >= 2:
             previous_phase = weekly_rows[-2].get("phase_detected")
         
+        # Exact current-snapshot pairing only. A calendar edit is not evidence
+        # of the prescription at completion; use identity solely to exclude
+        # already-executed events from prospective phase features.
+        observed_acts = [a for a in activities_28d
+                         if week_boundaries[0][0] <= (a.get("start_date_local") or "")[:10] <= today]
+        observed_ids = {str(a["id"]) for a in observed_acts if a.get("id") is not None}
+        completed_event_ids = {str(a["paired_event_id"]) for a in observed_acts
+                               if a.get("paired_event_id") is not None}
+        completed_event_ids.update(
+            str(e["id"]) for e in (past_events or [])
+            if e.get("id") is not None and e.get("paired_activity_id") is not None
+            and str(e["paired_activity_id"]) in observed_ids
+        )
         phase_result = self._detect_phase_v2(
             weekly_rows=weekly_rows,
             planned_workouts=formatted_planned_workouts,
             race_calendar=race_calendar,
             previous_phase=previous_phase,
             today=today,
-            primary_sport=primary_sport
+            primary_sport=primary_sport,
+            completed_event_ids=completed_event_ids,
+            completed_activities=observed_acts,
+            current_week_events=past_events
         )
         phase_detected = phase_result["phase"]
         
@@ -12562,12 +12580,96 @@ class IntervalsSync:
         }
 
     # === PHASE DETECTION v2 (dual-stream, spec-driven) ===
+
+    # Two inclusive local dates are the earliest useful span in the supplied
+    # daily replay. This is an EOD calibration, not an intraday completeness claim.
+    PHASE_MIN_ELAPSED_DAYS = 2
+
+    def _phase_current_evidence(self, activities, events, plans, weekly_rows,
+                                today, primary_sport):
+        """Matched-sport execution over equal weekday spans; names support only."""
+        as_of = datetime.strptime(today, "%Y-%m-%d")
+        start = as_of - timedelta(days=(as_of.weekday() - self.week_start_day) % 7)
+        span = (as_of - start).days + 1
+        start_str = start.strftime("%Y-%m-%d")
+        end_str = (start + timedelta(days=6)).strftime("%Y-%m-%d")
+        prior_starts = [(start - timedelta(weeks=i)).strftime("%Y-%m-%d") for i in (1, 2, 3)]
+        result = {
+            "sport_scope": primary_sport,
+            "elapsed_days": span,
+            "minimum_elapsed_days": self.PHASE_MIN_ELAPSED_DAYS,
+            "observation_cutoff": today,
+            "reference_weeks": list(reversed(prior_starts)),
+            "completed_tss": None,
+            "reference_tss_mean": None,
+            "tss_delta": None,
+            "missing_tss": 0,
+            "status": "unavailable",
+            "name_support": {"keyword": "deload",
+                             "week_phrases": ["recovery week", "rest week", "deload week"],
+                             "planned_events": 0, "completed_activities": 0},
+        }
+        # Generic English whole-word/phrase intent, not an intensity classifier.
+        # Deload week is covered by deload; recovery alone names isolated easy rides.
+        name_pattern = re.compile(r"\b(?:deload|recovery week|rest week)\b", re.IGNORECASE)
+        named_events = set()
+        for index, event in enumerate(list(events or []) + list(plans or [])):
+            date = (event.get("date") or event.get("start_date_local") or "")[:10]
+            category = event.get("category") or event.get("type")
+            sport = event.get("sport_type") if "sport_type" in event else event.get("type")
+            if (start_str <= date <= end_str and category in self.TRAINING_EVENT_CATEGORIES
+                    and (not primary_sport or self.SPORT_FAMILIES.get(sport) == primary_sport)
+                    and name_pattern.search(event.get("name") or "")):
+                named_events.add(str(event["id"]) if event.get("id") is not None else (date, index))
+        result["name_support"]["planned_events"] = len(named_events)
+        for act in activities or []:
+            date = (act.get("start_date_local") or "")[:10]
+            if (start_str <= date <= today
+                    and (not primary_sport or self.SPORT_FAMILIES.get(act.get("type")) == primary_sport)
+                    and name_pattern.search(act.get("name") or "")):
+                result["name_support"]["completed_activities"] += 1
+        # The normal caller supplies the full fetched activity window. A missing
+        # list, unknown sport or missing finalized week cannot establish reduction.
+        finalized = {row.get("week_start") for row in (weekly_rows or [])[:-1]}
+        if activities is None or not primary_sport or not set(prior_starts) <= finalized:
+            return result
+        totals = []
+        for offset in (0, 1, 2, 3):
+            first = start - timedelta(weeks=offset)
+            last = first + timedelta(days=span - 1)
+            first_str, last_str = first.strftime("%Y-%m-%d"), last.strftime("%Y-%m-%d")
+            subtotal = 0
+            for act in activities:
+                date = (act.get("start_date_local") or "")[:10]
+                if not (first_str <= date <= last_str and date <= today
+                        and self.SPORT_FAMILIES.get(act.get("type")) == primary_sport):
+                    continue
+                tss = act.get("icu_training_load")
+                if isinstance(tss, (int, float)) and not isinstance(tss, bool) and math.isfinite(tss) and tss >= 0:
+                    subtotal += tss
+                else:
+                    result["missing_tss"] += 1
+            totals.append(subtotal)
+        result["completed_tss"] = totals[0]
+        result["reference_tss_mean"] = statistics.mean(totals[1:])
+        if result["missing_tss"] or result["reference_tss_mean"] <= 0:
+            return result
+        ratio = totals[0] / result["reference_tss_mean"]
+        result["tss_delta"] = ratio
+        if span < self.PHASE_MIN_ELAPSED_DAYS:
+            result["status"] = "insufficient_elapsed"
+        else:
+            result["status"] = "reduced" if ratio <= 0.80 else "not_reduced"
+        return result
     
     def _detect_phase_v2(self, weekly_rows: List[Dict], planned_workouts: List[Dict],
                           race_calendar: Dict, previous_phase: Optional[str] = None,
                           today: str = None, dossier_declared: Optional[str] = None,
                           primary_sport: Optional[str] = None,
-                          is_backfill: bool = False) -> Dict:
+                          is_backfill: bool = False,
+                          completed_event_ids: Optional[set] = None,
+                          completed_activities: Optional[List[Dict]] = None,
+                          current_week_events: Optional[List[Dict]] = None) -> Dict:
         """
         Dual-stream phase detection (v2).
         
@@ -12589,7 +12691,20 @@ class IntervalsSync:
         
         # Compute features from both streams
         s1 = self._phase_stream1_features(weekly_rows, is_backfill=is_backfill)
-        s2 = self._phase_stream2_features(planned_workouts, race_calendar, s1, today, primary_sport, weekly_rows=weekly_rows)
+        s2 = self._phase_stream2_features(planned_workouts, race_calendar, s1, today, primary_sport,
+                                          weekly_rows=weekly_rows,
+                                          completed_event_ids=completed_event_ids)
+
+        if not is_backfill:
+            current_evidence = self._phase_current_evidence(
+                completed_activities, current_week_events, planned_workouts,
+                weekly_rows, today, primary_sport)
+            s2["load_evidence"]["day_aligned"] = current_evidence
+            if current_evidence["status"] == "reduced":
+                rebound = s2.get("next_week_tss_delta")
+                s2["load_evidence"]["next_week_rebound"] = (
+                    "confirmed" if rebound is not None and rebound >= 0.80 else "unverified")
+            s2["suggested_phase"] = self._phase_from_stream2(s2)
         
         # Data quality assessment
         data_quality = self._phase_data_quality(weekly_rows, s1, reason_codes)
@@ -12622,6 +12737,25 @@ class IntervalsSync:
         if s1.get("suggested_phase") is None or s2.get("suggested_phase") is None:
             stream_agreement = None  # can't assess if one stream has no opinion
         
+        # Bounded temporal provenance, not a historical knowledge-time record.
+        # Backfill's legacy today argument is the target's start, not its cutoff.
+        target_start = ((weekly_rows[-1].get("week_start") if weekly_rows else None)
+                        if is_backfill else None)
+        as_of = datetime.strptime(today, "%Y-%m-%d")
+        week_start = (datetime.strptime(target_start, "%Y-%m-%d") if target_start
+                      else as_of - timedelta(days=(as_of.weekday() - self.week_start_day) % 7))
+        week_end = week_start + timedelta(days=6)
+        finalized = weekly_rows if is_backfill else weekly_rows[:-1]
+        provenance = {
+            "as_of_date": ((week_end + timedelta(days=1)).strftime("%Y-%m-%d")
+                           if is_backfill else today),
+            "week_start": week_start.strftime("%Y-%m-%d"),
+            "week_end": week_end.strftime("%Y-%m-%d"),
+            "mode": "retrospective" if is_backfill else "live",
+            "completed_weeks_used": [r.get("week_start") for r in finalized[-4:]],
+            "observation_cutoff": week_end.strftime("%Y-%m-%d") if is_backfill else today,
+            "availability": "current_snapshot_not_historical_knowledge",
+        }
         return {
             "phase": phase,
             "confidence": confidence,
@@ -12641,11 +12775,13 @@ class IntervalsSync:
                     "race_proximity": s2.get("race_proximity"),
                     "next_week_load": s2.get("next_week_tss_delta"),
                     "plan_coverage_current_week": s2.get("plan_coverage_current_week"),
-                    "plan_coverage_next_week": s2.get("plan_coverage_next_week")
+                    "plan_coverage_next_week": s2.get("plan_coverage_next_week"),
+                    "load_evidence": s2.get("load_evidence")
                 },
                 "data_quality": data_quality,
                 "stream_agreement": stream_agreement
             },
+            "provenance": provenance,
             "previous_phase": previous_phase,
             "phase_duration_weeks": phase_duration,
             "dossier_declared": dossier_declared,
@@ -12789,7 +12925,8 @@ class IntervalsSync:
     def _phase_stream2_features(self, planned_workouts: List[Dict], race_calendar: Dict,
                                  stream1: Dict, today: str,
                                  primary_sport: Optional[str] = None,
-                                 weekly_rows: Optional[List[Dict]] = None) -> Dict:
+                                 weekly_rows: Optional[List[Dict]] = None,
+                                 completed_event_ids: Optional[set] = None) -> Dict:
         """
         Extract Stream 2 (prospective) features from planned workouts and race calendar.
         
@@ -12826,6 +12963,41 @@ class IntervalsSync:
         }
         
         today_date = datetime.strptime(today, "%Y-%m-%d")
+
+        # Completed execution is independent of whether the calendar has entries.
+        current = weekly_rows[-1] if weekly_rows else {}
+        completed_hard_days = current.get("hard_days") or 0
+        result["current_week_hard_days_completed"] = completed_hard_days
+        result["current_week_hard_days_total"] = completed_hard_days
+        result["next_7d_sessions"] = 0
+        use_primary = bool(primary_sport and stream1.get("primary_tss_values")
+                           and any(v > 0 for v in stream1["primary_tss_values"]))
+        denom_values = stream1.get("primary_tss_values" if use_primary else "tss_values", [])
+        reference_tss = statistics.mean(denom_values[-3:]) if denom_values else None
+        completed_tss = current.get("primary_sport_tss" if use_primary else "total_tss")
+        if use_primary and current.get("primary_sport") != primary_sport:
+            completed_tss = None
+        evidence = {
+            "calendar_status": "unavailable" if planned_workouts is None else "available",
+            "sport_scope": primary_sport if use_primary else "all",
+            "reference_week_tss": reference_tss,
+            "completed_tss": completed_tss,
+            "completed_tss_delta": (completed_tss / reference_tss
+                                    if completed_tss is not None and reference_tss
+                                    and reference_tss > 0 else None),
+            "remaining": {"sessions": 0, "known_tss": 0, "missing_tss": 0,
+                          "unknown_intensity": 0, "same_day_unresolved": 0},
+            "next_week": {"sessions": 0, "known_tss": 0, "missing_tss": 0,
+                          "unknown_intensity": 0, "same_day_unresolved": 0},
+            "completed_events_excluded": 0,
+            # Listed entries, even when all numeric, do not prove calendar
+            # completeness. Do not invent rest days or a full-week TSS sum.
+            "full_week_reduction": "unverified",
+            "next_week_rebound": "unverified",
+        }
+        result["load_evidence"] = evidence
+        if evidence["completed_tss_delta"] is not None and evidence["completed_tss_delta"] > 0.80:
+            evidence["full_week_reduction"] = "contradicted"
         
         # Race proximity from race_calendar
         next_race = race_calendar.get("next_race")
@@ -12860,6 +13032,9 @@ class IntervalsSync:
             # _next_week and fed a wrong session count into phase detection. Matches
             # the filter _calculate_consistency_index already applies.
             if (pw.get("type") or "") not in self.TRAINING_EVENT_CATEGORIES:
+                continue
+            if pw.get("id") is not None and str(pw["id"]) in (completed_event_ids or set()):
+                evidence["completed_events_excluded"] += 1
                 continue
             pw_date_str = (pw.get("date") or "")[:10]
             if not pw_date_str or pw_date_str == "unknown":
@@ -12939,20 +13114,40 @@ class IntervalsSync:
         if avg_tss_prev and avg_tss_prev > 0 and next_week_tss > 0:
             result["next_week_tss_delta"] = round(next_week_tss / avg_tss_prev, 2)
         
-        # Hard sessions planned (current week remainder only)
-        # A planned workout is "hard" if its name or type suggests intensity
-        hard_count = 0
-        current_week_sessions = len(current_week_workouts)
-        for pw in current_week_workouts:
+        def heuristic_hard(pw):
             ws = pw.get("workout_summary") or ""
             cat = (pw.get("type") or "").upper()
             name = (pw.get("name") or "").lower()
-            # Heuristic: interval markers, race categories, or intensity keywords
-            if ("×" in ws or "sets" in ws.lower() or
-                cat in ("RACE_A", "RACE_B", "RACE_C") or
-                any(kw in name for kw in ("interval", "vo2", "threshold", "sprint", "tempo",
-                                           "race", "hard", "intensity", "sweet spot"))):
-                hard_count += 1
+            return ("×" in ws or "sets" in ws.lower() or
+                    cat in ("RACE_A", "RACE_B", "RACE_C") or
+                    any(kw in name for kw in ("interval", "vo2", "threshold", "sprint", "tempo",
+                                               "race", "hard", "intensity", "sweet spot")))
+
+        # Retain load presence and intensity uncertainty independently of the
+        # legacy density/projection aliases. Zero TSS is explicit, null is not.
+        for key, workouts in (("remaining", current_week_workouts), ("next_week", next_week_workouts)):
+            details = evidence[key]
+            details["sessions"] = len(workouts)
+            for pw in workouts:
+                sport = self.SPORT_FAMILIES.get(pw.get("sport_type", ""))
+                tss = pw.get("planned_tss")
+                if not use_primary or sport == primary_sport:
+                    if isinstance(tss, (int, float)) and not isinstance(tss, bool) and math.isfinite(tss) and tss >= 0:
+                        details["known_tss"] += tss
+                    else:
+                        details["missing_tss"] += 1
+                elif sport is None:
+                    details["missing_tss"] += 1  # cannot establish matched scope
+                # A heuristic non-hard title is not positive evidence of easy intent.
+                if not heuristic_hard(pw) and tss != 0:
+                    details["unknown_intensity"] += 1
+                if key == "remaining" and (pw.get("date") or "")[:10] == today:
+                    details["same_day_unresolved"] += 1
+
+        # Hard sessions planned (current week remainder only)
+        # A planned workout is "hard" if its name or type suggests intensity
+        hard_count = sum(1 for pw in current_week_workouts if heuristic_hard(pw))
+        current_week_sessions = len(current_week_workouts)
         result["hard_sessions_planned"] = hard_count
         result["next_7d_sessions"] = current_week_sessions  # renamed semantically but key preserved for compat
         
@@ -12962,9 +13157,6 @@ class IntervalsSync:
         # ones already happened — biasing Build-shaped weeks toward Base.
         # The in-progress week's hard_days count lives in weekly_rows[-1]
         # (built live from activities_28d in _calculate_derived_metrics).
-        completed_hard_days = 0
-        if weekly_rows:
-            completed_hard_days = weekly_rows[-1].get("hard_days") or 0
         result["current_week_hard_days_completed"] = completed_hard_days
         result["current_week_hard_days_total"] = completed_hard_days + hard_count
         
@@ -12992,7 +13184,13 @@ class IntervalsSync:
             if tss_delta is not None and tss_delta > 0.80:
                 return "Peak"
         
-        # Deload signal: ≥20% reduction + next week resumes
+        # Live execution establishes reduction; next week only confirms rebound.
+        evidence = features.get("load_evidence", {})
+        aligned = evidence.get("day_aligned")
+        if aligned is not None:
+            return "Deload" if aligned.get("status") == "reduced" else None
+        if evidence.get("full_week_reduction") in ("unverified", "contradicted"):
+            return None
         if tss_delta is not None and tss_delta <= 0.80:
             if next_week_delta is not None and next_week_delta >= 0.85:
                 return "Deload"
@@ -13055,6 +13253,16 @@ class IntervalsSync:
         # With few planned sessions, planned TSS is a subset — delta will be misleadingly low.
         next_7d_sessions = s2.get("next_7d_sessions", 0)
         tss_delta_reliable = tss_delta is not None and next_7d_sessions >= 3
+        evidence = s2.get("load_evidence") or {}
+        aligned = evidence.get("day_aligned") or {}
+        aligned_delta = aligned.get("tss_delta")
+        completed_delta = evidence.get("completed_tss_delta")
+        # Live execution can contradict low-load readings even before reduction
+        # is established. Backfill has no day_aligned entry and keeps its rules.
+        live_load_contradicted = bool(aligned) and (
+            aligned.get("status") == "not_reduced"
+            or (aligned_delta is not None and aligned_delta > 0.80)
+            or (completed_delta is not None and completed_delta > 0.80))
         
         # === Insufficient data guard ===
         if data_quality == "poor" and weeks < 2:
@@ -13097,7 +13305,7 @@ class IntervalsSync:
         
         # === Priority 3.5: Recovery (early check for clearly declining/idle athletes) ===
         # Extended low load + 0 hard days + declining CTL → Recovery before Build/Base scoring
-        if (ctl_slope is not None and ctl_slope < -1.0 and
+        if (not live_load_contradicted and ctl_slope is not None and ctl_slope < -1.0 and
                 hard_avg is not None and hard_avg < 0.5 and weeks >= 3):
             confidence = "medium" if data_quality != "poor" else "low"
             reasons.append("DECLINING_LOAD_NO_HARD_DAYS")
@@ -13106,11 +13314,14 @@ class IntervalsSync:
         # === Priority 4: Deload→Build transition ===
         # When previous phase was Deload, expected next state is Build.
         # TSS delta is unreliable here (prior 3-week avg includes the deload week).
-        # Use planned workout content instead.
+        # Use completed hard days with nonreduced execution, or planned content.
         if previous_phase == "Deload":
+            if live_load_contradicted and s2.get("current_week_hard_days_completed", 0) > 0:
+                return "Build", "low", ["BUILD_RESUMING_AFTER_DELOAD_TENTATIVE"]
             hard_planned = s2.get("hard_sessions_planned", 0)
             if hard_planned >= 2:
-                return "Build", "medium", ["BUILD_RESUMING_AFTER_DELOAD"]
+                # Plan content is prospective intent, not verified complete load.
+                return "Build", "low", ["BUILD_RESUMING_AFTER_DELOAD_TENTATIVE"]
             elif hard_planned >= 1 or (plan_cov_curr > 0 and (not tss_delta_reliable or tss_delta > 0.80)):
                 return "Build", "low", ["BUILD_RESUMING_AFTER_DELOAD_TENTATIVE"]
         
@@ -13122,8 +13333,8 @@ class IntervalsSync:
         # Build evidence, we can't distinguish "planned deload" from "athlete just isn't
         # training hard". False Recovery is less harmful than false Deload.
         # Three paths:
-        #  A) Reliable TSS delta ≤ 0.80 + ≤1 hard session → strong Deload signal
-        #  B) Sparse plan (< 3 sessions) + ≤1 hard session + Build history → Deload candidate
+        #  A) Day-aligned completed TSS ≤ 0.80 + ≤1 remaining hard session
+        #  B) Reduced remainder or sparse easy plan + Build history → tentative candidate
         #  C) No plan at all + completed week TSS ≤ 80% of prior 3-week avg → retrospective Deload
         hard_planned = s2.get("hard_sessions_planned", 0)
         build_history = (ctl_slope is not None and ctl_slope > 0 and
@@ -13139,10 +13350,13 @@ class IntervalsSync:
         # When hard_planned == 1, require ≥3 planned sessions to trust the plan
         # is representative — a 2-session plan with 1 hard is too sparse to judge.
         if hard_planned == 0 or (hard_planned == 1 and next_7d_sessions >= 3):
-            # Path A: reliable TSS delta showing reduction
-            if tss_delta_reliable and tss_delta <= 0.80 and build_history:
+            # Path A: reduction over the calibrated same-weekday execution span.
+            if aligned.get("status") == "reduced" and build_history:
                 deload_signal = True
                 deload_path = "A"
+            elif tss_delta_reliable and tss_delta <= 0.80 and build_history:
+                deload_signal = True
+                deload_path = "B"
             # Path B: sparse plan, all easy, strong Build history
             elif (next_7d_sessions > 0 and not tss_delta_reliable and build_history
                   and ctl_slope > 1.0 and hard_avg >= 2.0):
@@ -13180,6 +13394,21 @@ class IntervalsSync:
                         deload_path = "C"
         
         if deload_signal:
+            if (live_load_contradicted or (deload_path in ("A", "B")
+                    and completed_delta is not None and completed_delta > 0.80)):
+                return None, "low", ["DELOAD_CONTRADICTED_BY_COMPLETED_LOAD"]
+            if deload_path in ("A", "B"):
+                support = aligned.get("name_support") or {}
+                name_reasons = (["DELOAD_NAME_SUPPORT"] if support.get("planned_events")
+                                or support.get("completed_activities") else [])
+                if deload_path == "A":
+                    if next_week_delta is not None and next_week_delta >= 0.80:
+                        return "Deload", "high", ["BUILD_HISTORY_REDUCED_LOAD_REBOUND_CONFIRMED"] + name_reasons
+                    return "Deload", "medium", ["BUILD_HISTORY_DAY_ALIGNED_REDUCTION"] + name_reasons
+                # Names can support an existing remainder candidate at medium,
+                # but cannot establish day-aligned reduction or rebound high.
+                confidence = "medium" if name_reasons else "low"
+                return "Deload", confidence, ["DELOAD_CURRENT_REDUCTION_UNVERIFIED"] + name_reasons
             if next_week_delta is not None and next_week_delta >= 0.80:
                 return "Deload", "high", ["BUILD_HISTORY_REDUCED_LOAD_REBOUND_CONFIRMED"]
             elif plan_cov_next < 0.3:
@@ -13191,7 +13420,7 @@ class IntervalsSync:
         
         # Non-Build-history reduction: Recovery (only if CTL is also declining)
         # A Base athlete with stable CTL and low planned TSS isn't recovering — they're maintaining.
-        if tss_delta_reliable and tss_delta <= 0.80 and hard_planned <= 1:
+        if not live_load_contradicted and tss_delta_reliable and tss_delta <= 0.80 and hard_planned <= 1:
             if not build_history and ctl_slope is not None and ctl_slope < -1.0:
                 confidence = "medium" if data_quality != "poor" else "low"
                 return "Recovery", confidence, ["NO_BUILD_HISTORY_LOW_LOAD"]
