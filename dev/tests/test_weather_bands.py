@@ -186,7 +186,7 @@ class CompactReportContractTests(unittest.TestCase):
         groups = [[line.split(':',1)[0] for line in group.splitlines()]
                   for group in summary.strip().split('\n\n')]
         self.assertEqual(groups,[
-            ['Phase','RHR','HRV','Sleep','Sleep Quality'],
+            ['Phase','RHR','HRV','Sleep','Sleep Quality','Sleep context'],
             ['TSB','CTL','ATL','ACWR','Recovery Index','Ramp Rate','Load/Recovery',
              'Durability','EF','Monotony'],
             ['Polarization','TID 28d'],

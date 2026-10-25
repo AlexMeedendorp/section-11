@@ -21,6 +21,34 @@ Read the planned summary's `detail_file`, match event ID, route_ref, departure, 
 
 **These are invented data**: realistic values for a ~12h/week multi-sport athlete (cycling + rowing + walks), CTL ~65, FTP 260/270 (indoor/outdoor). Not anonymized real data.
 
+## Short-set detail fragment (synthetic)
+
+Current `session_structure` version 5 uses `bout_metrics_version: 4` on qualified blocks and individual `bouts` for supported compressed sets in 14-day intervals.json detail. This fragment illustrates three synthetic 30/15 work bouts with a selected 2 s global offset. Standard windows have 29 observed seconds; average-adherence windows exclude one additional leading transition second and have 28 observed seconds. Their means are 300 / 304 / 295.8 W. The shared end preserves the trailing second. The positional schema is defined once under [Completed Session Structure](../../SECTION_11.md#completed-session-structure).
+
+```json
+{
+  "version": 5,
+  "bout_metrics_version": 4,
+  "steps": [
+    {
+      "target_w": 300,
+      "repeat": [3, 30, 15],
+      "bouts": [
+        [600, 603, 632, 29, 604, 28, 8400, 0],
+        [645, 648, 677, 29, 649, 28, 8512, 0],
+        [690, 693, 722, 29, 694, 28, 8282.4, 0]
+      ]
+    }
+  ]
+}
+```
+
+An ungrouped 30 s step also receives the exclusion, including with a 90 s recovery. For a synthetic step starting at recording time 0 with no offset, 300 W throughout and complete power coverage, its standard `actual` row remains `[1,30,300,8.7,null,null,100,0,0,0]` and its added `adherence` row is `[2,28,8400,0]`. The adherence end is shared with `actual[1]`; the short row reuses the last four fields of the bout layout. At 60 s the starts still differ by one second; at 61 s an ordinary step has no added row. Compressed 90 s or 3 min bouts retain the standard first-second exclusion for adherence too. Prescription duration determines the rule, never grouping or clipped measured duration.
+
+For a synthetic 10 s step with target range 700–800 W, a complete standard window `[1,10)` at constant 760 W emits `sprint_target_w: 700`, `sprint_window_s: 3` and `sprint: [760,1,760]`. This records the range's lower bound and the standard-window mean, best 3 s start and best 3 s mean. The sprint is on target because 760 ≥700; the upper bound is not a ceiling. Its average-window `adherence` row remains present for compatibility, but never supplies the sprint verdict. A compressed sprint set instead has one `sprints` row per ordered work bout and shared `sprint_target_w` and `sprint_window_s` fields. For a prescribed 20 s sprint, W is 6 s instead. Without W consecutive supported seconds the peak start and mean are null; observed zeros are retained. Sprint fields are absent above 20 s. See the protocol for the fixed layout, continuity and target rules.
+
+These are not complete activities or proof of paired identity. Formal evaluation also needs the qualified method/status, matching captured prescription and cache identity, completion and essential-constraint checks. The legacy `.example.json` files remain unchanged and omit this evidence. Missing/expired detail means the affected individual adherence is unavailable. `latest.json.structure_summary` stays unchanged; it never copies these arrays or a derived pass count. Size grows with work-bout count, adds four average-window values per ungrouped short step, and adds three sprint values per ≤20 s effort plus its parent threshold in intervals.json only. Local, GitHub, On-demand and Manual use the same existing detail file with no new companion or upload step.
+
 ## Files
 
 | File | Description |
@@ -33,12 +61,23 @@ Read the planned summary's `detail_file`, match event ID, route_ref, departure, 
 | `ftp_history.example.json` | FTP change tracking for Benchmark Index calculation |
 | `saved_workouts.example.json` | Read-only mirror of the athlete's Intervals.icu saved workouts (see [Saved Workouts Mirror](#saved-workouts-mirror)) |
 
+## Sleep context contract
+
+`sleep_context.schema_version` is 1; `calculation_version` is `disjoint_28d_median_latest3_3600s_v1`. The personal reference is the median of all 28 valid raw `sleepSecs` values on D−34..D−7. The seven recent dates D−6..D stay separate. `repeat_context` requires the latest three to be strictly below that reference and sum(reference minus each of those nights) ≥3600 seconds. No per-night seven-hour or percentage limit applies. It is false only when the complete latest three and reference permit comparison; otherwise null. It never changes readiness and is not sleep debt or a medical inference.
+
+Both windows give start/end, observed/expected counts and explicit missing/invalid dates. All seven recent dates remain in `nights`, with raw seconds, rounded hours, producer-formatted durations, status/reason and nullable below_reference. The reference median needs 28 valid nights; the recent mean needs seven. `latest_three_difference_sum_seconds` is signed, not a repayment target. The trailing run is bounded to seven, with `run_formatted: "at least 7"` at the edge; missing/invalid boundaries cannot prove its full start. Run fields are unavailable when the repeat comparison is unassessable.
+
+`status` is assessed, partial_recent (older gaps with assessable latest three), or not_assessed. Reasons are unknown_timezone, unknown_date_alignment, current_date_mismatch, source_unavailable, invalid_input, incomplete_reference, incomplete_latest_three or partial_recent_window. Invalid-date entries distinguish ambiguous_duplicate, missing_duration, nonnumeric_duration, nonfinite_duration and out_of_range_duration; duplicates are rejected even if values agree. Finite positive JSON numbers up to 86400 seconds qualify, excluding booleans. Missing rows remain missing, not zero sleep. Malformed date keys/rows withhold comparison; valid out-of-window dates are ignored.
+
+`source_updated_at` is the fresh extended-read timestamp; `timezone.value/source` identifies the athlete timezone used for date alignment. Unknown alignment or a stale/date-mismatched block is unavailable for current interpretation. The current producer preserves the existing sync date and withholds comparison when that date differs from the athlete's date. A failed extended read stops the sync before a new latest export, leaving retained data's original dates intact. No sleep-specific state, history join, per-night request or fragmentation output is introduced. Fragmentation is private, transient, explicit dated athlete testimony in the current conversation only. See the protocol's [Recovery Metrics Integration](../../SECTION_11.md#recovery-metrics-integration-hrv--rhr--sleep--feel) and pre-workout template.
+
 ## Schema Version
 
 The core examples originated with sync.py v3.86 / Section 11 v11.17; the exceptions and additive weather example above do not relabel the remaining legacy data. Current additions include:
 
 - `data_overview` (sync 3.146, illustrated here): bounded companion file/folder presence, file-write time, purpose and locations relative to the latest export; route validity/climb inventory, weather status/tier/fetch/expiry/summary and ordered map-page availability. It retains all routed rides from the 90-day fetch, regardless of route status; beyond 120 h weather status and map reason are `beyond_horizon`. Unrouted rides beyond 120 h are excluded and counted in `rides_without_route_beyond_horizon`. `rides_total` counts eligible rides before the 64-ride cap; `rides_omitted` counts only cap overflow. No route geometry or coordinates are added to latest.json. `managed_files` is the publication list derived from the same registry. See the [Weather Data Source](../../SECTION_11.md#weather-data-source) for the discovery and path contract.
 - `readiness_decision`: pre-computed go/modify/skip recommendation with signal breakdown
+- `sleep_context`: optional top-level, low-confidence duration context, never a readiness signal. The additive synthetic example in latest.example.json uses its own explicitly dated window, without relabeling the legacy core data. `READ_THIS_FIRST.sleep_context_note` advertises it in actual exports. See [Sleep context contract](#sleep-context-contract).
 - `health_context`: calendar SICK / INJURED markers (current / recent / upcoming) plus the current wellness injury value; context only, never a readiness input
 - `workout_summary_stats`: planned-summary rendering statistics, including flat lists; not execution matching
 - `recent_activities[].structure_summary`: compact plan-match status and ordered duration/target/actual mean W/match rows, retained through 28 days. `has_structure` indicates detailed `session_structure` in intervals.json (14-day retention); its metric rows or descriptive fallback are independent of DFA. See the protocol's Completed Session Structure contract. The legacy JSON examples omit these additive fields; absence means unavailable
@@ -83,6 +122,10 @@ These additive fields are documented here without replacing the legacy latest.ex
 | `display.pace` | `{value: "m:ss", unit: "/km" or "/mi"}` for Run/TrailRun/VirtualRun/Walk/Hike with positive finite avg_speed; null otherwise. Derived before display-speed rounding. Runs retain display.avg_speed for the parenthesized speed |
 
 Power curves are fetched only for activities with power and copy forward from previous latest.json after success or terminal failure, with no re-fetch. Up to eight new activities per sync instance use the existing Basic auth, (5, 30) timeout and shared four-extra-attempt retry budget (at most twelve sends); same-run duplicate IDs cost no extra fetch. Unit changes refresh new display fields without invalidating a curve. Existing work_kj supplies Work. Peaks describe this activity only, never tests, bests or capability and never FTP, zone or readiness inputs. See the complete [producer and report contract](../../SECTION_11.md#post-workout-activity-fields).
+
+## Activity decoupling detail (sync.py v3.152)
+
+`recent_activities[].decoupling_detail` is optional in latest.json only. It carries the upstream window/HR lag, bucket-derived early/late power, HR, work and coverage, absolute/percent changes, authoritative half ratios and upstream decoupling, plus the separate rounded-bucket reconstruction. Measured power is steady/rising/falling beyond both 5 W and 5%; a qualified paired step-work target contrast can set `comparability: plan_changes_power`, retaining the number without a drift verdict. No model estimate is emitted. `decoupling_cache` holds fingerprint/version and success or terminal 404/410 state; transient failures omit detail and retry. There is no intervals.json addition. See [Activity decoupling detail](../../SECTION_11.md#activity-decoupling-detail) for every field, window/coverage limits and request bounds. The fictional latest.example.json is not regenerated with athlete data.
 
 ## Planned Workout Descriptions
 

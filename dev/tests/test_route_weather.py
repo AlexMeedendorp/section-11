@@ -662,7 +662,10 @@ class RouteWeatherTests(unittest.TestCase):
         with mock.patch.object(mod, "datetime", Frozen), mock.patch.object(
                 sync, "_intervals_get", side_effect=lambda endpoint, *a: activities if endpoint == "activities" else [] if endpoint == "wellness" else {}) as get:
             sync.generate_history()
-        self.assertEqual([call.args[0] for call in get.call_args_list], ["activities", "wellness", ""])
+        # Route history still adds no calls; v3.149 separately admits one
+        # descriptive season-curve request during history generation.
+        self.assertEqual([call.args[0] for call in get.call_args_list],
+                         ["activities", "wellness", "", "activity-power-curves"])
         self.assertTrue((sync.data_dir / Weather.ETA_HISTORY_FILE).is_file())
         brief, _ = self.run_weather(success)
         self.assertEqual(brief["eta"]["sample_count"], 9)

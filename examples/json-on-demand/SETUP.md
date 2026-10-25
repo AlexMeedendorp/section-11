@@ -14,6 +14,8 @@ Date-only/exact-midnight workouts use the labelled 10:00 local default. Optional
 
 Uses the same GitHub Actions workflow as auto-sync, but without the cron schedule. You tap a link in your repo's README to trigger a sync, and download the resulting files as a ZIP artifact from the completed run.
 
+Each successful run with updated sync.py produces `latest.json.sleep_context`, using one fresh 35-date wellness window (D−34..D) and preserving the original 28-date slice for existing consumers. No new sleep file, cache or other state must persist, and no history refresh is needed for it. The shared `examples/json-auto-sync/auto-sync.yml` already includes latest.json in repository delivery and the download artifact, so this field needs no workflow or upload change. The AI discovers it through `READ_THIS_FIRST.sleep_context_note` in that file. It is low-confidence context only, never readiness; missing dates, unknown athlete timezone or current-date mismatch remain explicit unavailable states. It refreshes only when you run sync, so an old attachment is not a current assessment.
+
 For 11.80 / sync 3.146, replace sync.py and the shared workflow once, keeping your manual-only trigger. It publishes the sync-declared JSON/PNG file list under fixed validation rules, so future companion names/folders need only a script update. See the [GitHub setup update instructions](../json-auto-sync/SETUP.md#updating-an-existing-repository) for limits, safe fallback and the replacement steps. Compact forecast snapshots stay bounded.
 
 The repository retains `route_eta_history.json` and up to four ordered `maps/weather/` PNG pages per ride, for six rides (24 pages) between runs. All companion locations in `latest.json.data_overview` are relative to the latest file's folder. The AI reads that overview first and resolves paths against the current data source. It reads and shows matching map pages in their listed order only when it can actually read each PNG; otherwise it uses the text brief. Maps and ETA history are not added to the download artifact ZIP. Download users keep their existing JSON workflow with no extra steps; folderless uploads are matched by filename.
@@ -119,6 +121,8 @@ From now on, just tap **🔄 Sync Now** in your repo's README.
 ---
 
 ## Usage
+
+**Calendar naming:** To let the calendar support a deload week, name its sessions with "Deload" or "Recovery week", for example "Recovery week - easy ride". Single recovery rides inside normal weeks are not read as a deload week. Names support the phase assessment; they do not establish it on their own.
 
 ### From your phone
 

@@ -238,7 +238,7 @@ Prepare: warm layers and gloves.
 
 **Recommendation: Modify**
 Readiness: Compromised. HRV 42 is 22% below 7d average, RHR spiked to 50 (+4 above baseline),
-and sleep was poor at 5h12m with 4/4 quality. Multiple amber/red signals.
+and sleep duration was 5h12m. These are the classified amber/red signals; quality 4/4 is context only.
 Load/Recovery over threshold at 7.1, monotony elevated at 2.5, and durability declining (5.8% mean
 decoupling, up from 3.2% 28d avg). Body is absorbing a heavy week and aerobic efficiency is slipping.
 Swap threshold intervals for an easy endurance ride (Z2, 1h30m, ~50 TSS). Save the intensity
@@ -248,6 +248,36 @@ Weather data by Open-Meteo, CC BY 4.0.
 ```
 
 ---
+
+## Sleep context excerpts (fictional)
+
+These optional lines belong within the existing readiness status group, not replacement reports. All values and dates are invented. The reference is 8h across 28/28 dates, 12 May–8 June 2026; the recent review is 9–15 June. Each of the latest three nights has 27600 raw seconds (7h40m), giving exactly 3600 seconds combined difference. All three are above seven hours and still meet the context rule. No extra readiness signal or automatic recommendation change follows.
+
+```text
+Sleep context: 3 consecutive nights below personal reference, 13–15 Jun: 7h40m, 7h40m, 7h40m; reference 8h (28/28 nights), recent 7/7; low confidence
+```
+
+With 12 June missing and the other six recent dates observed, the same latest three qualify. Do not give a full-week mean or imply a known episode start across the gap:
+
+```text
+Sleep context: 3 observed consecutive nights below reference, 13–15 Jun: 7h40m, 7h40m, 7h40m; reference 8h (28/28 nights), recent partial 6/7, 12 Jun missing; low confidence
+```
+
+When a pattern is requested but 14 June is missing, the latest three are incomplete:
+
+```text
+Sleep context: unavailable for the repeat comparison; 14 Jun missing, recent 6/7, reference 8h (28/28 nights); low confidence
+```
+
+With an absent or stale block, say the requested context is unavailable and name that cause. With false/null and no relevant request or athlete report, omit the line. A full-window run reads “at least 7”, never an exact episode length.
+
+Explicit athlete reports of fragmentation on 13 and 15 June remain separate even with above-reference measured durations:
+
+```text
+Sleep context: repeated fragmentation reported by you for 13 and 15 Jun; duration comparison does not establish awakenings; low confidence
+```
+
+“Recently” without dates does not become two nights. Repeated messages about one date count once; no statement is unknown, and a denial or correction applies only to its stated dates. Keep day disruption and current fatigue separate without double-counting. For a later same-day session, put relevant context within Current state or Decision of the continuation block and retain its current-state and start-of-day ACWR rules.
 
 ## Example 5: Outdoor run and walk (session excerpt)
 

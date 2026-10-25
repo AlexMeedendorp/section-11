@@ -3,9 +3,117 @@
 > Anonymized examples showing standard post-workout report format.  
 > See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference. Legacy examples do not supply recorded elevation, so Ascent is omitted. Missing matched-step data is stated explicitly; aggregate numbers are preserved. The fictional field excerpts below illustrate the new producer contract without inventing step actuals for those legacy reports.
 
-The eight legacy scenarios retain their supplied measurements and omit new fields that were not captured. Their timestamps use explicitly labelled UTC fallback because no athlete timezone is supplied. The new-field excerpts are synthetic, including their temperature, elapsed time, W/kg and curve points; they are not Daniel's captured responses.
+The legacy scenarios retain their supplied aggregate measurements and omit new fields that were not captured. Example 7 explicitly adds fictional qualified work-step evidence to demonstrate the structured Sweetspot rule. Their timestamps use explicitly labelled UTC fallback because no athlete timezone is supplied. The new-field excerpts are synthetic, including their temperature, elapsed time, W/kg and curve points; they are not Daniel's captured responses.
 
 ---
+
+## Short-set compliance excerpts (synthetic)
+
+These independent scenarios illustrate the Compliance line, not a full report or athlete data. Each supported case has an exact captured prescription, matching current pairing and detail identity, three comparable sets of ten 30/15 work bouts, an authoritative 300 W target, established main-work roles and no essential secondary constraints. Every standard window has 29 observed seconds and every adherence window has 28 observed seconds unless stated otherwise. The accepted band is 297–315 W. All unlisted bout means are exactly 300 W. Keep the remaining activity fields and weekly totals in a complete report.
+
+**One miss:** set 2/bout 6 has an unrounded adherence mean of 295.8 W; all work is complete. Set means alone cannot supply the count.
+
+```text
+Compliance: main work completed; 29/30 work bouts on target (96.67%); set 1 10/10, set 2 9/10 (bout 6 −4.2 W, below band), set 3 10/10
+```
+
+**Within-band increase:** set 3/bout 4 is 304 W, with all other bouts exactly at target and all work complete. This is adherence, not permission to progress.
+
+```text
+Compliance: main work completed; 30/30 work bouts on target (100%); set 1 10/10, set 2 10/10, set 3 10/10 (bout 4 +4.0 W, within upper band)
+```
+
+**Detail expired:** the retained set summary and authoritative plan still establish standard work-time completion, but no individual bout actuals remain. Set observations cannot reconstruct them.
+
+```text
+Compliance: main work completed; adherence not evaluable, individual bout detail unavailable; set means are observations only
+```
+
+**Incomplete main work:** the last bout has a 25-second standard span against the expected 29 seconds and a selected 3-second offset. Its four-second deficit exceeds the alignment allowance. Known means remain descriptive.
+
+```text
+Compliance: main work incomplete; set 3/bout 10 has a 4 s standard-window deficit, exceeding the 3 s alignment allowance; no aggregate adherence percentage
+```
+
+**Missing bout power:** a full standard span with only 27 observed seconds cannot establish completion even if its adherence window has 27/28 seconds. Pooled set coverage does not override this.
+
+```text
+Compliance: completion not evaluable; set 1/bout 1 has insufficient standard-window power coverage; adherence not evaluable
+```
+
+## Duration-based compliance excerpts (synthetic)
+
+These separate examples have exact paired prescriptions and qualified evidence-marker-4 detail with established main-work roles and no essential secondary constraints. They do not change the set examples above. Completion always uses the standard window. Recovery length and repeat count do not select the evaluator or window.
+
+**Single short step with long recovery:** a 30 s effort at 300 W followed by 90 s recovery has a complete 29 s standard window. Its adherence row has 28 observed seconds and 8400 J, so the mean is 300 W. This same exclusion applies to each effort in 8 × 30 s / 90 s and 6 × 40 s / 2 min when their mapping is supported.
+
+```text
+Compliance: main work completed; 1/1 step on target (+0 W); 30 s prescribed, 29 s standard window, 28 s adherence window
+```
+
+**Duration boundary:** independent 60 s and 61 s efforts at 300 W both complete their standard windows. The 60 s effort uses 58 adherence seconds after two excluded seconds; the 61 s effort uses its 60 s standard window after only the first-second exclusion. With constant 300 W, each is on target. A clipped 61 s effort remains subject to the longer-step rule.
+
+**Long compressed bouts:** three 90 s efforts with 30 s recoveries each have 89 standard and adherence seconds. Their unrounded means are 300 / 295.8 / 300 W against 300 W. The first retained second remains included even though the efforts form a compressed set.
+
+```text
+Compliance: main work completed; 2/3 work bouts on target (66.67%); set 1 2/3 (bout 2 −4.2 W, below band)
+```
+
+**Pyramid:** 40/30/20 s efforts at 300/310/320 W have complete 39/29/19 s standard windows. The first two use 38/28 s average-adherence windows with means equal to their targets. The 20 s sprint uses a best 6 s of 320 W within its standard window, whose mean is also 320 W. Its stored 18 s average window does not judge the sprint. Different durations/evaluators do not establish an aggregate.
+
+```text
+Compliance: main work completed; 40 s step on target (+0 W), 30 s step on target (+0 W), 20 s sprint on target (mean +0 W, best 6 s +0 W); no aggregate percentage for this mixed-duration pyramid
+```
+
+## Sprint compliance excerpts (synthetic)
+
+Each independent 10 s main-work sprint below has an authoritative 700 W target and a complete 9 s standard window and W = 3 s unless stated otherwise. Mapping and essential constraints are established; no ERG use is assumed. The threshold is 700 W exactly, with no lower tolerance or upper ceiling. Standard-window means and peaks are reported separately. These invented cases illustrate arithmetic, not calibration on recorded sprints.
+
+**Reaches target despite a low mean:** six observed seconds at 600 W and three consecutive seconds at 702 W give a 634 W bout mean and 702 W best 3 s.
+
+```text
+Compliance: main work completed; 1/1 sprint on target (mean −66 W, best 3 s +2 W)
+```
+
+**Misses by one watt:** all nine observed seconds are 699 W. No lower tolerance applies.
+
+```text
+Compliance: main work completed; 0/1 sprint on target (mean −1 W, best 3 s −1 W, below target)
+```
+
+**Single-sample spike:** one interior second at 900 W among eight 525 W seconds gives a best 3 s of 650 W and a 566.7 W displayed mean. The spike does not meet the target.
+
+```text
+Compliance: main work completed; 0/1 sprint on target (mean −133.3 W, best 3 s −50 W, below target)
+```
+
+**Above target:** all nine seconds are 760 W. The high mean and peak are informational, with no sprint upper-band failure.
+
+```text
+Compliance: main work completed; 1/1 sprint on target (mean +60 W, best 3 s +60 W)
+```
+
+**Range target:** a 700–800 W sprint uses its 700 W lower bound, explicitly recorded as `sprint_target_w`. A mean and best 3 s of 900 W pass; the upper bound is not a ceiling. This sprint remains in any valid comparable atomic count.
+
+```text
+Compliance: main work completed; 1/1 sprint on target (700 W lower-bound threshold; mean +200 W, best 3 s +200 W)
+```
+
+**Insufficient observed time:** only two seconds at 702 W are observed. The peak is unavailable and standard coverage cannot establish completion.
+
+```text
+Compliance: completion not evaluable; sprint mean +2 W observed, best 3 s unavailable; adherence not evaluable, fewer than 3 consecutive observed seconds
+```
+
+**Longer sprint window:** a prescribed 20 s sprint at 700 W uses W = 6 s. Three consecutive observed seconds at 800 W followed by sixteen at 500 W give a 547.4 W displayed standard mean and a best 6 s of 650 W. Its best 3 s is 800 W, but that shorter peak cannot supply this verdict. Completion remains established by the full 19 s standard window.
+
+```text
+Compliance: main work completed; 0/1 sprint on target (mean −152.6 W, best 6 s −50 W, below target)
+```
+
+**Disconnected observations:** a 20 s sprint with more than six observed seconds in total, but no continuous run longer than five seconds, has no best 6 s evidence. Report adherence not evaluable. Do not join the runs or reduce W to 3 s.
+
+A prescribed 21 s effort instead uses its 19 s transition-excluded average and asymmetric band: constant 760 W against 700 W exceeds the 735 W upper bound and misses. Missing mapping or essential constraints remain limitations under either evaluator. The existing plan-match ±5% screen is unchanged; a mean-power disagreement there is not itself a sprint target miss.
 
 ## New-field excerpts (fictional, not full reports)
 
@@ -27,6 +135,7 @@ Power: 152 W avg (2.03 W/kg), 156 W NP
 Max power: 420 W
 Peaks: 5s 390 W, 1m 230 W, 5m 190 W, 20m 160 W
 Executed structure: paired_plan_windows, followed; measured 0:01–10:00 target 120 W, actual 119 W; 10:01–30:00 target 180 W, actual 179 W; 30:01–45:00 target 140 W, actual 139 W; all windows agree, 100% power coverage. Roles unspecified; formal adherence unavailable
+Compliance: not evaluable; main-work role not established from the paired plan
 
 Work: 410 kJ
 
@@ -76,6 +185,23 @@ Executed structure: fixed_elapsed_thirds, no_plan; power unavailable
 
 The same ascent rule applies to indoor walks and all ride/run types. When `display.elevation` is null, omit Ascent; a recorded zero remains visible. Walk/Hike omit Executed structure. Shortened or partly-followed windows must distinguish original planned amount from measured time, each agreement flag and any unobserved steps. A not-followed plan uses descriptive fallback and does not present projected step actuals as execution. A synthetic set descriptor `[8,30,10]` can be reported as “8 × 30 s, measured work 232 s, target 280 W, actual 279 W, match true”; it is not 232 seconds of continuous work.
 
+## Decoupling detail excerpts (fictional, separate records)
+
+These snippets illustrate source-supplied half values. Real reports omit the line when detail is unavailable. Decoupling and EF gates remain unchanged; neither a low VI nor a small half difference establishes formal adherence.
+
+```text
+Decoupling: 5.26%
+Early → late: 180 → 180 W, HR 108 → 114
+
+Decoupling: 2.22%
+Early → late: 180 → 200 W, HR 110 → 125; plan changes power; no drift verdict
+
+Decoupling: 13.91%
+Early → late: 200 → 180 W, HR 110 → 115; falling power
+```
+
+The first record is an unpaired 120-minute ride with VI 1.02, a 600 s warm-up and 60 s cool-down exclusion, and 15 s HR lag; those exclusions do not change its whole-ride eligibility. The second has qualified step targets changing across step-work halves; its raw value stays visible even if the whole ride passes the gate. The last has lower power and higher HR, which is adverse coupling rather than a power-change explanation. Bucket-derived work and coverage remain contextual estimates. These ratios illustrate arithmetic, not exact reconstruction of rounded real bucket data.
+
 ## Example 1: Clean Endurance Day (Multi-Session)
 
 ```
@@ -94,6 +220,7 @@ Distance: 76.42 km
 
 Power: 155 W avg, 156 W NP
 Executed structure: unavailable in this legacy example; step-power adherence not established
+Compliance: not evaluable; no matched step windows
 IF: 0.57
 Power zones: Z1 12%, Z2 88%
 Grey Zone (Z3): 0%
@@ -118,6 +245,7 @@ Start: 12:45
 Moving time: 15m
 
 Executed structure: no matched plan windows supplied
+Compliance: not evaluable; no matched step windows
 
 HR: 125 avg, 141 max
 HR zones: Z1 68%, Z2 32%
@@ -191,6 +319,7 @@ Distance: 58.37 km
 
 Power: 142 W avg, 162 W NP
 Executed structure: unavailable in this legacy example; whole-session zones remain descriptive
+Compliance: not evaluable; no matched step windows
 IF: 0.66
 Power zones: Z1 30%, Z2 36%, Z3 23%, Z4 9%, Z5 2%
 Grey Zone (Z3): 23%
@@ -217,6 +346,7 @@ Moving time: 12m
 Planned: 10m
 
 Executed structure: no matched plan windows supplied
+Compliance: not evaluable; no matched step windows
 
 HR: 128 avg, 142 max
 HR zones: Z1 65%, Z2 35%
@@ -285,6 +415,7 @@ Distance: 48.23 km
 
 Power: 178 W avg, 205 W NP
 Executed structure: unavailable in this legacy example; three planned efforts do not establish three executed steps
+Compliance: not evaluable; no matched step windows
 IF: 0.80
 Power zones: Z1 28%, Z2 31%, Z3 3%, Z4 33%, Z5 4%, Z6 1%
 Grey Zone (Z3): 3%
@@ -351,6 +482,7 @@ Distance: 45.14 km
 
 Power: 148 W avg, 149 W NP
 Executed structure: ride shortened; matched step windows unavailable in this legacy example
+Compliance: not evaluable; no matched step windows (ride shortened)
 IF: 0.56
 Power zones: Z1 19%, Z2 81%
 Grey Zone (Z3): 0%
@@ -463,6 +595,7 @@ Terrain: rolling (8 m/km)
 
 Power: 168 W avg, 171 W NP
 Executed structure: continuous easy/endurance confirmed by the supplied scenario context; plan-window mapping unavailable
+Compliance: not evaluable; no matched step windows
 IF: 0.71
 Power zones: Z1 18%, Z2 78%, Z3 4%
 Grey Zone (Z3): 4%
@@ -522,7 +655,7 @@ Ride: Recovery 1h, Z1 only
 
 ## Example 7: Sweet Spot Session with Consonant DFA Reading
 
-Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficient session data and passing timing/coverage/gap checks. The only drift reason is `short_session`; 3% supra does not trigger the >15% veto.
+Fictional schema-2 scenario: 5100 original slots (85 recorded minutes), sufficient session data and passing timing/coverage/gap checks. The only drift reason is `short_session`; 3% supra does not trigger the >15% veto. This revised synthetic example adds an exact paired plan identifying four 10-minute work steps at 245 W, activity-applicable indoor FTP 272 W, and qualified plan_match_v2 actual means of 245 / 247 / 246 / 245 W, each over 599 measured seconds with 100% power coverage. Each is 90.1–90.8% FTP. Recovery/warm-up/cool-down roles are supplied by that fictional prescription, not inferred from lower power. Under the recording-time completion convention the four fully observed 599-second windows establish completion, and every mean is inside the asymmetric power band, so the compliance line reports 4/4 on target. Progression still requires its own gate.
 
 ```
 **Post-workout: Tuesday 10 February**
@@ -539,12 +672,13 @@ Planned: 1h25m
 Distance: 42.85 km
 
 Power: 195 W avg, 215 W NP
-Executed structure: matched work-step actuals unavailable in this legacy example
+Executed structure: paired_plan_windows, followed; 4 × 10m planned work at 245 W, measured work 9m59s each, actual means 245 / 247 / 246 / 245 W, 100% power coverage; work roles supplied by paired intent
+Compliance: main work completed, 4/4 steps on target (+0 / +2 / +1 / +0 W)
 IF: 0.79
 Power zones: Z1 22%, Z2 28%, Z3 8%, Z4 38%, Z5 3%, Z6 1%
 Grey Zone (Z3): 8%
 Quality (Z4+): 42%
-Session profile: Sweetspot
+Session profile: Sweetspot (qualified work steps 90.1–90.8% of activity FTP 272 W)
 Variability Index: 1.10
 
 HR: 142 avg, 158 max
@@ -582,7 +716,8 @@ Hours: 8h12m
 TSS: 295
 
 **Interpretation**
-Step-power adherence is not established by these aggregates. DFA a1 sat predominantly
+Qualified work-step actuals support Sweetspot despite whole-session VI 1.10 and IF 0.79;
+formal adherence is not established by broad window agreement. DFA a1 sat predominantly
 in the 0.5–0.75 tempo band (44%) where sweet spot work should land per the protocol
 threshold mapping; internal intensity matched prescription. Drift +0.04 is descriptive only
 because the recording is under 90 minutes; the 3% supra share does not trigger the supra
@@ -614,6 +749,7 @@ Terrain: flat (3 m/km)
 
 Power: 210 W avg, 238 W NP
 Executed structure: matched work-step actuals unavailable in this legacy example
+Compliance: not evaluable; no matched step windows
 IF: 0.88
 Power zones: Z1 16%, Z2 22%, Z3 5%, Z4 52%, Z5 4%, Z6 1%
 Grey Zone (Z3): 5%

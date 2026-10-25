@@ -157,6 +157,7 @@ https://raw.githubusercontent.com/[your-username]/[repo-name]/main/saved_workout
 ```
 
 - `latest.json`: current 7-day snapshot with activities, wellness, fitness metrics, and derived Section 11 values. Rewritten on every successful sync.
+- `latest.json.sleep_context`: updated sync.py widens its existing extended wellness read to 35 dates (D−34..D), while all existing baselines/reports retain their original 28-date slice. This is low-confidence context only, never readiness. No new sleep file, cache or persisted state is needed, and history-refresh scheduling does not affect it. The existing `examples/json-auto-sync/auto-sync.yml` output/publishing path carries it inside latest.json, including the manual-run download artifact; no workflow change is needed for this field. The AI discovers it through `READ_THIS_FIRST.sleep_context_note`. Missing dates, unknown athlete timezone or current-date mismatch remain explicit unavailable states; a failed extended fetch does not publish a new assessment. Existing archive and Git-history retention still apply to the whole export.
 - `history.json`: longitudinal data with tiered granularity: daily (90 days), weekly (180 days), and monthly (up to 3 years). Generated automatically on first run, regenerated when outdated.
 - `intervals.json`: interval/DFA payloads and completed-session structure detail (14-day retention). Written on every successful sync. `has_structure` in latest.json identifies available detail; the compact `structure_summary` survives detail expiry through the 28-day recent-activity window. These committed JSON files also retain the cache state needed by auto-sync; no additional state file is required.
 - `routes.json`: route/terrain data for planned events with GPX/TCX attachments. Includes climb/descent detection, course character, and polyline. Written on every successful sync, with `"events": []` when no planned event has an applicable attachment. Parsed routes are cached by attachment ID.
@@ -345,6 +346,8 @@ Benchmark Index = (Current FTP - FTP 8 weeks ago) / FTP 8 weeks ago
 ---
 
 ## Usage with AI
+
+**Calendar naming:** To let the calendar support a deload week, name its sessions with "Deload" or "Recovery week", for example "Recovery week - easy ride". Single recovery rides inside normal weeks are not read as a deload week. Names support the phase assessment; they do not establish it on their own.
 
 Once set up, configure your AI platform using the instructions in the [main README](../../README.md#web-chat-setup).
 

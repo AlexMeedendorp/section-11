@@ -158,7 +158,7 @@ saved_workouts.json (on-demand: load when selecting, reusing, or discussing a sa
     └── workout_doc      → Full structure as received; targets may be relative or absolute
 ```
 
-> `latest.json` carries compact completed-step `structure_summary` through 28 days. `has_structure` points to detailed `session_structure` in `intervals.json` within 14-day retention; after expiry only the last summary is carried forward. Detailed thirds/WORK efforts appear only without usable plan windows. Read method/status and issues; plan match is not compliance. See the protocol's Completed Session Structure contract. Flat planned lists have summaries; roles are never inferred.
+> `latest.json` carries compact completed-step `structure_summary` through 28 days. `has_structure` points to detailed `session_structure` in `intervals.json` within 14-day retention; after expiry only the last summary is carried forward. Detailed thirds/WORK efforts appear only without usable plan windows. Read method/status and issues; plan match is not compliance. See the protocol's Completed Session Structure contract. Flat planned lists have summaries; sync does not emit inferred roles. Coaching interpretation follows SECTION_11's Main work rule using prescription structure, durations and targets, with name or description as context only and optional workout step text.
 
 > **Note on the two libraries:** `saved_workouts.json` mirrors the athlete's own saved workouts in Intervals.icu. It is **not** the [Workout Reference Library](workout-library/), which is the normative catalogue of session templates Section 11 designs plans from. Full description: [Saved Workouts Mirror](json-examples/README.md#saved-workouts-mirror).
 
@@ -197,9 +197,9 @@ The [reports/](reports/) folder contains Section 11-compliant templates:
 |----------|----------|
 | `PRE_WORKOUT_REPORT_TEMPLATE.md` | Briefing before a session |
 | `POST_WORKOUT_REPORT_TEMPLATE.md` | Analysis after a session |
-| `WEEKLY_REPORT_TEMPLATE.md` | End-of-week summary |
-| `BLOCK_REPORT_TEMPLATE.md` | End-of-block phase assessment |
-| `SEASON_REPORT_TEMPLATE.md` | On-demand annual-arc trajectory + YoY |
+| `7_DAY_REPORT_TEMPLATE.md` | Rolling seven-date summary, on any day |
+| `28_DAY_REPORT_TEMPLATE.md` | Rolling 28-day progression from four supplied chunks |
+| `SEASON_REPORT_TEMPLATE.md` | Completed calendar weeks and calendar-matched YoY |
 | `WEATHER_REPORT_TEMPLATE.md` | On-request five-day planned-route forecast/outlook |
 | `*_EXAMPLES.md` | Anonymized examples showing normal and threshold-breach scenarios |
 
