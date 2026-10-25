@@ -21,6 +21,33 @@ Read the planned summary's `detail_file`, match event ID, route_ref, departure, 
 
 **These are invented data**: realistic values for a ~12h/week multi-sport athlete (cycling + rowing + walks), CTL ~65, FTP 260/270 (indoor/outdoor). Not anonymized real data.
 
+## Report intensity and zone provenance (synthetic fragments)
+
+Use primary-sport Seiler blocks for all period intensity lines, labelled with their sport and zone_basis. All-sports zone_distribution_7d and Seiler blocks remain context only. The current seven-day highest-TSS sport also scopes rolling chunks and, at ordinary refresh, historical weekly/monthly blocks. Older history missing these blocks is unavailable for scoped intensity, never a fallback to all-sports percentages. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+
+```json
+{
+  "zone_reference": {"basis": "power", "ftp_w": 260, "environment": "indoor"}
+}
+```
+
+This is an activity fragment: FTP is the activity's captured threshold, not current athlete settings. A runner using HR could have `{"basis":"hr","ftp_w":null,"environment":"outdoor"}`. Environment is indoor for true trainer/indoor flags or a Virtual* activity type, otherwise outdoor including false/null/absent flags; malformed non-boolean flags without a positive indoor marking mean unknown. A Walk with trainer null is outdoor; VirtualRide with trainer null and VirtualSki with trainer true are indoor. Type is a data marking, never a name inference; the separate legacy indoor field is unchanged. No supported zone source leaves basis null. Pace-only data does not invent a basis or threshold. With provenance, a Z3 flag can say `Zones: power, from indoor FTP 260 W`; generic uncertainty wording is only for missing provenance.
+
+The following distribution shape applies to derived_metrics.seiler_tid_7d_primary / seiler_tid_28d_primary and to rolling/history period seiler_tid_primary. The run family renders as running, with HR basis; it never defaults to cycling. Report drift uses capability.tid_comparison_primary, not its unchanged all-sports sibling.
+
+```json
+{
+  "seiler_tid_primary": {
+    "sport": "run", "zone_basis": "hr",
+    "z1_seconds": 2700, "z2_seconds": 540, "z3_seconds": 360,
+    "z1_pct": 75.0, "z2_pct": 15.0, "z3_pct": 10.0,
+    "polarization_index": null, "classification": "Pyramidal"
+  }
+}
+```
+
+The historical JSON files keep their original headers and omit these current additive fields. These fragments are synthetic schema evidence, never athlete data.
+
 ## Adjacent interval sources (synthetic fragment)
 
 See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use). This illustrative activity fragment separates a timeline label, scoped power/time counts requiring context review, and the detector's descriptive strings. A detector disagreement must be reported alongside Section 11 evidence; session_structure judges. No per-bout arrays move into latest.json. The historical JSON files retain their original producer headers and omitted fields.

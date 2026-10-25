@@ -469,6 +469,8 @@ Zone aggregations (TID, polarization, grey zone %) default to power zones with H
 
 See [examples/README.md](examples/README.md) for the full derived metrics table and data output structure.
 
+Report intensity uses the primary-sport Seiler blocks, with supplied sport/basis labels; all-sports zones stay context only. Activity zone_reference records the captured FTP/environment. Historical scoped intensity appears on normal history refresh, without a new request or trigger. See [Report intensity source](SECTION_11.md#report-intensity-source).
+
 ### Longitudinal History
 
 The script generates `history.json` with tiered granularity: daily (90 days), weekly (180 days), and monthly (up to 3 years). Includes period summaries, FTP timeline, and data gap detection. `latest.json` covers current coaching. Provide `history.json` for trend, phase or longitudinal questions, and `intervals.json` or `routes.json` (if present) when a task needs them.

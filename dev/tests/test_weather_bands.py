@@ -189,7 +189,7 @@ class CompactReportContractTests(unittest.TestCase):
             ['Phase','RHR','HRV','Sleep','Sleep Quality','Sleep context'],
             ['TSB','CTL','ATL','ACWR','Recovery Index','Ramp Rate','Load/Recovery',
              'Durability','EF','Monotony'],
-            ['Polarization','TID 28d'],
+            ['Polarization ([sport], [basis])','TID 28d ([sport], [basis])'],
             ['Total hours, last 7 days','Total activities, last 7 days',
              'Total TSS, last 7 days']])
         for required in ('**Pre-workout: [Weekday D Month]**',

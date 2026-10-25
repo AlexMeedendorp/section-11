@@ -30,7 +30,7 @@ TSB: [start] -> [now] ([signed delta])
 Hours: [supplied hours]
 TSS: [supplied TSS]
 CTL: [supplied end CTL]
-Zones: [Coggan Z1+Z2 %, Z3 %, Z4+ %, basis]
+Zones ([sport], [basis]): [primary Seiler Z1+Z2 %, Z3 %, Z4+ %]
 Hard days: [count, dates and supported names/reasons]
 Durability: [7-day avg, N]
 EF: [7-day avg, N]
@@ -52,7 +52,7 @@ Feel: [28-day avg, N sessions]
 RPE: [28-day avg, N sessions]
 
 **Intensity**
-TID 28d: [supplied Seiler classification, PI, basis]
+TID 28d ([sport], [basis]): [supplied primary Seiler classification, PI]
 
 **Key sessions**
 **[Status emoji] [date, name]**
@@ -99,10 +99,10 @@ For compliance, read the compact per-step rows with their evaluator, completion 
 - Totals by sport use exact-window recent_activities, distinct IDs, moving_time_s and achieved TSS. Total hours/TSS must reconcile with the four supplied chunks, allowing display rounding. Do not reconstruct chunk metrics from activities or history. Missing metrics remove their own lines, not other supplied observations.
 - Pairing comes from plan_pairing for every sport. "Rides: 12 of 12 planned ✅" counts paired activities, not adherence. Checked against plan includes assessed step statuses and paired no-step activities with a non-null duration result; only followed steps or within-tolerance no-step durations contribute to its followed numerator. Do not substitute a duration check for a structured plan assessment. Exclude unassessed/unknown results from the checked denominator; never show not-assessed counts. Explain material retained-step coverage without inventing assessments: full detail remains 14 days; older step results are last captured. Pairing identity/duration refresh across 28 days.
 - Fitness uses exact dated start-of-period and current CTL/ATL/TSB. Start -> now is allowed here. If the start is missing, show only the dated current value. No seven-day ramp, FTP, eFTP, W/kg, ceilings or separate progression section.
-- Each chunk's hours, TSS, ctl_end, zone_distribution, hard_days, hard_day_details, capability means/N and wellness are supplied. Normalize zone hours only against the supplied total. Never infer Seiler TID from Coggan zones. Hard-day reasons use actual rung/basis: e.g. "Hard days: 3 (10 Jul intervals; 12 and 13 Jul by power Z3 only)" only when hard_day_details supports that distinction. No reclassification; unknown plan intensity stays unknown.
+- Each chunk's hours, TSS, ctl_end, hard_days, hard_day_details, capability means/N and wellness are supplied. Zones use chunk.seiler_tid_primary.z1_pct/z2_pct/z3_pct as Z1+Z2/Z3/Z4+, labelled with sport and zone_basis. All chunks retain the current primary sport; never reselect an older chunk's winner or use all-sports zone_distribution. Missing primary data is unavailable. Hard-day reasons use actual rung/basis: e.g. "Hard days: 3 (10 Jul intervals; 12 and 13 Jul by power Z3 only)" only when hard_day_details supports that distinction. No reclassification; unknown plan intensity stays unknown.
 - Chunk Durability/EF/HRRc say 7-day avg and N. HRRc only when present, numbers only, no trend words. All producer eligibility gates and per-session decoupling >=90 min/VI <=1.05 and EF cycling >=20 min/power+HR/VI <=1.05 gates remain. A per-session value with `decoupling_detail.comparability: plan_changes_power` stays in the series, marked "plan changes power", without a drift verdict or trend claim from that value; chunk Durability means are unchanged.
 - Wellness uses latest.json.wellness_28d, not seven-day wellness_data or a mean of chunk means. Each metric's own observed-day count is authoritative. Weight uses weight_kg.avg/days/latest/latest_date with display conversion; keep the existing current_status.weight slope gate independently. Feel/RPE use available exact-window recent_activities with N; no missing values become zero.
-- Intensity uses derived_metrics.seiler_tid_28d with its basis. Phase is current derived_metrics.phase_detection only, still based on configured calendar weeks.
+- Intensity uses derived_metrics.seiler_tid_28d_primary, labelled with its sport and zone_basis. No hardcoded cycling or all-sports fallback. See [Report intensity source](../../SECTION_11.md#report-intensity-source). Phase is current derived_metrics.phase_detection only, still based on configured calendar weeks.
 - Key-session header markers and plan identity follow 7_DAY_REPORT_TEMPLATE.md. Use exact identified target/actual windows. Long-ride observations and a tempo whole-ride decoupling series remain clearly distinct from main-set measures. No invented target power from session average/NP.
 - Best efforts uses supplied capability.power_curve_delta current/previous anchor watts and hr_curve_delta with their own window. Attribute current dates from matching exact fun_facts.rolling_28d.peaks or exact activity observations; do not attach a date to a different maximum. Missing previous values remove only the bracket. Dates absent from the source are omitted, not guessed. Shift uses words, no percentages or rotation scores.
 - Flags follow the 7-day per-flag layout and Z3 intent/basis rules. No high-drift count flag.

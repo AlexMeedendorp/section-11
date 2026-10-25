@@ -4,6 +4,9 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.159 - Primary-sport Seiler intensity for reports (rolling chunks, history,
+  primary drift) and per-activity zone_reference. Pairs with protocol/skill v11.94.
+
 Version 3.158 - interval_data v1 groups plan_match (former structure_summary),
   per-step power compliance and icu_detected; the final aligned second of 21-60 s bouts
   is excluded from adherence. Pairs with protocol/skill v11.93.
@@ -4577,6 +4580,7 @@ class DataOverview:
         folder_present = folder.is_dir() and not folder.is_symlink() and not folder.parent.is_symlink()
         return {"version": 1, "base": "latest_file_directory", "files": files,
                 "interval_data_note": sync.INTERVAL_DATA_NOTE,
+                "report_intensity_note": sync.REPORT_INTENSITY_NOTE,
                 "folders": [{"path": "maps/weather/", "present": folder_present,
                              "updated_at": max((m["updated_at"] for m in maps), default=None),
                              "holds": "Up to four ordered PNG pages per ride, six rides; at most 24 pages for chat", "managed_count": len(maps)}],
@@ -4589,6 +4593,11 @@ class IntervalsSync:
     """Sync Intervals.icu data to GitHub repository or local file"""
 
     INTERVAL_DATA_VERSION = 1
+    REPORT_INTENSITY_NOTE = (
+        "Report intensity uses seiler_tid_7d_primary / seiler_tid_28d_primary and period "
+        "seiler_tid_primary, labelled with sport and zone_basis; all-sports zones/TID are "
+        "aggregate context only. Activity zone_reference records basis, activity FTP and "
+        "activity environment. See SECTION_11.md#report-intensity-source.")
     INTERVAL_DATA_NOTE = (
         "recent_activities[].interval_data: plan_match is timeline matching only; "
         "compliance summarizes intervals.json session_structure power/time evidence "
@@ -4604,7 +4613,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.158"
+    VERSION = "3.159"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -5839,7 +5848,8 @@ class IntervalsSync:
                 "power_z3_only_non_intensity": bool(only_z3 and z3_rides and all(
                     m["cycling"] and m["targets_intensity"] is False for m in z3_rides))}
 
-    def _rolling_7d_chunks(self, activities, wellness, formatted, today, current_ctl):
+    def _rolling_7d_chunks(self, activities, wellness, formatted, today, current_ctl,
+                           primary_sport=None):
         """Four disjoint rolling weeks; reuse metric gates, never phase detection."""
         anchor = datetime.strptime(today, "%Y-%m-%d")
         chunks = []
@@ -5870,6 +5880,7 @@ class IntervalsSync:
                 "chunk": index + 1, "start": start, "end": end,
                 "total_hours": round(sum(a.get("moving_time", 0) or 0 for a in acts) / 3600, 2),
                 "total_tss": round(sum(a.get("icu_training_load", 0) or 0 for a in acts), 0),
+                "seiler_tid_primary": self._report_seiler_tid(acts, primary_sport),
                 "zone_distribution": {
                     **{key + "_hours": round(zones[key + "_time"] / 3600, 2)
                        for key in ("z1", "z2", "z3", "z4_plus", "total")},
@@ -9933,6 +9944,7 @@ class IntervalsSync:
         data = {
             "READ_THIS_FIRST": {
                 "interval_data_note": self.INTERVAL_DATA_NOTE,
+                "report_intensity_note": self.REPORT_INTENSITY_NOTE,
                 "instruction_for_ai": "DO NOT calculate totals from individual activities. Use the pre-calculated values in 'summary', 'weekly_summary', and 'derived_metrics' sections below. These are already computed accurately from the API data.",
                 "display_formatting": "For durations and sleep, always display the '_formatted' fields (e.g., sleep_formatted, duration_formatted, total_training_formatted) instead of converting decimal '_hours' values. The formatted fields are pre-calculated from raw seconds and avoid rounding errors.",
                 "data_period": f"Last {days_back} days (including today)",
@@ -10079,7 +10091,8 @@ class IntervalsSync:
         }
 
         data["rolling_7d_chunks"] = self._rolling_7d_chunks(
-            activities_extended, wellness_extended, data["recent_activities"], today, ctl)
+            activities_extended, wellness_extended, data["recent_activities"], today, ctl,
+            data["derived_metrics"]["primary_sport"])
         report_start = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=27)).strftime("%Y-%m-%d")
         data["wellness_28d"] = self._report_wellness(wellness_extended, report_start, today, athlete_units)
         data["derived_metrics"]["capability"]["dfa_a1_profile_28d"] = self._dfa_28d_profile(
@@ -10706,6 +10719,9 @@ class IntervalsSync:
 
         # === TID COMPARISON (7d vs 28d drift detection) ===
         tid_comparison = self._calculate_tid_comparison(seiler_tid_all, seiler_tid_28d_all)
+        tid_comparison_primary = self._calculate_tid_comparison(
+            seiler_tid_primary or {}, seiler_tid_28d_primary or {})
+        tid_comparison_primary["sport"] = primary_sport
 
         # === DURABILITY TREND (aggregate decoupling) ===
         durability = self._calculate_durability(activities_7d, activities_28d)
@@ -10940,6 +10956,7 @@ class IntervalsSync:
                 "efficiency_factor": efficiency_factor,
                 "hrrc": hrrc_trend,
                 "tid_comparison": tid_comparison,
+                "tid_comparison_primary": tid_comparison_primary,
                 "power_curve_delta": power_curve_delta,
                 "hr_curve_delta": hr_curve_delta,
                 "sustainability_profile": sustainability_profile,
@@ -11216,6 +11233,36 @@ class IntervalsSync:
             result[sport_family] = daily_array
 
         return result
+
+    def _report_primary_sport(self, activities):
+        """Use the existing latest-seven-day highest-TSS rule for report history."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=6)).strftime("%Y-%m-%d")
+        current = [a for a in activities if start <= a.get("start_date_local", "")[:10] <= today]
+        totals = {sport: sum(days) for sport, days in
+                  self._get_daily_tss_by_sport(current, days=7).items()}
+        return max(totals, key=totals.get) if totals else None
+
+    def _report_seiler_tid(self, activities, primary_sport):
+        """One supplied main sport across report windows; no all-sport fallback."""
+        if not primary_sport:
+            return None
+        return {**self._build_seiler_tid(activities, sport_family_filter=primary_sport),
+                "sport": primary_sport}
+
+    def _zone_reference(self, activity):
+        """Provenance only: retain upstream zones and their selected basis."""
+        _, basis = self._get_activity_zones(
+            activity, sport_family=self.SPORT_FAMILIES.get(activity.get("type"), "other"))
+        ftp = self._fact_number(activity.get("icu_ftp")) if basis == "power" else None
+        flags = [activity.get(key) for key in ("indoor", "trainer")]
+        activity_type = activity.get("type")
+        virtual = isinstance(activity_type, str) and activity_type.startswith("Virtual")
+        environment = ("indoor" if virtual or any(v is True for v in flags) else
+                       "unknown" if any(v is not None and not isinstance(v, bool) for v in flags) else
+                       "outdoor")
+        return {"basis": basis, "ftp_w": ftp if ftp and ftp > 0 else None,
+                "environment": environment}
 
     # === ZONE EXTRACTION & HARD DAY CLASSIFICATION ===
     # Shared helpers used by _aggregate_zones, derived metrics, and all tier builders.
@@ -15177,6 +15224,8 @@ class IntervalsSync:
         """
         rows = []
         now = datetime.now()
+        report_sport = self._report_primary_sport(
+            [a for group in activities_by_date.values() for a in group])
         
         # Calculate weeks
         start_date = now - timedelta(days=days)
@@ -15363,6 +15412,7 @@ class IntervalsSync:
                 "primary_sport": week_primary_sport,
                 "primary_sport_tss": week_primary_sport_tss,
                 "sport_tss_breakdown": {k: round(v, 0) for k, v in sport_tss.items()} if sport_tss else None,
+                "seiler_tid_primary": self._report_seiler_tid(_week_acts, report_sport),
                 "activity_count": week_activities,
                 "ctl_end": round(ctl_end, 1) if ctl_end else None,
                 "atl_end": round(atl_end, 1) if atl_end else None,
@@ -15439,6 +15489,8 @@ class IntervalsSync:
         """
         rows = []
         now = datetime.now()
+        report_sport = self._report_primary_sport(
+            [a for group in activities_by_date.values() for a in group])
         start_date = now - timedelta(days=days)
         
         # Group by month
@@ -15468,6 +15520,7 @@ class IntervalsSync:
             total_zone_time = 0
             days_with_data = 0
             total_days_in_month = 0
+            month_acts = []
             
             date = current_month
             while date < next_month and date <= now:
@@ -15475,6 +15528,7 @@ class IntervalsSync:
                 total_days_in_month += 1
                 
                 day_activities = activities_by_date.get(date_str, [])
+                month_acts.extend(day_activities)
                 wellness = wellness_by_date.get(date_str, {})
                 
                 if day_activities or wellness:
@@ -15565,6 +15619,7 @@ class IntervalsSync:
             
             rows.append({
                 "month": month_str,
+                "seiler_tid_primary": self._report_seiler_tid(month_acts, report_sport),
                 "total_hours": round(month_seconds / 3600, 2),
                 "total_tss": round(month_tss, 0),
                 "activity_count": month_activities,
@@ -17061,6 +17116,7 @@ class IntervalsSync:
                     act.get("icu_intensity"), act.get("icu_rpe")
                 ),
                 "zone_distribution": zone_dist,
+                "zone_reference": self._zone_reference(act),
                 "has_intervals": False,
                 "has_dfa": False,
             }

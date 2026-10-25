@@ -9,6 +9,8 @@ Reference templates and examples for Section 11-compliant AI coaching reports.
 AI systems should structure athlete reports consistently.  
 See templates and examples below for annotated reference.
 
+Every period intensity line uses primary-sport Seiler data and labels its sport and basis; per-activity zones remain that activity's observations. Use matching primary TID drift and zone_reference for Z3 provenance, never all-sports fallback. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+
 **Pre-Workout Reports must include:**
 - Readiness assessment (HRV, RHR, Sleep vs baselines)
 - Load context (TSB, ACWR, Load/Recovery, Monotony if elevated)

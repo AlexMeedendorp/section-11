@@ -6,6 +6,8 @@ Synthetic values only. Both examples end on Tuesday, independent of the configur
 
 Cadence endurance has no steps and a 3300-second plan; Park walk has no steps and a 1800-second plan. Both durations are within tolerance. Valley endurance is a paired step plan without an assessment. The partly-followed ride has observed off-target steps.
 
+The revised intensity values illustrate supplied cycling-primary, power-basis blocks; the walk is excluded. The flagged session has a synthetic power/indoor/260 W zone_reference. These are invented source assumptions for the example, not recomputed athlete results.
+
 ```text
 **7-day report: Wed 8 July to Tue 14 July 2026**
 Data updated: 14 Jul 15:30
@@ -36,9 +38,9 @@ HR: 131 average, 163 maximum
 HRRc: 31 bpm
 
 **Intensity and capability**
-Zones: Z1+Z2 91%, Z3 6%, Z4+ 3% (mixed basis)
-TID 7d: Pyramidal
-TID 28d: Pyramidal
+Zones (cycling, power): Z1+Z2 91%, Z3 6%, Z4+ 3%
+TID 7d (cycling, power): Pyramidal
+TID 28d (cycling, power): Pyramidal
 
 Durability: 7-day avg 3.1% (N=2), 28-day avg 3.3% (N=8)
 EF: 7-day avg 1.30 (N=3), 28-day avg 1.28 (N=10)
@@ -68,7 +70,7 @@ RPE: 7-day avg 3.7/10 (N=3) (previous 7 days 3.8/10, N=3)
 Session: 8 Jul, Cadence practice
 Z3 by power: 18m
 Z3 by HR: 2m
-Cause: creep, or zones/FTP off
+Zones: power, from indoor FTP 260 W
 
 **Fun facts (cycling, descriptive)**
 Max power (1 s): 715 W, 8 Jul, Cadence practice
@@ -130,3 +132,14 @@ Pairing identifies intent but does not establish execution quality. Missing powe
 ```
 
 Missing comparisons, zero climbing, unavailable peaks, absent equivalents and unplanned upcoming sessions are omitted. No status word or inferred success marker appears in the sparse session lines.
+
+## Runner intensity fragment
+
+For a synthetic primary sport of run, the supplied HR-based primary block has z1_pct=75, z2_pct=15, z3_pct=10 and classification=Pyramidal. Cycling cross-training is excluded; the display expands the supplied run family to running:
+
+```
+Zones (running, HR): Z1+Z2 75%, Z3 15%, Z4+ 10%
+TID 7d (running, HR): Pyramidal
+```
+
+If the primary block is missing, omit these lines and explain the missing intensity source when material. Never reuse a cycling label or all-sports share.

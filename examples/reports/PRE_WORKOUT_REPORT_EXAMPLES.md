@@ -3,6 +3,8 @@
 > Fictional examples showing standard pre-workout report format, not current athlete data.  
 > See `PRE_WORKOUT_REPORT_TEMPLATE.md` for field reference.
 
+The fictional Polarization/TID lines use primary cycling, power-basis Seiler blocks and matching primary drift. The sport label is supplied data, not a template default; a runner example appears in 7_DAY_REPORT_EXAMPLES.md.
+
 The point-weather blocks use the shared [Point-weather location](../../SECTION_11.md#point-weather-location) rule. Example 2 uses `athlete_profile.location` from current `latest.json`; example 4 uses a current-chat statement; example 5 uses the current official dossier's Home region because the profile location is null/empty. Route data takes precedence; unresolved travel means omit weather or ask. Rest days, indoor sessions, walks and other sports have no weather. All dates, metrics, source assignments and weather values below are fictional, independent of the approved live-data layout references.
 
 Assume permitted geocoding and weather fetches succeeded where a home forecast is shown. The athlete timezone is Europe/Copenhagen. Weather times omit its zone label; Data updated keeps the local timestamp and zone. Link [Open-Meteo](https://open-meteo.com/) and [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) in the one final attribution line. GeoNames credit remains in API documentation and other geocoding displays; report places are labelled with the athlete's source. Missing values stay unavailable.
@@ -72,7 +74,7 @@ Load/Recovery: 5.8
 Durability: 2.14% 7d mean(4) (stable)
 EF: 1.44 7d mean(4) (stable)
 
-Polarization: Z1+Z2 97%, Z3 1%, Z4+ 2%; Polarized (PI: 3.20)
+Polarization (cycling, power): Z1+Z2 97%, Z3 1%, Z4+ 2%; Polarized (PI: 3.20)
 
 Total hours, last 7 days: 14h12m
 Total activities, last 7 days: 11
@@ -111,7 +113,7 @@ Load/Recovery: 6.0
 Durability: 1.85% 7d mean(3) (stable)
 EF: 1.45 7d mean(3) (stable)
 
-Polarization: Z1+Z2 96%, Z3 1%, Z4+ 3%; Polarized (PI: 3.15)
+Polarization (cycling, power): Z1+Z2 96%, Z3 1%, Z4+ 3%; Polarized (PI: 3.15)
 
 Total hours, last 7 days: 15h18m
 Total activities, last 7 days: 12
@@ -170,7 +172,7 @@ Load/Recovery: 5.9
 Durability: 2.40% 7d mean(3) (improving)
 EF: 1.47 7d mean(3) (improving)
 
-Polarization: Z1+Z2 95%, Z3 1%, Z4+ 4%; Polarized (PI: 3.10)
+Polarization (cycling, power): Z1+Z2 95%, Z3 1%, Z4+ 4%; Polarized (PI: 3.10)
 
 Total hours, last 7 days: 16h6m
 Total activities, last 7 days: 13
@@ -212,8 +214,8 @@ Durability: 5.80% 7d mean(3) (declining) ⚠️
 EF: 1.38 7d mean(3) (declining) ⚠️
 Monotony: 2.5: elevated, add variety this week
 
-Polarization: Z1+Z2 93%, Z3 2%, Z4+ 5%; Polarized (PI: 2.85)
-TID 28d: Pyramidal (PI: 1.90); drift: shifting ⚠️
+Polarization (cycling, power): Z1+Z2 93%, Z3 2%, Z4+ 5%; Polarized (PI: 2.85)
+TID 28d (cycling, power): Pyramidal (PI: 1.90); drift: shifting ⚠️
 
 Total hours, last 7 days: 18h24m
 Total activities, last 7 days: 14

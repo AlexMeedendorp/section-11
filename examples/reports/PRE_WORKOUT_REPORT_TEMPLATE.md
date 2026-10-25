@@ -31,8 +31,8 @@ Durability: [X.XX]% 7d mean([X]) ([trend])
 EF: [X.XX] 7d mean([X]) ([trend])
 Monotony: [X.XX] ([primary sport] [X.XX], total [X.XX]); [note]
 
-Polarization: Z1+Z2 [XX]%, Z3 [X]%, Z4+ [X]%; [Classification] (PI: [X.XX])
-TID 28d: [Classification] (PI: [X.XX]); drift: [shifting/acute_depolarization] [only if not consistent]
+Polarization ([sport], [basis]): Z1+Z2 [XX]%, Z3 [X]%, Z4+ [X]%; [Classification] (PI: [X.XX])
+TID 28d ([sport], [basis]): [Classification] (PI: [X.XX]); drift: [shifting/acute_depolarization] [only if not consistent]
 
 Total hours, last 7 days: [XhYm]
 Total activities, last 7 days: [XX]
@@ -125,8 +125,8 @@ The attribution is one line, last in the report text, with linked provider/licen
 | Monotony | Include **only** if > 2.3. Omit entirely when normal |
 | Durability | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
 | EF | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
-| TID 28d + drift | Include as separate line **only** if drift is "shifting" or "acute_depolarization". Omit entire line when "consistent" |
-| Polarization | Weekly Seiler TID rendered in power-zone labels. Source: `seiler_tid_7d.z1_pct/z2_pct/z3_pct`. Render as `Z1+Z2` (Seiler Easy / below LT1), `Z3` (Seiler Grey Zone / LT1–LT2), `Z4+` (Seiler Hard / above LT2). Do not output raw `Z1/Z2/Z3` labels; they collide with the per-session Power zones line above |
+| TID 28d + drift | Use derived_metrics.seiler_tid_28d_primary and capability.tid_comparison_primary. Include only for supported shifting/acute_depolarization; omit for consistent or unavailable. Label sport and zone_basis from the primary block; never use all-sports drift |
+| Polarization | Use derived_metrics.seiler_tid_7d_primary.z1_pct/z2_pct/z3_pct as Z1+Z2 / Z3 / Z4+, with its sport and zone_basis. These are Seiler groups, including when basis is HR. No all-sports fallback or hardcoded cycling; omit unavailable values. See [Report intensity source](../../SECTION_11.md#report-intensity-source) |
 | Load/Recovery context | Include tolerance note only when within 0.2 of threshold |
 | Next session | Include only on rest days |
 | Distance / Ascent / Terrain / Climbs / Pacing | Terrain and climb detail require `has_terrain: true`, `route_status: "ok"` and matching event ID and complete `route_ref` in `routes.json`. Quote supplied `display.position`, `display.distance` and elevation units; gradients use %. Include each supplied climb on its own line, followed by Pacing. `no_elevation` preserves distance/location in `route_geometry`, but never infer flatness, zero ascent, climbs or terrain-adjusted pacing. Omit unsupported fields. State other route limitations when route advice is requested. Full pre-ride briefing available on request |

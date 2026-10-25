@@ -194,6 +194,8 @@ Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete field set 
 
 ## RULES
 
+- Report intensity uses the primary-sport Seiler fields and matching primary TID drift, always labelled with supplied sport/basis. All-sports zones are context only; use activity zone_reference for zone provenance. See [Report intensity source](SECTION_11.md#report-intensity-source).
+
 - Read `recent_activities[].interval_data`: `plan_match` supplies timeline labels only; `compliance` supplies scoped power/time counts with availability gates; `icu_detected` supplies descriptive detected-interval cross-checks. Use `intervals.json.session_structure` for rep power and formal evaluation, with authoritative roles and constraints. Never use device/app lap averages, whole-session average/NP or a set mean as rep power or compliance counts. See [Which interval data to use](SECTION_11.md#which-interval-data-to-use). Expired detail leaves only last-captured plan-match context.
 
 - Follow the Section 11 validation checklist (Step 0: Data Source Fetch)

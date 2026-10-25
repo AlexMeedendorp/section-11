@@ -6,6 +6,8 @@ Synthetic fixtures only. Both examples use Sunday-start completed calendar weeks
 
 Eight completed weeks run from 17 May through 11 July. The first three ACWR values are unknown; the remaining five are 0.75, 0.90, 1.10, 1.30 and 1.40. The fictional dossier has no stated bottle.
 
+The intensity values illustrate supplied cycling-primary blocks in every completed week and matched month, with power basis throughout. Season percentages use their Seiler seconds; current and historical sport scopes agree. All-sports hours are not intensity weights.
+
 ```text
 **Season report: Sun 17 May to Sat 11 July 2026**
 Data updated: 14 Jul 15:30
@@ -38,8 +40,8 @@ ACWR above 1.3 through 1.5: 1
 ACWR known: 5 of 8 weeks
 
 **Intensity**
-Zones (8 weeks): Z1+Z2 92%, Z3 5%, Z4+ 3% (time-weighted)
-TID 28d (now): Pyramidal (mixed basis)
+Zones (cycling, power, 8 weeks): Z1+Z2 92%, Z3 5%, Z4+ 3% (zone-time weighted)
+TID 28d (now, cycling, power): Pyramidal
 Hard days: avg. 1.5/week over 8 completed weeks
 First half (17 May-13 Jun): avg. 1.5 hard days/week
 Second half (14 Jun-11 Jul): avg. 1.5 hard days/week
@@ -52,9 +54,9 @@ TSS: 1050 (900)
 Apr-Jun monthly avg. TSS: 980 (870)
 CTL peak: 44.2 (40.5)
 CTL end: 43.8 (39.9)
-Z1+Z2: 90% (93%)
-Z3: 6% (4%)
-Z4+: 4% (3%)
+Z1+Z2 (cycling, power; prior power): 90% (93%)
+Z3 (cycling, power; prior power): 6% (4%)
+Z4+ (cycling, power; prior power): 4% (3%)
 Hard days: June avg. 1.8/week (1.5/week)
 Longest ride: 2.75h (2.5h)
 HRV: June avg. 62 ms (59 ms)

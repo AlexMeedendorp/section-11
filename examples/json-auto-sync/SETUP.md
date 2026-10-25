@@ -10,6 +10,8 @@ This guide explains how to create an automated JSON data mirror of your Interval
 
 ## Overview
 
+Updated exports add primary-sport report intensity and activity zone_reference without extra setup or delivery steps. Historical weekly/monthly primary blocks appear on normal history refresh; older or sport-mismatched history remains unavailable for scoped intensity. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+
 The data mirror syncs your Intervals.icu metrics to a GitHub repository on a schedule, every 30 minutes by default, producing JSON files that AI systems can read through a GitHub connector or other authenticated repository access, or by URL for a public repository. GitHub runs scheduled workflows on a best-effort basis, so a scheduled sync can be late or skipped. For fresh data right after a workout, use [Sync Now](#sync-now). See [Sync Schedule and GitHub Actions Usage](#sync-schedule-and-github-actions-usage) before choosing a different schedule.
 
 **Result:** these files in your repository, shown here as raw URL patterns. Plain raw URLs work without GitHub authentication only for a public repository; for a private repository, see [Step 6](#step-6-verify) and [Usage with AI](#usage-with-ai).

@@ -180,9 +180,9 @@ Pre-calculated values for Section 11 compliance: AI should use these, not calcul
 | `phase_detected` | Auto-detected: Build, Base, Peak, Taper, Deload, Recovery, Overreached, null |
 | `phase_detection` | Full phase detection object: phase, confidence, reason_codes, basis (dual-stream), phase_duration_weeks |
 | `benchmark_indoor` / `benchmark_outdoor` | 8-week FTP progression |
-| `seiler_tid_7d` / `seiler_tid_28d` | Seiler TID classification (Polarized/Pyramidal/Threshold/HIT/Base) |
+| `seiler_tid_7d_primary` / `seiler_tid_28d_primary` | Report intensity with returned sport/basis; all-sports seiler_tid_7d / seiler_tid_28d remain context only. See [Report intensity source](../SECTION_11.md#report-intensity-source) |
 | `capability.durability` | Aggregate decoupling 7d/28d mean + trend (improving/stable/declining) |
-| `capability.tid_comparison` | TID drift detection (consistent/shifting/acute_depolarization) |
+| `capability.tid_comparison_primary` | Report TID drift for the selected main sport; existing tid_comparison remains all-sports diagnostic context |
 | `readiness_decision` | Pre-computed go/modify/skip with priority ladder (P0–P3) and signal breakdown |
 | `capability.efficiency_factor` | Aerobic efficiency (power÷HR normalized) 7d/28d with trend |
 | `capability.hrrc` | Heart rate recovery 7d/28d aggregate trend (improving/stable/declining) |

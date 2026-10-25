@@ -29,9 +29,9 @@ When no planned ride has a usable route within 120 h, use the [template's explic
 
 For fallback data, the single final attribution uses the actual provider name: "Weather data by MET Norway, CC BY 4.0." Name and link both providers on that line only when separate report blocks use both.
 
-- **7-day:** per-session rows, selected key-session windows, Coggan Zones and Seiler TID 7d/28d, durability/EF/HRRc means with N, current load and recovery.
+- **7-day:** per-session rows, selected key-session windows, primary-sport Seiler groups and TID 7d/28d with sport/basis labels, durability/EF/HRRc means with N, current load and recovery.
 - **28-day:** four supplied dated chunk blocks, full 28-day wellness and DFA, per-sport pairing counts, checked plan results, Best efforts and two-paragraph Interpretation. Preserve 14-day step detail; no ceilings or separate progression section.
-- **Season:** completed-week volume, CTL and coupled ACWR coverage, time-weighted Coggan Zones, separately labelled current Seiler TID and calendar-matched YoY. No invented prior-year phase labels.
+- **Season:** completed-week volume, CTL and coupled ACWR coverage, primary-sport Seiler groups weighted by zone seconds, separately labelled current primary TID and calendar-matched YoY. No invented prior-year phase labels. All report intensity follows [Report intensity source](../../SECTION_11.md#report-intensity-source); all-sports zones remain context only.
 - **Fun facts:** all three use supplied cycling period facts immediately before Interpretation. Preserve coverage, freshness and attribution. Biggest week belongs only in 28-day/Season. Equivalents are illustrative and never fueling advice.
 - **Plan status:** not_assessed remains distinct in source data but is never a count category. Reports distinguish pairing from checked execution, with marker-only session lines and duration checks for paired no-step sessions of every sport. A broad plan match is not formal adherence.
 - **Preservation:** post-workout Weekly totals, history week_start, phase detection, planned-week features and ordinary training-block concepts retain their existing meanings.

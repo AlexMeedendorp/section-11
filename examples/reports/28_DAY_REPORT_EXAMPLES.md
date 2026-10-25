@@ -4,6 +4,8 @@ Synthetic fixtures only. The four supplied chunks are newest first in JSON and d
 
 ## Example 1: four rolling chunks
 
+Intensity illustrates supplied cycling-primary, power-basis blocks for all four chunks and the 28-day window. Walks remain in totals only. The flagged activity has a synthetic power/outdoor/270 W zone_reference.
+
 ```text
 **28-day report: Wed 17 June to Tue 14 July 2026**
 Data updated: 14 Jul 15:30
@@ -32,7 +34,7 @@ TSB: -4.2 -> -1.4 (+2.8)
 Hours: 6h
 TSS: 270
 CTL: 43.2
-Zones: Z1+Z2 89%, Z3 7%, Z4+ 4% (mixed basis)
+Zones (cycling, power): Z1+Z2 89%, Z3 7%, Z4+ 4%
 Hard days: 2 (18 Jun intervals; 21 Jun tempo)
 Durability: 7-day avg 3.6% (N=2)
 EF: 7-day avg 1.25 (N=2)
@@ -45,7 +47,7 @@ Sleep: 7-day avg 7.00h (7 days)
 Hours: 6.5h
 TSS: 300
 CTL: 43.8
-Zones: Z1+Z2 86%, Z3 10%, Z4+ 4% (mixed basis)
+Zones (cycling, power): Z1+Z2 86%, Z3 10%, Z4+ 4%
 Hard days: 2 (25 Jun intervals; 28 Jun by power Z3 only)
 Durability: 7-day avg 3.4% (N=2)
 EF: 7-day avg 1.27 (N=3)
@@ -58,7 +60,7 @@ Sleep: 7-day avg 7.25h (6 days)
 Hours: 4.75h
 TSS: 220
 CTL: 42.1
-Zones: Z1+Z2 94%, Z3 4%, Z4+ 2% (mixed basis)
+Zones (cycling, power): Z1+Z2 94%, Z3 4%, Z4+ 2%
 Hard days: 1 (3 Jul intervals)
 Durability: 7-day avg 3.1% (N=2)
 EF: 7-day avg 1.29 (N=2)
@@ -71,7 +73,7 @@ Sleep: 7-day avg 7.25h (7 days)
 Hours: 5h
 TSS: 235
 CTL: 42.6
-Zones: Z1+Z2 91%, Z3 6%, Z4+ 3% (mixed basis)
+Zones (cycling, power): Z1+Z2 91%, Z3 6%, Z4+ 3%
 Hard days: 1 (10 Jul intervals)
 Durability: 7-day avg 3.1% (N=2)
 EF: 7-day avg 1.30 (N=3)
@@ -91,7 +93,7 @@ Feel: 28-day avg 2.1/5 (N=11)
 RPE: 28-day avg 3.9/10 (N=11)
 
 **Intensity**
-TID 28d: Pyramidal (mixed basis)
+TID 28d (cycling, power): Pyramidal
 
 **Key sessions**
 **⚠️ 10 Jul, Stepped endurance**
@@ -122,7 +124,7 @@ Easy-state guard Indoor: 151 W, 3 eligible sessions
 Session: 28 Jun, Meadow route
 Z3 by power: 36m
 Z3 by HR: 3m
-Cause: creep, or zones/FTP off
+Zones: power, from outdoor FTP 270 W
 
 **Fun facts (cycling, descriptive)**
 Max power (1 s): 780 W, 25 Jun, Hill circuit
@@ -144,7 +146,7 @@ Most work in a week: 24 Jun to 30 Jun, 4500 kJ, 400 g carbs
 **Interpretation**
 Volume fell in the latter two chunks while EF and wellness observations held. Sustained power observations were slightly higher than the previous 28 days.
 
-The power-only hard day on an easy plan needs zone/FTP context before treating it as intentional intensity. Retained step assessments and limited DFA coverage constrain the interpretation; the easy-state guard supports no threshold change.
+The power-only hard day uses the activity's outdoor FTP reference; its disagreement with HR does not establish intentional intensity or validate zone settings. Retained step assessments and limited DFA coverage constrain the interpretation; the easy-state guard supports no threshold change.
 ```
 
 ## Example 2: sparse data

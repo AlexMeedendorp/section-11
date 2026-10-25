@@ -21,6 +21,8 @@ For always-fresh data (agentic coaches, heartbeat checks), a machine that stays 
 
 ### How the AI reads your data
 
+Updated exports add primary-sport report intensity and activity zone_reference without extra setup or delivery steps. Historical weekly/monthly primary blocks appear on normal history refresh; older or sport-mismatched history remains unavailable for scoped intensity. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+
 `interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 Each successful updated sync produces `latest.json.sleep_context` from one fresh 35-date wellness window (D−34..D); existing baselines and reports still use their original 28-date slice. No new file, sleep cache or state must persist between runs, and no history refresh is needed for this field. The AI discovers it through `READ_THIS_FIRST.sleep_context_note` in the same latest export. It is low-confidence context only, with explicit coverage and unavailable states, never a readiness signal. An unknown athlete timezone or current-date mismatch withholds comparison. See [Multi-night sleep context](../../SECTION_11.md#recovery-metrics-integration-hrv--rhr--sleep--feel).
