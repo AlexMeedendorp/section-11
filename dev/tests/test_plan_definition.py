@@ -130,41 +130,41 @@ class Definition(unittest.TestCase):
             for status in ("followed", "partly_followed", "not_followed"):
                 with self.subTest(version=version, status=status):
                     prior = self.formatted()
-                    prior["structure_summary"].update(status=status, steps=[[119, 220, 220, True]])
+                    prior["interval_data"]["plan_match"].update(status=status, steps=[[119, 220, 220, True]])
                     prior["plan_pairing"]["definition_key"] = "legacy-digest"
                     if version is None:
                         prior["plan_pairing"].pop("definition_key_version")
                     else:
                         prior["plan_pairing"]["definition_key_version"] = version
                     adopted = self.formatted({self.act["id"]: prior})
-                    self.assertEqual(adopted["structure_summary"]["status"], status)
-                    self.assertTrue(adopted["structure_summary"]["assessment_retained"])
-                    self.assertEqual(adopted["structure_summary"]["steps"], prior["structure_summary"]["steps"])
+                    self.assertEqual(adopted["interval_data"]["plan_match"]["status"], status)
+                    self.assertTrue(adopted["interval_data"]["plan_match"]["assessment_retained"])
+                    self.assertEqual(adopted["interval_data"]["plan_match"]["steps"], prior["interval_data"]["plan_match"]["steps"])
                     self.assertEqual(adopted["plan_pairing"]["definition_key_version"], 2)
                     self.assertEqual(adopted["plan_pairing"]["definition_key"], self.key())
                     self.doc["steps"][0]["power"]["value"] += 1
                     edited = self.formatted({self.act["id"]: adopted})
-                    self.assertEqual(edited["structure_summary"]["status"], "not_assessed")
-                    self.assertEqual(edited["structure_summary"]["retained_step_assessment"]["status"], status)
+                    self.assertEqual(edited["interval_data"]["plan_match"]["status"], "not_assessed")
+                    self.assertEqual(edited["interval_data"]["plan_match"]["retained_step_assessment"]["status"], status)
                     self.doc["steps"][0]["power"]["value"] -= 1
 
     def test_upgrade_blind_spot_and_identity_conflicts_are_distinct(self):
         prior = self.formatted()
-        prior["structure_summary"]["status"] = "followed"
+        prior["interval_data"]["plan_match"]["status"] = "followed"
         prior["plan_pairing"].pop("definition_key_version")
         self.doc["steps"][0]["duration"] += 1
-        self.assertEqual(self.formatted({self.act["id"]: prior})["structure_summary"]["status"], "followed")
+        self.assertEqual(self.formatted({self.act["id"]: prior})["interval_data"]["plan_match"]["status"], "followed")
         self.event["paired_activity_id"] = "different-activity"
-        self.assertEqual(self.formatted({self.act["id"]: prior})["structure_summary"]["status"], "not_assessed")
+        self.assertEqual(self.formatted({self.act["id"]: prior})["interval_data"]["plan_match"]["status"], "not_assessed")
         self.event.pop("paired_activity_id")
-        prior["structure_summary"]["plan"]["event_id"] = "old-event"
-        self.assertEqual(self.formatted({self.act["id"]: prior})["structure_summary"]["status"], "not_assessed")
+        prior["interval_data"]["plan_match"]["plan"]["event_id"] = "old-event"
+        self.assertEqual(self.formatted({self.act["id"]: prior})["interval_data"]["plan_match"]["status"], "not_assessed")
 
     def test_upgrade_does_not_resurrect_demoted_assessment(self):
         prior = self.formatted()
-        prior["structure_summary"].update(status="not_assessed", retained_step_assessment={"status": "followed"})
+        prior["interval_data"]["plan_match"].update(status="not_assessed", retained_step_assessment={"status": "followed"})
         prior["plan_pairing"].pop("definition_key_version")
-        self.assertEqual(self.formatted({self.act["id"]: prior})["structure_summary"]["status"], "not_assessed")
+        self.assertEqual(self.formatted({self.act["id"]: prior})["interval_data"]["plan_match"]["status"], "not_assessed")
 
     def test_activity_ftp_wins_and_difference_is_detail_only(self):
         self.act["icu_ftp"] = 275

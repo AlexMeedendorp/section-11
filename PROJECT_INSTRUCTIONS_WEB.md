@@ -34,7 +34,7 @@ If route-weather departure.source is assumed, retain the ASSUMED label and ask f
 Load on demand only, through the same delivery paths:
 
 - history.json for trend, phase or longitudinal work: trend analysis, phase context, longitudinal comparison
-- intervals.json when analysing an activity with `has_intervals: true`, `has_dfa: true` or `has_structure: true`: interval compliance, pacing, cardiac drift, recovery quality, DFA a1 session interpretation and completed-session detail. Use latest.json's structure_summary for everyday comparisons and pre-workout context
+- intervals.json when analysing an activity with `has_intervals: true`, `has_dfa: true` or `has_structure: true`: interval compliance, pacing, cardiac drift, recovery quality, DFA a1 session interpretation and completed-session detail. Use latest.json's interval_data.plan_match for timeline labels only See [Which interval data to use](SECTION_11.md#which-interval-data-to-use).
 - routes.json when a planned event has `has_terrain: true`: route analysis, terrain-adjusted pacing, pre-ride briefing
   For optional route weather, match the summary pointer's event, full route_ref, departure, cache_key and brief_id; use the protocol's weather freshness, coverage and ETA uncertainty rules
 - saved_workouts.json when selecting, reusing, or discussing a saved workout, including my saved version of a familiar workout. Read-only mirror of the athlete's Intervals.icu saved workouts, and the preferred read path for them. Check `refresh.status` (`ok` / `stale` / `unavailable`) before use. Before prescribing a saved workout, verify that its structure implements an applicable Workout Reference Library template; a matching name or adaptation label alone is not a match. Inventory only, never a session-design authority, and never evidence of what was prescribed historically
@@ -159,7 +159,7 @@ Use examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md for the complete field set 
 
 ## RULES
 
-- Whole-session average power and NP never establish main-set power, in reports, comparison or prescription. Read `recent_activities[].structure_summary`: compare the same identified windows and keep targets separate from actuals. Check method/status and issues. Load `intervals.json` for detailed analysis when `has_structure: true`; its `session_structure` carries window metrics. An expired full block leaves a last-captured summary, not a fresh verification. Thirds/WORK efforts are descriptive; broad window agreement is not formal adherence. If the required structure or role is unavailable, say so and obtain it.
+- Read `recent_activities[].interval_data`: `plan_match` supplies timeline labels only; `compliance` supplies scoped power/time counts with availability gates; `icu_detected` supplies descriptive detected-interval cross-checks. Use `intervals.json.session_structure` for rep power and formal evaluation, with authoritative roles and constraints. Never use device/app lap averages, whole-session average/NP or a set mean as rep power or compliance counts. See [Which interval data to use](SECTION_11.md#which-interval-data-to-use). Expired detail leaves only last-captured plan-match context.
 
 - Follow the Section 11 validation checklist (Step 0: Data Source Fetch)
 - No virtual math on pre-computed metrics. Use fetched values for CTL, ATL, TSB, ACWR, RI, zones. Custom analysis from raw data is fine where pre-computed values do not cover the question

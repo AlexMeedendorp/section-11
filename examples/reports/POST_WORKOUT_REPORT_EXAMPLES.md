@@ -9,7 +9,9 @@ The legacy scenarios retain their supplied aggregate measurements and omit new f
 
 ## Short-set compliance excerpts (synthetic)
 
-These independent scenarios illustrate the Compliance line, not a full report or athlete data. Each supported case has an exact captured prescription, matching current pairing and detail identity, three comparable sets of ten 30/15 work bouts, an authoritative 300 W target, established main-work roles and no essential secondary constraints. Every standard window has 29 observed seconds and every adherence window has 28 observed seconds unless stated otherwise. The accepted band is 297–315 W. All unlisted bout means are exactly 300 W. Keep the remaining activity fields and weekly totals in a complete report.
+`interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
+
+These independent scenarios illustrate the Compliance line, not a full report or athlete data. Each supported case has an exact captured prescription, matching current pairing and detail identity, three comparable sets of ten 30/15 work bouts, an authoritative 300 W target, established main-work roles and no essential secondary constraints. Every standard window has 29 observed seconds and every adherence window has 27 observed seconds unless stated otherwise. The accepted band is 297–315 W. All unlisted bout means are exactly 300 W. Keep the remaining activity fields and weekly totals in a complete report.
 
 **One miss:** set 2/bout 6 has an unrounded adherence mean of 295.8 W; all work is complete. Set means alone cannot supply the count.
 
@@ -35,7 +37,7 @@ Compliance: main work completed; adherence not evaluable, individual bout detail
 Compliance: main work incomplete; set 3/bout 10 has a 4 s standard-window deficit, exceeding the 3 s alignment allowance; no aggregate adherence percentage
 ```
 
-**Missing bout power:** a full standard span with only 27 observed seconds cannot establish completion even if its adherence window has 27/28 seconds. Pooled set coverage does not override this.
+**Missing bout power:** a full standard span with only 27 observed seconds cannot establish completion even if its adherence window has 26/27 seconds. Pooled set coverage does not override this.
 
 ```text
 Compliance: completion not evaluable; set 1/bout 1 has insufficient standard-window power coverage; adherence not evaluable
@@ -43,15 +45,15 @@ Compliance: completion not evaluable; set 1/bout 1 has insufficient standard-win
 
 ## Duration-based compliance excerpts (synthetic)
 
-These separate examples have exact paired prescriptions and qualified evidence-marker-4 detail with established main-work roles and no essential secondary constraints. They do not change the set examples above. Completion always uses the standard window. Recovery length and repeat count do not select the evaluator or window.
+These separate examples have exact paired prescriptions and qualified structure-version-6, evidence-marker-4 detail with established main-work roles and no essential secondary constraints. They do not change the set examples above. Completion always uses the standard window. Recovery length and repeat count do not select the evaluator or window.
 
-**Single short step with long recovery:** a 30 s effort at 300 W followed by 90 s recovery has a complete 29 s standard window. Its adherence row has 28 observed seconds and 8400 J, so the mean is 300 W. This same exclusion applies to each effort in 8 × 30 s / 90 s and 6 × 40 s / 2 min when their mapping is supported.
+**Single short step with long recovery:** a 30 s effort at 300 W followed by 90 s recovery has a complete 29 s standard window. Its adherence row has 27 observed seconds and 8100 J, so the mean is 300 W. This same exclusion applies to each effort in 8 × 30 s / 90 s and 6 × 40 s / 2 min when their mapping is supported.
 
 ```text
-Compliance: main work completed; 1/1 step on target (+0 W); 30 s prescribed, 29 s standard window, 28 s adherence window
+Compliance: main work completed; 1/1 step on target (+0 W); 30 s prescribed, 29 s standard window, 27 s adherence window
 ```
 
-**Duration boundary:** independent 60 s and 61 s efforts at 300 W both complete their standard windows. The 60 s effort uses 58 adherence seconds after two excluded seconds; the 61 s effort uses its 60 s standard window after only the first-second exclusion. With constant 300 W, each is on target. A clipped 61 s effort remains subject to the longer-step rule.
+**Duration boundary:** independent 60 s and 61 s efforts at 300 W both complete their standard windows. The 60 s effort uses 57 adherence seconds after two leading seconds and the final aligned second are excluded; the 61 s effort uses its 60 s standard window after only the first-second exclusion. With constant 300 W, each is on target. A clipped 61 s effort remains subject to the longer-step rule.
 
 **Long compressed bouts:** three 90 s efforts with 30 s recoveries each have 89 standard and adherence seconds. Their unrounded means are 300 / 295.8 / 300 W against 300 W. The first retained second remains included even though the efforts form a compressed set.
 
@@ -59,7 +61,7 @@ Compliance: main work completed; 1/1 step on target (+0 W); 30 s prescribed, 29 
 Compliance: main work completed; 2/3 work bouts on target (66.67%); set 1 2/3 (bout 2 −4.2 W, below band)
 ```
 
-**Pyramid:** 40/30/20 s efforts at 300/310/320 W have complete 39/29/19 s standard windows. The first two use 38/28 s average-adherence windows with means equal to their targets. The 20 s sprint uses a best 6 s of 320 W within its standard window, whose mean is also 320 W. Its stored 18 s average window does not judge the sprint. Different durations/evaluators do not establish an aggregate.
+**Pyramid:** 40/30/20 s efforts at 300/310/320 W have complete 39/29/19 s standard windows. The first two use 37/27 s average-adherence windows with means equal to their targets. The 20 s sprint uses a best 6 s of 320 W within its standard window, whose mean is also 320 W. Its stored 18 s average window does not judge the sprint. Different durations/evaluators do not establish an aggregate.
 
 ```text
 Compliance: main work completed; 40 s step on target (+0 W), 30 s step on target (+0 W), 20 s sprint on target (mean +0 W, best 6 s +0 W); no aggregate percentage for this mixed-duration pyramid

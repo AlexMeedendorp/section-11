@@ -100,7 +100,7 @@ latest.json
 ├── derived_metrics      → Section 11 calculated values (see below)
 │   ├── capability       → Durability, EF, HRRc trends + TID drift (7d vs 28d)
 │   └── phase_detection  → Dual-stream phase detection with confidence
-├── recent_activities    → Detailed activity data with zones, EF, HRRc, has_intervals, has_dfa, dfa_summary, effort_response, has_structure, structure_summary, terrain_summary/weather_summary (outdoor only)
+├── recent_activities    → Detailed activity data with zones, EF, HRRc, has_intervals, has_dfa, dfa_summary, effort_response, has_structure, interval_data (plan_match/compliance/icu_detected), terrain_summary/weather_summary (outdoor only)
 ├── wellness_data        → Daily HRV, RHR, sleep, subjective state, vitals, nutrition, lifestyle
 ├── planned_workouts     → Upcoming scheduled sessions with workout_summary
 ├── workout_summary_stats → Planned-summary rendering statistics (including flat lists), not execution matching
@@ -123,8 +123,8 @@ intervals.json (on-demand: load when analyzing activities with has_intervals: tr
 ├── fetch_state{}        → INTERNAL retry/fetch bookkeeping; not a consumer contract
 └── activities[]         → Per-activity interval segments
     ├── activity_id      → Matches id in latest.json recent_activities
-    ├── session_structure → Completed-step metrics or descriptive fallback (independent of DFA)
-    ├── interval_summary → Group summary (e.g., "4x 9m56s 259w")
+    ├── session_structure → Plan-aware evidence for completion and atomic compliance; fallback is descriptive
+    ├── interval_summary → Intervals.icu detected groups (e.g., "4x 9m56s 259w"), descriptive cross-check only
     ├── zone_basis       → What `zone` refers to: power | hr | pace (omitted if unresolved)
     └── intervals[]      → WORK + RECOVERY segments with power, HR, cadence, zone, timing
 
@@ -158,7 +158,7 @@ saved_workouts.json (on-demand: load when selecting, reusing, or discussing a sa
     └── workout_doc      → Full structure as received; targets may be relative or absolute
 ```
 
-> `latest.json` carries compact completed-step `structure_summary` through 28 days. `has_structure` points to detailed `session_structure` in `intervals.json` within 14-day retention; after expiry only the last summary is carried forward. Detailed thirds/WORK efforts appear only without usable plan windows. Read method/status and issues; plan match is not compliance. See the protocol's Completed Session Structure contract. Flat planned lists have summaries; sync does not emit inferred roles. Coaching interpretation follows SECTION_11's Main work rule using prescription structure, durations and targets, with name or description as context only and optional workout step text.
+> `latest.json` carries compact completed-step `interval_data.plan_match` through 28 days. `has_structure` points to detailed `session_structure` in `intervals.json` within 14-day retention; after expiry only the last summary is carried forward. Detailed thirds/WORK efforts appear only without usable plan windows. Read method/status and issues; plan match is not compliance. See the protocol's Completed Session Structure contract. Flat planned lists have summaries; sync does not emit inferred roles. Coaching interpretation follows SECTION_11's Main work rule using prescription structure, durations and targets, with name or description as context only and optional workout step text. See [Which interval data to use](../SECTION_11.md#which-interval-data-to-use).
 
 > **Note on the two libraries:** `saved_workouts.json` mirrors the athlete's own saved workouts in Intervals.icu. It is **not** the [Workout Reference Library](workout-library/), which is the normative catalogue of session templates Section 11 designs plans from. Full description: [Saved Workouts Mirror](json-examples/README.md#saved-workouts-mirror).
 

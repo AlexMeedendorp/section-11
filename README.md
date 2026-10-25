@@ -479,7 +479,7 @@ The script maintains `ftp_history.json` to track indoor and outdoor FTP changes 
 
 ### Completed Session Structure
 
-`latest.json` includes `structure_summary` for recent activities: planned targets beside measured step/set power and duration. `has_structure` points to detail in `intervals.json`, retained for 14 days; the last summary survives for 28 days.
+`latest.json` includes `interval_data` per recent activity: timeline plan match, scoped compliance evidence and descriptive Intervals.icu detected intervals side by side. `has_structure` points to 14-day detail; only plan-match context survives through 28 days. See [Which interval data to use](SECTION_11.md#which-interval-data-to-use).
 
 Whole-session average power and NP are not main-set power. Unknown, no-plan and descriptive fallback differ; broad plan match does not prove formal compliance. See [Completed Session Structure](SECTION_11.md#completed-session-structure) for interpretation, freshness and limits.
 

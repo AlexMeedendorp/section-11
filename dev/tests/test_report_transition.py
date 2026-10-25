@@ -103,14 +103,14 @@ class PairedSummary(unittest.TestCase):
             row = self.formatted(events=[])
         get.assert_not_called()
         self.assertFalse(row["has_structure"])
-        self.assertEqual(row["structure_summary"],
+        self.assertEqual(row["interval_data"]["plan_match"],
                          {"method": "plan_match_v2", "status": "not_assessed",
                           "plan": {"event_id": "42", "name": None},
                           "issues": ["detail_unavailable"]})
 
     def test_fetched_exact_event_name_and_explicit_duration_are_reused(self):
         row = self.formatted(events=[self.event])
-        summary = row["structure_summary"]
+        summary = row["interval_data"]["plan_match"]
         self.assertEqual(summary["status"], "no_steps")
         self.assertEqual(summary["plan"]["name"], self.event["name"])
         self.assertEqual(summary["plan"]["duration_s"], 3600)
@@ -124,19 +124,19 @@ class PairedSummary(unittest.TestCase):
                  ([dict(self.event, athlete_id=9)], "pairing_conflict")]
         for events, issue in cases:
             with self.subTest(issue=issue):
-                summary = self.formatted(ride(athlete_id=8), events)["structure_summary"]
+                summary = self.formatted(ride(athlete_id=8), events)["interval_data"]["plan_match"]
                 self.assertEqual(summary["status"], "not_assessed")
                 self.assertEqual(summary["plan"], {"event_id": "42", "name": None})
                 self.assertIn(issue, summary["issues"])
         event = {k: v for k, v in self.event.items() if k != "name"}
-        self.assertIsNone(self.formatted(events=[event])["structure_summary"]["plan"]["name"])
+        self.assertIsNone(self.formatted(events=[event])["interval_data"]["plan_match"]["plan"]["name"])
 
     def test_retained_assessments_and_detail_are_preserved(self):
         for status in ("followed", "partly_followed", "not_followed"):
             summary = {"method": "plan_match_v1", "status": status,
                        "issues": ["last_captured"], "plan": {"event_id": "42"}}
             saved = {"synthetic-ride": {"structure_summary": copy.deepcopy(summary)}}
-            current = self.formatted(prior=saved)["structure_summary"]
+            current = self.formatted(prior=saved)["interval_data"]["plan_match"]
             self.assertEqual(current["status"], status)
             self.assertTrue(current["assessment_retained"])
             self.assertIsNone(current["plan"]["name"])
@@ -146,27 +146,27 @@ class PairedSummary(unittest.TestCase):
             {"activity_id": "synthetic-ride", "session_structure": block}]}
         row = self.formatted(events=[])
         self.assertTrue(row["has_structure"])
-        self.assertEqual(row["structure_summary"]["status"], "no_steps")
-        self.assertEqual(row["structure_summary"]["plan"]["name"], "Captured")
+        self.assertEqual(row["interval_data"]["plan_match"]["status"], "no_steps")
+        self.assertEqual(row["interval_data"]["plan_match"]["plan"]["name"], "Captured")
 
     def test_cold_start_legacy_fallback_and_unassessed_identity_refresh(self):
         for status in ("unknown", "not_assessed"):
             saved = {"synthetic-ride": {"structure_summary":
                      {"method": "plan_match_v2", "status": status,
                       "issues": ["detail_unavailable"]}}}
-            summary = self.formatted(events=[self.event], prior=saved)["structure_summary"]
+            summary = self.formatted(events=[self.event], prior=saved)["interval_data"]["plan_match"]
             self.assertEqual(summary["status"], "no_steps")
             self.assertEqual(summary["plan"]["name"], self.event["name"])
 
     def test_unpaired_and_walk_hike_keep_their_existing_statuses(self):
         for pairing in (None,):
-            summary = self.formatted(ride(paired_event_id=pairing))["structure_summary"]
+            summary = self.formatted(ride(paired_event_id=pairing))["interval_data"]["plan_match"]
             self.assertEqual(summary, {"method": "plan_match_v2", "status": "unknown",
                                        "issues": ["detail_unavailable"]})
         for sport in ("Walk", "Hike"):
             row = self.formatted(ride(type=sport), [self.event])
-            self.assertEqual(row["structure_summary"]["issues"], ["sport_out_of_scope"])
-            self.assertEqual(row["structure_summary"]["status"], "unknown")
+            self.assertEqual(row["interval_data"]["plan_match"]["issues"], ["sport_out_of_scope"])
+            self.assertEqual(row["interval_data"]["plan_match"]["status"], "unknown")
             self.assertFalse(row["has_structure"])
 
     def test_collect_uses_existing_activity_and_resolved_event_response(self):
@@ -193,7 +193,7 @@ class PairedSummary(unittest.TestCase):
                 stack.enter_context(mock.patch.object(self.sync, method, return_value=value))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             result = self.sync.collect_training_data()
-        summary = result["recent_activities"][0]["structure_summary"]
+        summary = result["recent_activities"][0]["interval_data"]["plan_match"]
         self.assertEqual(summary["status"], "no_steps")
         self.assertEqual(summary["plan"]["name"], event["name"])
         event_calls = [params for endpoint, params in calls if endpoint == "events"]

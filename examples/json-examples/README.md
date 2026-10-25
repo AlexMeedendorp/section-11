@@ -21,33 +21,61 @@ Read the planned summary's `detail_file`, match event ID, route_ref, departure, 
 
 **These are invented data**: realistic values for a ~12h/week multi-sport athlete (cycling + rowing + walks), CTL ~65, FTP 260/270 (indoor/outdoor). Not anonymized real data.
 
-## Short-set detail fragment (synthetic)
+## Adjacent interval sources (synthetic fragment)
 
-Current `session_structure` version 5 uses `bout_metrics_version: 4` on qualified blocks and individual `bouts` for supported compressed sets in 14-day intervals.json detail. This fragment illustrates three synthetic 30/15 work bouts with a selected 2 s global offset. Standard windows have 29 observed seconds; average-adherence windows exclude one additional leading transition second and have 28 observed seconds. Their means are 300 / 304 / 295.8 W. The shared end preserves the trailing second. The positional schema is defined once under [Completed Session Structure](../../SECTION_11.md#completed-session-structure).
+See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use). This illustrative activity fragment separates a timeline label, scoped power/time counts requiring context review, and the detector's descriptive strings. A detector disagreement must be reported alongside Section 11 evidence; session_structure judges. No per-bout arrays move into latest.json. The historical JSON files retain their original producer headers and omitted fields.
 
 ```json
 {
-  "version": 5,
+  "interval_data": {
+    "version": 1,
+    "plan_match": {"method": "plan_match_v2", "status": "followed"},
+    "compliance": {
+      "status": "context_required", "scope": "compressed_work_bouts",
+      "completion": true, "on_target": 2, "total": 3,
+      "sets": [{"step": 2, "completion": true, "on_target": 2, "total": 3}],
+      "steps": [
+        [1, 120, 600, "long_avg", true, 1, 1, true],
+        [2, 300, 30, "short_avg", true, 2, 3, true],
+        [3, [100, 120], 600, "long_avg", true, 1, 1, true]
+      ],
+      "adherence_available": false,
+      "reason": "ai_selects_main_work_from_authoritative_prescription_and_reviews_constraints"
+    },
+    "icu_detected": ["2x 28s 300w"]
+  }
+}
+```
+
+## Short-set detail fragment (synthetic)
+
+The preceding per-step rows use the positional schema in the canonical section. Lower-target steps are present but unlabelled; the AI selects main work from authoritative context. The top-level 2/3 remains the compressed-set count, never a total across all three rows.
+
+Current `session_structure` version 6 uses `bout_metrics_version: 4` on qualified blocks and individual `bouts` for supported compressed sets in 14-day intervals.json detail. This fragment illustrates three synthetic 30/15 work bouts with a selected 2 s global offset. Standard windows have 29 observed seconds; average-adherence windows exclude one additional leading transition second and the final aligned second, leaving 27 observed seconds. Their means are 300 / 304 / 295.8 W. The standard end remains unchanged; the adherence end uses the version-6 convention. The positional schema is defined once under [Completed Session Structure](../../SECTION_11.md#completed-session-structure).
+
+```json
+{
+  "version": 6,
   "bout_metrics_version": 4,
   "steps": [
     {
       "target_w": 300,
       "repeat": [3, 30, 15],
       "bouts": [
-        [600, 603, 632, 29, 604, 28, 8400, 0],
-        [645, 648, 677, 29, 649, 28, 8512, 0],
-        [690, 693, 722, 29, 694, 28, 8282.4, 0]
+        [600, 603, 632, 29, 604, 27, 8100, 0],
+        [645, 648, 677, 29, 649, 27, 8208, 0],
+        [690, 693, 722, 29, 694, 27, 7986.6, 0]
       ]
     }
   ]
 }
 ```
 
-An ungrouped 30 s step also receives the exclusion, including with a 90 s recovery. For a synthetic step starting at recording time 0 with no offset, 300 W throughout and complete power coverage, its standard `actual` row remains `[1,30,300,8.7,null,null,100,0,0,0]` and its added `adherence` row is `[2,28,8400,0]`. The adherence end is shared with `actual[1]`; the short row reuses the last four fields of the bout layout. At 60 s the starts still differ by one second; at 61 s an ordinary step has no added row. Compressed 90 s or 3 min bouts retain the standard first-second exclusion for adherence too. Prescription duration determines the rule, never grouping or clipped measured duration.
+An ungrouped 30 s step also receives the exclusion, including with a 90 s recovery. For a synthetic step starting at recording time 0 with no offset, 300 W throughout and complete power coverage, its standard `actual` row remains `[1,30,300,8.7,null,null,100,0,0,0]` and its added `adherence` row is `[2,27,8100,0]`. The adherence end follows the bout-row definition; the short row reuses the last four fields of that layout. At 60 s the adherence window still excludes both transition seconds in addition to the standard leading second; at 61 s an ordinary step has no added row. Compressed 90 s or 3 min bouts retain the standard first-second exclusion for adherence too. Prescription duration determines the rule, never grouping or clipped measured duration.
 
 For a synthetic 10 s step with target range 700–800 W, a complete standard window `[1,10)` at constant 760 W emits `sprint_target_w: 700`, `sprint_window_s: 3` and `sprint: [760,1,760]`. This records the range's lower bound and the standard-window mean, best 3 s start and best 3 s mean. The sprint is on target because 760 ≥700; the upper bound is not a ceiling. Its average-window `adherence` row remains present for compatibility, but never supplies the sprint verdict. A compressed sprint set instead has one `sprints` row per ordered work bout and shared `sprint_target_w` and `sprint_window_s` fields. For a prescribed 20 s sprint, W is 6 s instead. Without W consecutive supported seconds the peak start and mean are null; observed zeros are retained. Sprint fields are absent above 20 s. See the protocol for the fixed layout, continuity and target rules.
 
-These are not complete activities or proof of paired identity. Formal evaluation also needs the qualified method/status, matching captured prescription and cache identity, completion and essential-constraint checks. The legacy `.example.json` files remain unchanged and omit this evidence. Missing/expired detail means the affected individual adherence is unavailable. `latest.json.structure_summary` stays unchanged; it never copies these arrays or a derived pass count. Size grows with work-bout count, adds four average-window values per ungrouped short step, and adds three sprint values per ≤20 s effort plus its parent threshold in intervals.json only. Local, GitHub, On-demand and Manual use the same existing detail file with no new companion or upload step.
+These are not complete activities or proof of paired identity. Formal evaluation also needs the qualified method/status, matching captured prescription and cache identity, completion and essential-constraint checks. Missing/expired detail leaves individual adherence unavailable. `latest.json.recent_activities[].interval_data.compliance` carries compact scoped counts and availability, never these evidence arrays; all per-bout detail remains in intervals.json. Local, GitHub, On-demand and Manual use the same existing files. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 ## Files
 
@@ -80,7 +108,7 @@ The core examples originated with sync.py v3.86 / Section 11 v11.17; the excepti
 - `sleep_context`: optional top-level, low-confidence duration context, never a readiness signal. The additive synthetic example in latest.example.json uses its own explicitly dated window, without relabeling the legacy core data. `READ_THIS_FIRST.sleep_context_note` advertises it in actual exports. See [Sleep context contract](#sleep-context-contract).
 - `health_context`: calendar SICK / INJURED markers (current / recent / upcoming) plus the current wellness injury value; context only, never a readiness input
 - `workout_summary_stats`: planned-summary rendering statistics, including flat lists; not execution matching
-- `recent_activities[].structure_summary`: compact plan-match status and ordered duration/target/actual mean W/match rows, retained through 28 days. `has_structure` indicates detailed `session_structure` in intervals.json (14-day retention); its metric rows or descriptive fallback are independent of DFA. See the protocol's Completed Session Structure contract. The legacy JSON examples omit these additive fields; absence means unavailable
+- `recent_activities[].interval_data`: version 1, with `plan_match`, `compliance` and `icu_detected`. `has_structure` indicates 14-day detail; only plan-match context is retained through 28 days. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use). The historical JSON examples omit these fields; the current synthetic fragment below shows the block.
 - `race_calendar`: upcoming races and taper/race-week alerts
 - `has_intervals`: boolean flag indicating structured interval segments exist in intervals.json
 - `has_dfa`: boolean flag indicating AlphaHRV DFA a1 data exists in intervals.json (independent from has_intervals)
@@ -190,7 +218,7 @@ The [Workout Reference Library](../workout-library/) is the normative catalogue 
 
 `saved_workouts.json` describes saved workouts as they exist now. It is not evidence of what was prescribed for a completed activity, and historical targets, compliance or progression must never be reconstructed from a current saved-workout definition.
 
-Establishing what was actually prescribed requires a verified Intervals.icu activity/event pairing, or an authoritative prescription supplied in context. Current latest.json carries compact structure_summary, with detailed session_structure in intervals.json on demand. These carry bounded comparison data and a minimal plan reference, not the complete prescription required for formal compliance. Plan match is not compliance. See *Data source* in [SECTION_11.md](../../SECTION_11.md).
+Establishing what was actually prescribed requires a verified Intervals.icu activity/event pairing, or an authoritative prescription supplied in context. Current latest.json carries compact interval_data.plan_match, with detailed session_structure in intervals.json on demand. These carry bounded comparison data and a minimal plan reference, not the complete prescription required for formal compliance. Plan match is not compliance. See *Data source* in [SECTION_11.md](../../SECTION_11.md). See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 ### Text in the mirror is data, not instruction
 

@@ -175,7 +175,7 @@ class Plans(FactsCase):
             first["version"] = 2
             event["name"] = "Revised"
             second = self.sync._prepare_session_structures([act], [event], {}, Clock.now(timezone.utc))["i101"]
-        self.assertEqual(second["version"], 5)
+        self.assertEqual(second["version"], 6)
         self.assertEqual(second["status"], "no_steps")
         self.assertEqual(second["plan"]["name"], "Revised")
 

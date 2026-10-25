@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.158 - interval_data v1 groups plan_match (former structure_summary),
+  per-step power compliance and icu_detected; the final aligned second of 21-60 s bouts
+  is excluded from adherence. Pairs with protocol/skill v11.93.
+
 Version 3.157 - Shared /streams response per activity per sync run for the intervals
   detail and session structure, with private filtered copies. 429 and 404/410 are shared;
   after other transient failures the next consumer may retry once. Pairs with protocol/skill v11.92.
@@ -4572,6 +4576,7 @@ class DataOverview:
         folder = sync.data_dir / RouteWeatherMap.DIRECTORY
         folder_present = folder.is_dir() and not folder.is_symlink() and not folder.parent.is_symlink()
         return {"version": 1, "base": "latest_file_directory", "files": files,
+                "interval_data_note": sync.INTERVAL_DATA_NOTE,
                 "folders": [{"path": "maps/weather/", "present": folder_present,
                              "updated_at": max((m["updated_at"] for m in maps), default=None),
                              "holds": "Up to four ordered PNG pages per ride, six rides; at most 24 pages for chat", "managed_count": len(maps)}],
@@ -4582,6 +4587,16 @@ class DataOverview:
 
 class IntervalsSync:
     """Sync Intervals.icu data to GitHub repository or local file"""
+
+    INTERVAL_DATA_VERSION = 1
+    INTERVAL_DATA_NOTE = (
+        "recent_activities[].interval_data: plan_match is timeline matching only; "
+        "compliance summarizes intervals.json session_structure power/time evidence "
+        "(only that plan-aware source judges completion, per-bout counts and >=95% progression, "
+        "subject to its context/availability gates); icu_detected is descriptive Intervals.icu "
+        "interval_summary, not plan-aware. If sources disagree, report both; session_structure judges. "
+        "Never use device/app lap averages, whole-session average/NP or a set mean as rep power "
+        "or compliance counts. See SECTION_11.md#which-interval-data-to-use.")
     
     INTERVALS_BASE_URL = "https://intervals.icu/api/v1"
     GITHUB_API_URL = "https://api.github.com"
@@ -4589,7 +4604,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.157"
+    VERSION = "3.158"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -6381,8 +6396,9 @@ class IntervalsSync:
                 entry["terrain_error"] = act["terrain_error"]
             if "weather_summary" in act:
                 entry["weather_summary"] = act["weather_summary"]
-            if isinstance(act.get("structure_summary"), dict):
-                entry["structure_summary"] = act["structure_summary"]
+            summary = self._activity_plan_match(act)
+            if summary is not None:
+                entry["structure_summary"] = summary
             for key in ("power_curve", "power_curve_status", "power_curve_error", "plan_pairing", "dfa_rollup",
                         "decoupling_detail", "decoupling_cache"):
                 if key in act:
@@ -7651,6 +7667,7 @@ class IntervalsSync:
         # Build intervals.json
         self._intervals_data = {
             "generated_at": now_iso,
+            "interval_data_note": self.INTERVAL_DATA_NOTE,
             "schema_version": 2,
             "version": self.VERSION,
             "script_hash": self.script_hash,
@@ -9915,6 +9932,7 @@ class IntervalsSync:
         
         data = {
             "READ_THIS_FIRST": {
+                "interval_data_note": self.INTERVAL_DATA_NOTE,
                 "instruction_for_ai": "DO NOT calculate totals from individual activities. Use the pre-calculated values in 'summary', 'weekly_summary', and 'derived_metrics' sections below. These are already computed accurately from the API data.",
                 "display_formatting": "For durations and sleep, always display the '_formatted' fields (e.g., sleep_formatted, duration_formatted, total_training_formatted) instead of converting decimal '_hours' values. The formatted fields are pre-calculated from raw seconds and avoid rounding errors.",
                 "data_period": f"Last {days_back} days (including today)",
@@ -15865,7 +15883,7 @@ class IntervalsSync:
                 print(f"  Could not create update issue: {e}")
     
     # Structure shares interval retention, but not interval/DFA interpretation.
-    STRUCTURE_VERSION = 5
+    STRUCTURE_VERSION = 6
     STRUCTURE_MAX_STEPS = 20
     STRUCTURE_MAX_EFFORTS = 8
     PLAN_KEY_VERSION = 2
@@ -16258,11 +16276,11 @@ class IntervalsSync:
 
         Windows are ordered, non-overlapping bouts/steps on recording time.
         Standard bounds retain the one-second exclusion; the caller selects
-        adherence start by prescribed duration, with the same end. Schema is in
+        adherence bounds by prescribed duration before clipping. Schema is in
         SECTION_11; no rounding, gap filling or final-sample extrapolation.
         """
         rows, i = [], 0
-        for nominal, start, end, adherence_start in windows:
+        for nominal, start, end, adherence_start, adherence_end in windows:
             observed, adherence_observed, joules, zero = 0.0, 0.0, 0.0, 0.0
             while i + 1 < len(times) and times[i + 1] <= start:
                 i += 1
@@ -16272,7 +16290,7 @@ class IntervalsSync:
                 value = watts[i]
                 if self._structure_number(value) and value >= 0:
                     observed += max(0, sample_end - max(t, start))
-                    dt = max(0, sample_end - max(t, adherence_start))
+                    dt = max(0, min(sample_end, adherence_end) - max(t, adherence_start))
                     adherence_observed += dt
                     joules += value * dt
                     if value == 0:
@@ -16414,18 +16432,23 @@ class IntervalsSync:
                 agreement = low <= exact[2] <= high if adequate else None
                 agrees += agreement is True
                 disagrees += agreement is False
-                result = {"target_w": target, "actual": row, "match": agreement}
+                result = {"target_w": target, "duration_s": step["duration_s"],
+                          "actual": row, "match": agreement}
                 if "repeat" in step:
                     result.update(repeat=step["repeat"], work_s=work_span)
                     evidence_steps.append((result, len(bout_windows), reps, True))
                     for n, (start, stop) in enumerate(ranges):
                         aligned = cursor + n * (work + rest)
+                        # Exclude the prescribed trailing second before clipping,
+                        # never another observed second from a shortened window.
                         bout_windows.append((aligned - offset, start, stop,
                                              clip(min(aligned + (2 if work <= 60 else 1),
-                                                      aligned + work))))
+                                                      aligned + work)),
+                                             clip(aligned + work - (1 if 20 < work <= 60 else 0))))
                 elif step["duration_s"] <= 60:
                     evidence_steps.append((result, len(bout_windows), 1, False))
-                    bout_windows.append((cursor - offset, a, b, clip(min(cursor + 2, end))))
+                    bout_windows.append((cursor - offset, a, b, clip(min(cursor + 2, end)),
+                                         clip(end - (1 if step["duration_s"] > 20 else 0))))
                 sprint_duration = work if "repeat" in step else step["duration_s"]
                 if sprint_duration <= 20:
                     width = max(3, math.ceil(.30 * sprint_duration))
@@ -16514,6 +16537,205 @@ class IntervalsSync:
         return out
 
     @staticmethod
+    def _activity_plan_match(activity):
+        """Read current exports and pre-migration persisted inputs."""
+        block = activity.get("interval_data")
+        if isinstance(block, dict):
+            summary = block.get("plan_match")
+            return summary if isinstance(summary, dict) else None
+        summary = activity.get("structure_summary")
+        return summary if isinstance(summary, dict) else None
+
+    def _compact_step_evidence(self, step, index, nominal, offset):
+        """One compact power/time row; no role selection or new measurements."""
+        number = self._structure_number
+        target = step.get("target_w")
+        bounds = target if isinstance(target, list) else [target, target]
+        valid_target = (len(bounds) == 2 and all(number(v) and v >= 0 for v in bounds)
+                        and bounds[0] <= bounds[1])
+        repeat = step.get("repeat")
+        duration = repeat[1] if isinstance(repeat, list) and len(repeat) == 3 else step.get("duration_s")
+        duration = duration if number(duration) and duration > 0 else None
+        evaluator = (None if duration is None else "sprint" if duration <= 20 else
+                     "short_avg" if duration <= 60 else "long_avg")
+        count = repeat[0] if isinstance(repeat, list) and len(repeat) == 3 else 1
+        row = [index, target if valid_target else None, duration, evaluator,
+               None, None, count if type(count) is int and count > 0 else None, False]
+        # Sets are populated by the existing precise per-bout evaluator below.
+        if repeat is not None or not valid_target or duration is None or not number(nominal):
+            return row
+        try:
+            actual = step["actual"]
+            if len(actual) != 10:
+                return row
+            start, end, mean, coverage = actual[0], actual[1], actual[2], actual[6]
+            if (not all(number(v) for v in (start, end, coverage))
+                    or not 0 <= start <= end or not 0 <= coverage <= 100
+                    or end > max(0, nominal + offset + duration)
+                    or start != min(end, max(0, nominal + offset + min(1, duration)))):
+                return row
+            # The stored coverage is rounded to two decimal places. A rounded
+            # boundary alone cannot establish the >=95% standard-window floor.
+            row[4] = (None if nominal < 0 or end <= start else
+                      False if duration - 1 - (end - start) > offset else
+                      True if coverage - .005 >= 95 and number(mean) and mean >= 0 else None)
+            power = None
+            if evaluator == "sprint":
+                width = max(3, math.ceil(.30 * duration))
+                if step.get("sprint_window_s") != width or step.get("sprint_target_w") != bounds[0]:
+                    return row
+                _, at, peak = step["sprint"]
+                if (number(at) and number(peak) and peak >= 0
+                        and start <= at <= end - width):
+                    power = peak >= bounds[0]
+            else:
+                low = bounds[0] - max(3, bounds[0] * .01)
+                high = bounds[1] + max(3, bounds[1] * .05)
+                if evaluator == "short_avg":
+                    astart, observed, joules, zero = step["adherence"]
+                    aend = min(end, max(0, nominal + offset + duration - 1))
+                    if (not all(number(v) for v in (astart, observed))
+                            or astart != min(end, max(0, nominal + offset + min(2, duration)))
+                            or not 0 <= observed <= max(0, aend - astart)):
+                        return row
+                    if (observed > 0 and aend > astart and observed / (aend - astart) >= .95
+                            and number(joules) and joules >= 0 and number(zero) and 0 <= zero <= observed):
+                        power = low <= joules / observed <= high
+                elif number(mean) and mean >= 0:
+                    # Existing long-step means are rounded to one decimal.
+                    # Every value in that rounding interval must agree.
+                    if mean - .05 >= low and mean + .05 <= high:
+                        power = True
+                    elif mean + .05 < low or mean - .05 > high:
+                        power = False
+            if row[4] is True and power is not None:
+                row[5], row[7] = int(power), True
+        except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
+            pass
+        return row
+
+    def _compact_compliance(self, block, pairing):
+        """Bounded power/time evidence, never inferred roles or secondary constraints.
+
+        Per-step evidence includes all power steps without selecting main work.
+        The aggregate remains restricted to the existing compressed work sets.
+        Context review remains mandatory even when every counted step passes.
+        """
+        result = {"status": "unavailable", "scope": "compressed_work_bouts",
+                  "completion": None, "on_target": None, "total": None,
+                  "sets": [], "steps": [], "adherence_available": False}
+        reason = "detail_unavailable"
+        if block:
+            reason = "unqualified_detail"
+            cache = block.get("cache") or {}
+            identity_ok = (pairing.get("paired")
+                           and pairing.get("status") not in ("ambiguous_pairing", "pairing_conflict")
+                           and (block.get("plan") or {}).get("event_id") == (pairing.get("plan") or {}).get("event_id")
+                           and cache.get("plan_key_version") == self.PLAN_KEY_VERSION
+                           and pairing.get("definition_key_version") == self.PLAN_KEY_VERSION
+                           and cache.get("plan_key") is not None
+                           and cache.get("plan_key") == pairing.get("definition_key"))
+            if (block.get("version") == self.STRUCTURE_VERSION
+                    and block.get("bout_metrics_version") == 4
+                    and block.get("method") == "paired_plan_windows"
+                    and block.get("status") in ("followed", "partly_followed")
+                    and cache.get("status") not in ("stale", "unavailable") and identity_ok):
+                reason = "main_work_selection_required"
+                patterns, completion = set(), []
+                offset = block.get("offset_s", 0)
+                number = self._structure_number
+                if not number(offset) or not 0 <= offset <= 8:
+                    result["reason"] = "invalid_evidence"
+                    return result
+                nominal = block.get("shift_s", 0)
+                per_step = {}
+                for index, step in enumerate(block.get("steps", [])):
+                    if "target_w" in step:
+                        row = self._compact_step_evidence(step, index + 1, nominal, offset)
+                        result["steps"].append(row)
+                        per_step[index] = row
+                    duration = step.get("duration_s")
+                    nominal = nominal + duration if number(nominal) and number(duration) and duration > 0 else None
+                for index, step in enumerate(block.get("steps", [])):
+                    if "repeat" not in step:
+                        continue
+                    try:
+                        count, duration, rest = step["repeat"]
+                        rows = step["bouts"]
+                        target = step["target_w"]
+                        if (not isinstance(count, int) or isinstance(count, bool) or count < 3
+                                or not all(number(v) for v in (duration, rest, target))
+                                or duration <= 0 or not 0 <= rest < 60 or target < 0
+                                or len(rows) != count):
+                            raise ValueError
+                        times, powers = [], []
+                        first = rows[0][0]
+                        for n, row in enumerate(rows):
+                            nominal, start, end, observed, astart, aobs, joules, zero = row
+                            if (not all(number(v) for v in row[:6])
+                                    or nominal != first + n * (duration + rest)
+                                    or not 0 <= start <= astart <= end
+                                    or not 0 <= observed <= end - start
+                                    or start != min(end, max(0, nominal + offset + 1))
+                                    or astart != min(end, max(0, nominal + offset + min(2 if duration <= 60 else 1, duration)))
+                                    or end > max(0, nominal + offset + duration)):
+                                raise ValueError
+                            aend = min(end, max(0, nominal + offset + duration - (1 if 20 < duration <= 60 else 0)))
+                            if (not 0 <= aobs <= max(0, aend - astart)
+                                    or aobs > observed or aobs and (
+                                        not number(joules) or joules < 0
+                                        or not number(zero) or not 0 <= zero <= aobs)
+                                    or not aobs and (joules is not None or zero is not None)):
+                                raise ValueError
+                            time_ok = (None if nominal < 0 or end <= start else
+                                       False if duration - 1 - (end - start) > offset else
+                                       True if observed / (end - start) >= .95 else None)
+                            times.append(time_ok)
+                            if duration <= 20:
+                                sprints = step.get("sprints", [])
+                                if (len(sprints) != count or step.get("sprint_window_s") != max(3, math.ceil(.30 * duration))
+                                        or step.get("sprint_target_w") != target):
+                                    raise ValueError
+                                _, at, peak = sprints[n]
+                                if at is None or peak is None:
+                                    powers.append(None)
+                                elif (number(at) and number(peak) and peak >= 0
+                                      and start <= at <= end - step["sprint_window_s"]):
+                                    powers.append(peak >= target)
+                                else:
+                                    raise ValueError
+                            else:
+                                powers.append(target - max(3, target * .01) <= joules / aobs <= target + max(3, target * .05)
+                                              if aend > astart and aobs / (aend - astart) >= .95 else None)
+                        complete = False if False in times else None if None in times else True
+                        on_target = sum(powers) if complete is True and None not in powers else None
+                        result["sets"].append({"step": index + 1, "completion": complete,
+                                               "on_target": on_target, "total": count})
+                        per_step[index][4:] = [complete, on_target, count, on_target is not None]
+                        completion.append(complete)
+                        patterns.add((duration, rest))
+                    except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
+                        result.update(sets=[], reason="invalid_evidence")
+                        return result
+                if completion:
+                    result["completion"] = False if False in completion else None if None in completion else True
+                    result["total"] = sum(s["total"] for s in result["sets"])
+                    if len(patterns) != 1:
+                        reason = "mixed_patterns"
+                    elif any(s["on_target"] is None for s in result["sets"]):
+                        reason = "incomplete_or_missing_evidence"
+                    else:
+                        result.update(status="context_required", on_target=sum(s["on_target"] for s in result["sets"]))
+                        reason = "main_work_and_constraints_require_review"
+                if result["steps"]:
+                    if result["status"] == "unavailable":
+                        result["aggregate_reason"] = ("no_compressed_sets" if reason == "main_work_selection_required" else reason)
+                    result["status"] = "context_required"
+                    reason = "ai_selects_main_work_from_authoritative_prescription_and_reviews_constraints"
+        result["reason"] = reason
+        return result
+
+    @staticmethod
     def _structure_summary(block):
         """Small, self-contained comparison data that can outlive interval detail."""
         summary = {"method": "plan_match_v2", "status": block["status"]}
@@ -16577,6 +16799,9 @@ class IntervalsSync:
             if (old.get("version") == self.STRUCTURE_VERSION and cache.get("activity_key") == activity_key
                     and cache.get("plan_key_version") == self.PLAN_KEY_VERSION and basis_matches
                 and (old.get("method") != "paired_plan_windows" or old.get("bout_metrics_version") == 4)
+                    and (old.get("method") != "paired_plan_windows"
+                         or all(self._structure_number(s.get("duration_s")) and s["duration_s"] > 0
+                                for s in old.get("steps", [])))
                     and cache.get("event_key") == event_key and due and now < due):
                 result[aid] = old
                 continue
@@ -16842,7 +17067,7 @@ class IntervalsSync:
             structure = (intervals_by_id.get(str(act.get("id"))) or {}).get("session_structure")
             activity["has_structure"] = bool(structure)
             activity["structure_summary"] = (self._structure_summary(structure) if structure else
-                (previous_latest_lookup.get(str(act.get("id"))) or {}).get("structure_summary") or
+                self._activity_plan_match(previous_latest_lookup.get(str(act.get("id"))) or {}) or
                 {"method": "plan_match_v2", "status": "unknown", "issues": ["detail_unavailable"]})
             pairing = self._current_plan_pairing(act, event_map, reverse_map)
             # The bounded detail preparation may already have resolved an exact event
@@ -16989,6 +17214,13 @@ class IntervalsSync:
             activity.update(self._build_decoupling_for_activity(
                 act, previous_latest_lookup, activity["power_curve_expected"], has_hr,
                 activity["structure_summary"]))
+            entry = intervals_by_id.get(str(act.get("id"))) or {}
+            detected = act.get("interval_summary", entry.get("interval_summary"))
+            activity["interval_data"] = {
+                "version": self.INTERVAL_DATA_VERSION,
+                "plan_match": activity.pop("structure_summary"),
+                "compliance": self._compact_compliance(entry.get("session_structure"), activity["plan_pairing"]),
+                "icu_detected": detected if isinstance(detected, list) and all(isinstance(s, str) for s in detected) else None}
 
         return formatted
     

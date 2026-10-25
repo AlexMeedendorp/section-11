@@ -23,9 +23,11 @@ def tearDownModule():
     restore_verb_guard(base.mod.requests, originals)
 
 
-def power_result(row, target):
+def power_result(row, target, duration=30, offset=0):
     """Protocol oracle over already validated rows, independent of producer."""
     _, _, end, _, start, observed, joules, _ = row
+    if 20 < duration <= 60:
+        end = min(end, max(0, row[0] + offset + duration - 1))
     if end <= start or observed <= 0 or observed / (end - start) < .95:
         return None
     mean = joules / observed
@@ -63,7 +65,7 @@ def count_result(sets, offset=0, constraints=True):
                     return None
                 results.append(sprint_result(peaks[index], step["sprint_target_w"]))
             else:
-                results.append(power_result(row, step["target_w"]))
+                results.append(power_result(row, step["target_w"], duration, offset))
     if (not results or any(x is not True for x in complete) or None in results
             or len(patterns) != 1 or constraints is not True):
         return None
@@ -80,21 +82,26 @@ class BoutEvidence(unittest.TestCase):
         with mock.patch.object(self.sync, "_structure_offset", return_value=0):
             return self.build()
 
-    def test_transition_only_adherence_and_trailing_second_retained(self):
+    def test_both_transitions_excluded_only_from_adherence(self):
         self.repeated(count=3, lag=0)
         self.streams["watts"][61] = 100
         block = self.fixed()
         row = block["steps"][1]["bouts"][0]
-        self.assertEqual(row, [60, 61, 90, 29, 62, 28, 7840, 0])
+        self.assertEqual(row, [60, 61, 90, 29, 62, 27, 7560, 0])
         self.assertTrue(time_result(row, 30, 0))
         self.assertTrue(power_result(row, 280))
         # Standard set metrics still include the low transition second.
         self.assertEqual(block["steps"][1]["actual"][2], round((87 * 280 - 180) / 87, 1))
         self.streams["watts"][89] = 0
         row = self.fixed()["steps"][1]["bouts"][0]
-        self.assertEqual(row[5:], [28, 7560, 1])
-        self.assertFalse(power_result(row, 280))
+        self.assertEqual(row[5:], [27, 7560, 0])
+        self.assertTrue(power_result(row, 280))
         self.assertTrue(time_result(row, 30, 0))
+        # A nearby low second inside the adherence window still counts.
+        self.streams["watts"][88] = 0
+        row = self.fixed()["steps"][1]["bouts"][0]
+        self.assertEqual(row[5:], [27, 7280, 1])
+        self.assertFalse(power_result(row, 280))
 
     def test_standard_coverage_cannot_be_replaced_by_adherence_coverage(self):
         self.repeated(count=3, lag=0)
@@ -102,8 +109,8 @@ class BoutEvidence(unittest.TestCase):
         block = self.fixed()
         row = block["steps"][1]["bouts"][0]
         self.assertEqual(row[3], 27)
-        self.assertEqual(row[5], 27)
-        self.assertTrue(power_result(row, 280))  # 27/28 >=95%, but 27/29 <95%.
+        self.assertEqual(row[5], 26)
+        self.assertTrue(power_result(row, 280))  # 26/27 >=95%, but 27/29 <95%.
         self.assertIsNone(time_result(row, 30, 0))
         self.assertIsNone(count_result([block["steps"][1]]))
         self.assertGreater(block["steps"][1]["actual"][6], 95)
@@ -123,7 +130,7 @@ class BoutEvidence(unittest.TestCase):
     def test_zero_invalid_fractional_support_and_no_last_sample_extrapolation(self):
         times = [0, 1, 1.5, 2, 2.25, 3, 4, 5, 6, 7, 8]
         watts = [999, None, 0, 200, 400, -1, True, float("nan"), float("inf"), 0, 999]
-        rows = self.sync._structure_bouts([(0, 1, 9, 2)], times, watts)
+        rows = self.sync._structure_bouts([(0, 1, 9, 2, 9)], times, watts)
         self.assertEqual(rows, [[0, 1, 9, 2.5, 2, 2, 350, 1]])
         json.dumps(rows, allow_nan=False)
 
@@ -134,9 +141,9 @@ class BoutEvidence(unittest.TestCase):
         self.assertEqual(block["offset_s"], 3)
         rows = block["steps"][1]["bouts"]
         self.assertEqual([r[0] for r in rows], [65, 105, 145, 185])
-        self.assertEqual(rows[0][:6], [65, 69, 98, 29, 70, 28])
+        self.assertEqual(rows[0][:6], [65, 69, 98, 29, 70, 27])
         self.assertEqual(block["bout_metrics_version"], 4)
-        self.assertEqual(block["version"], 5)
+        self.assertEqual(block["version"], 6)
 
     def test_recording_pause_does_not_move_bouts(self):
         self.repeated(count=3, lag=0)
@@ -162,7 +169,7 @@ class BoutEvidence(unittest.TestCase):
         self.assertIsNone(time_result([-1, 1, 30, 29, 2, 28, 7840, 0], 30, 3))
 
     def test_one_second_bouts_have_empty_evaluation_windows(self):
-        rows = self.sync._structure_bouts([(0, 1, 1, 1), (2, 3, 3, 3)],
+        rows = self.sync._structure_bouts([(0, 1, 1, 1, 1), (2, 3, 3, 3, 3)],
                                           list(range(5)), [280] * 5)
         self.assertEqual(rows[0], [0, 1, 1, 0, 1, 0, None, None])
         self.assertIsNone(time_result(rows[0], 1, 0))
@@ -240,7 +247,7 @@ class BoutEvidence(unittest.TestCase):
                 return super().__getitem__(key)
 
         times = Counted(range(20001))
-        windows = [(i, i + 1, i + 3, i + 2) for i in range(0, 20000, 4)]
+        windows = [(i, i + 1, i + 3, i + 2, i + 3) for i in range(0, 20000, 4)]
         rows = self.sync._structure_bouts(windows, times, [280] * len(times))
         self.assertEqual(len(rows), 5000)
         self.assertLess(times.reads, 10 * (len(times) + len(windows)))
@@ -268,14 +275,14 @@ class DurationEvidence(unittest.TestCase):
                 step = block["steps"][2 * n]
                 start = n * (duration + rest)
                 self.assertNotIn("bouts", step)
-                self.assertEqual(step["adherence"], [start + 2, duration - 2, 300 * (duration - 2), 0])
+                self.assertEqual(step["adherence"], [start + 2, duration - 3, 300 * (duration - 3), 0])
                 self.assertEqual(step["actual"][:2], [start + 1, start + duration])
                 self.assertEqual(step["actual"][6], 100)
                 self.assertNotIn("adherence", block["steps"][2 * n + 1])
             self.assertEqual(block["steps"][0]["actual"][2], round(300 - 100 / (duration - 1), 1))
 
     def test_prescribed_duration_boundary_not_clipped_duration(self):
-        for duration in (10, 60, 61):
+        for duration in (10, 20, 21, 60, 61):
             self.sequence([(duration, 300), (120, 90)])
             self.streams["watts"][1] = 200
             step = self.fixed()["steps"][0]
@@ -283,7 +290,8 @@ class DurationEvidence(unittest.TestCase):
             self.assertEqual(step["actual"][2], round(300 - 100 / (duration - 1), 1))
             self.assertEqual("adherence" in step, duration <= 60)
             if duration <= 60:
-                self.assertEqual(step["adherence"], [2, duration - 2, (duration - 2) * 300, 0])
+                observed = duration - (3 if duration > 20 else 2)
+                self.assertEqual(step["adherence"], [2, observed, observed * 300, 0])
         self.sequence([(61, 300)])
         self.act["elapsed_time"] = 55
         self.streams = {k: v[:56] for k, v in self.streams.items()}
@@ -302,15 +310,16 @@ class DurationEvidence(unittest.TestCase):
             row = step["bouts"][0]
             exclusion = 2 if duration <= 60 else 1
             self.assertEqual(row[:4], [0, 1, duration, duration - 1])
-            self.assertEqual(row[4:6], [exclusion, duration - exclusion])
-            self.assertEqual(row[6], 300 * (duration - exclusion) - (100 if duration > 60 else 0))
+            observed = duration - exclusion - (1 if duration <= 60 else 0)
+            self.assertEqual(row[4:6], [exclusion, observed])
+            self.assertEqual(row[6], 300 * observed - (100 if duration > 60 else 0))
             self.assertTrue(time_result(row, duration, 0))
 
     def test_pyramid_steps_keep_own_duration_and_mixed_gate(self):
         self.sequence([(40, 300), (90, 90), (30, 310), (90, 90), (20, 320), (90, 90)])
         block = self.fixed()
         rows = [s["adherence"] for s in block["steps"] if "adherence" in s]
-        self.assertEqual(rows, [[2, 38, 11400, 0], [132, 28, 8680, 0], [252, 18, 5760, 0]])
+        self.assertEqual(rows, [[2, 37, 11100, 0], [132, 27, 8370, 0], [252, 18, 5760, 0]])
         self.assertFalse(any("bouts" in s for s in block["steps"]))
         summary = self.sync._structure_summary(block)
         self.assertEqual(summary["steps"], [[39, 300, 300, True], [89, 90, 90, True],
@@ -326,13 +335,13 @@ class DurationEvidence(unittest.TestCase):
         step = self.fixed()["steps"][0]
         self.assertEqual(step["actual"][6], round(2700 / 29, 2))
         self.assertIsNone(step["actual"][2])
-        self.assertEqual(step["adherence"], [2, 27, 8100, 0])
+        self.assertEqual(step["adherence"], [2, 26, 7800, 0])
         self.sequence([(30, 300), (90, 90)])
         self.streams["watts"][29] = 0
         step = self.fixed()["steps"][0]
         self.assertEqual(step["actual"][:2], [1, 30])
         self.assertEqual(step["actual"][6], 100)
-        self.assertEqual(step["adherence"], [2, 28, 8100, 1])
+        self.assertEqual(step["adherence"], [2, 27, 8100, 0])
 
     def test_single_step_empty_missing_and_range_evidence(self):
         for duration in (1, 2):
@@ -345,12 +354,101 @@ class DurationEvidence(unittest.TestCase):
         self.event["workout_doc"]["steps"][0]["power"] = {"units": "w", "min": 290, "max": 310}
         step = self.fixed()["steps"][0]
         self.assertEqual(step["target_w"], [290, 310])
-        self.assertEqual(step["adherence"], [2, 28, 8400, 0])
+        self.assertEqual(step["adherence"], [2, 27, 8100, 0])
+
+
+class TrailingBoundary(unittest.TestCase):
+    setUp = base.Structure.setUp
+    build = base.Structure.build
+    fixed = BoutEvidence.fixed
+    sequence = DurationEvidence.sequence
+
+    def test_missing_final_second_does_not_remove_last_supported_second(self):
+        for count, rest in ((1, 90), (3, 15)):
+            for final in (None, -1, True, float("nan"), 0, 50):
+                with self.subTest(count=count, final=final):
+                    self.sequence([(30, 300), (rest, 90)] * count)
+                    self.streams["watts"][28] = 270
+                    self.streams["watts"][29] = final
+                    step = self.fixed()["steps"][0]
+                    row = step["bouts"][0] if count == 3 else [0, *step["actual"][:2],
+                        None, *step["adherence"]]
+                    self.assertEqual(row[4:], [2, 27, 8070, 0])
+                    valid_final = final in (0, 50) and final is not False
+                    if count == 3:
+                        self.assertEqual(row[3], 29 if valid_final else 28)
+                    self.assertTrue(power_result(row, 300))
+
+    def test_fractional_final_support_is_excluded_without_rounding(self):
+        self.sequence([(30, 300), (90, 90)])
+        self.streams["time"].insert(30, 29.25)
+        self.streams["watts"][29:30] = [0, None]
+        step = self.fixed()["steps"][0]
+        self.assertEqual(step["actual"][6], round(28.25 / 29 * 100, 2))
+        self.assertEqual(step["adherence"], [2, 27, 8100, 0])
+        # Supported fractional time inside the window remains measured exactly.
+        rows = self.sync._structure_bouts([(0, 1, 30, 2, 29)],
+            [0, 1, 2, 28, 28.5, 29, 29.25, 30],
+            [900, 100, 300, 200, 400, 0, None, 900])
+        self.assertEqual(rows[0], [0, 1, 30, 3.25, 2, 2, 600, 0])
+
+    def test_end_clipping_precedes_no_extra_observed_exclusion(self):
+        for count, rest in ((1, 90), (3, 15)):
+            for horizon, observed, complete in ((33, 27, True), (32.5, 27, True),
+                                                (32, 27, True), (31.5, 26.5, True),
+                                                (30, 25, True), (29, 24, False)):
+                with self.subTest(count=count, horizon=horizon):
+                    self.sequence([(30, 300), (rest, 90)] * count)
+                    last = (count - 1) * (30 + rest)
+                    end = last + horizon
+                    self.act["elapsed_time"] = end
+                    self.streams = {"time": list(range(math.floor(end) + 1)),
+                                    "watts": [300] * (math.floor(end) + 1)}
+                    if end != math.floor(end):
+                        self.streams["time"].append(end)
+                        self.streams["watts"].append(300)
+                    with mock.patch.object(self.sync, "_structure_offset", return_value=3):
+                        block = self.build()
+                    step = block["steps"][0]
+                    row = step["bouts"][-1] if count == 3 else [0, *step["actual"][:2],
+                        step["actual"][1] - step["actual"][0], *step["adherence"]]
+                    self.assertEqual(row[2], min(last + 33, end))
+                    self.assertEqual(row[4:], [last + 5, observed, observed * 300, 0])
+                    self.assertIs(time_result(row, 30, 3), complete)
+
+    def test_twenty_sixty_and_sixty_one_with_trailing_dip(self):
+        for count, rest in ((1, 90), (3, 15)):
+            for duration in (20, 21, 60, 61):
+                self.sequence([(duration, 300), (rest, 90)] * count)
+                self.streams["watts"][duration - 1] = 0
+                step = self.fixed()["steps"][0]
+                self.assertEqual(step["actual"][6], 100)
+                if count == 3:
+                    row = step["bouts"][0]
+                    self.assertEqual(row[:4], [0, 1, duration, duration - 1])
+                    if duration == 61:
+                        self.assertEqual(row[4:], [1, 60, 17700, 1])
+                        continue
+                    adherence = row[4:]
+                elif duration == 61:
+                    self.assertNotIn("adherence", step)
+                    self.assertEqual(step["actual"][2], 295)
+                    continue
+                else:
+                    adherence = step["adherence"]
+                if duration == 20:
+                    self.assertEqual(adherence, [2, 18, 5100, 1])
+                    sprint = step["sprints"][0] if count == 3 else step["sprint"]
+                    self.assertEqual(sprint, [5400 / 19, 1, 300])
+                    self.assertEqual(step["sprint_window_s"], 6)
+                else:
+                    self.assertEqual(adherence, [2, duration - 3, 300 * (duration - 3), 0])
 
 
 class Arithmetic(unittest.TestCase):
     def row(self, mean, duration=30):
-        return [0, 1, duration, duration - 1, 2, duration - 2, mean * (duration - 2), 0]
+        observed = duration - (3 if 20 < duration <= 60 else 2)
+        return [0, 1, duration, duration - 1, 2, observed, mean * observed, 0]
 
     def test_inclusive_asymmetric_edges_and_adjacent_misses(self):
         for target in (50, 300, 400):
@@ -362,12 +460,12 @@ class Arithmetic(unittest.TestCase):
         self.assertEqual(round(296.999, 1), 297.0)
 
     def test_coverage_edge_uses_exact_observed_seconds(self):
-        row = self.row(300, duration=22)
+        row = self.row(300, duration=23)
         row[5:7] = [19, 5700]
-        self.assertTrue(power_result(row, 300))
+        self.assertTrue(power_result(row, 300, duration=23))
         row[5] = math.nextafter(19, 0)
         row[6] = 300 * row[5]
-        self.assertIsNone(power_result(row, 300))
+        self.assertIsNone(power_result(row, 300, duration=23))
 
     def test_count_gate_all_sets_constraints_and_mixed_pattern(self):
         sets = [{"target_w": t, "repeat": [10, 30, 15],
@@ -418,7 +516,7 @@ class SprintEvidence(unittest.TestCase):
                 self.assertNotIn("sprint", step)
                 self.assertNotIn("sprint_target_w", step)
                 self.assertNotIn("sprint_window_s", step)
-                self.assertFalse(power_result([0, 1, 21, 20] + step["adherence"], 700))
+                self.assertFalse(power_result([0, 1, 21, 20] + step["adherence"], 700, duration=21))
         for peak, expected in ((699, False), (700, True), (900, True)):
             self.single([peak] * 9)
             self.event["workout_doc"]["steps"][0]["power"] = {"units": "w", "min": 700, "max": 800}
@@ -614,6 +712,21 @@ class BoutCache(unittest.TestCase):
     prepare = base.Cache.prepare
     previous = base.Cache.previous
 
+    def test_version_five_marker_four_refreshes_then_current_cache_hits(self):
+        self.repeated(count=3)
+        with mock.patch.object(self.sync, "_fetch_activity_streams", return_value=("ok", self.streams)) as fetch:
+            current = self.prepare()
+            old = copy.deepcopy(current)
+            old["version"] = 5
+            self.assertEqual(old["bout_metrics_version"], 4)
+            old["steps"][1]["bouts"][0][5:7] = [28, 1234]
+            corrected = self.prepare(self.previous(old))
+            self.assertEqual(corrected, current)
+            self.assertEqual(corrected["version"], 6)
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(self.prepare(self.previous(corrected)), current)
+            self.assertEqual(fetch.call_count, 2)
+
     def test_old_version_five_semantics_refresh_once_then_hit(self):
         for kind in ("set", "short", "long", "sprint", "fixed_sprint"):
             if kind == "set":
@@ -641,7 +754,7 @@ class BoutCache(unittest.TestCase):
                         step["sprint"][2] = 999  # Stale fixed-width evidence must be rebuilt.
                 corrected = self.prepare(self.previous(old))
                 self.assertEqual(corrected, current)
-                self.assertEqual(corrected["version"], 5)
+                self.assertEqual(corrected["version"], 6)
                 self.assertEqual(fetch.call_count, 2)
                 self.assertEqual(self.prepare(self.previous(corrected)), current)
                 self.assertEqual(fetch.call_count, 2)
@@ -693,12 +806,13 @@ class BoutPlacement(unittest.TestCase):
         self.repeated(count=3)
         first = self.capture()
         self.assertEqual(self.sync._intervals_data["activities"][0]["session_structure"]["bout_metrics_version"], 4)
-        self.assertNotIn("bouts", json.dumps(first))
+        self.assertNotIn('"bouts"', json.dumps(first))
         with mock.patch.object(Sync, "_fetch_activity_streams", side_effect=AssertionError("expired refetch")), \
                 mock.patch.object(Sync, "_fetch_activity_intervals", side_effect=AssertionError("expired detail")):
             row = self.cycle(base.NOW + timedelta(days=15))
         self.assertFalse(row["has_structure"])
-        self.assertNotIn("bouts", json.dumps(row))
+        self.assertNotIn('"bouts"', json.dumps(row))
+        self.assertIsNone(row["interval_data"]["compliance"]["on_target"])
         self.assertEqual(self.sync._intervals_data["activities"], [])
 
 
@@ -708,10 +822,10 @@ class Documentation(unittest.TestCase):
         schema = (root / "examples/json-examples/README.md").read_text()
         fragment = schema.split("## Short-set detail fragment (synthetic)", 1)[1].split("## Files", 1)[0]
         block = json.loads(re.search(r"```json\n(.*?)\n```", fragment, re.S).group(1))
-        self.assertEqual((block["version"], block["bout_metrics_version"]), (5, 4))
+        self.assertEqual((block["version"], block["bout_metrics_version"]), (6, 4))
         rows = block["steps"][0]["bouts"]
         self.assertEqual([time_result(row, 30, 2) for row in rows], [True] * 3)
-        self.assertEqual([power_result(row, 300) for row in rows], [True, True, False])
+        self.assertEqual([power_result(row, 300, offset=2) for row in rows], [True, True, False])
         self.assertEqual([r[0] for r in rows], [600, 645, 690])
         template = (root / "examples/reports/POST_WORKOUT_REPORT_TEMPLATE.md").read_text()
         line = next(x for x in template.splitlines() if x.startswith("Compliance:"))

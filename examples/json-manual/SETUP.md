@@ -1,5 +1,7 @@
 # Manual JSON Export
 
+`interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
+
 Export Intervals.icu data locally for different time ranges.
 
 ## Prerequisites
