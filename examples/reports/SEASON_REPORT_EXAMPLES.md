@@ -6,7 +6,7 @@ Synthetic fixtures only. Both examples use Sunday-start completed calendar weeks
 
 Eight completed weeks run from 17 May through 11 July. The first three ACWR values are unknown; the remaining five are 0.75, 0.90, 1.10, 1.30 and 1.40. The fictional dossier has no stated bottle.
 
-The intensity values illustrate supplied cycling-primary blocks in every completed week and matched month, with power basis throughout. Season percentages use their Seiler seconds; current and historical sport scopes agree. All-sports hours are not intensity weights.
+The intensity values illustrate synthetic report_intensity_season selecting cycling across eight completed Sunday-start weeks, with 24/24 observed power sessions. Current 28-day cycling has 14/14 sessions across four rolling chunks. Each matched month selects cycling independently using the same mapping and settings: June has 12/12 sessions over five touched weeks on each side. Fetch completeness is unknown; all-sport hours are not intensity weights. These illustrations decode the file-level schema 2; counts do not imply exact covered dates.
 
 ```text
 **Season report: Sun 17 May to Sat 11 July 2026**
@@ -40,8 +40,8 @@ ACWR above 1.3 through 1.5: 1
 ACWR known: 5 of 8 weeks
 
 **Intensity**
-Zones (cycling, power, 8 weeks): Z1+Z2 92%, Z3 5%, Z4+ 3% (zone-time weighted)
-TID 28d (now, cycling, power): Pyramidal
+Zones (cycling, power, 8/8 weeks; 24/24 sessions): Z1+Z2 92%, Z3 5%, Z4+ 3% (zone-time weighted)
+TID 28d (now, cycling, power, 4/4 rolling weeks; 14/14 sessions): Pyramidal
 Hard days: avg. 1.5/week over 8 completed weeks
 First half (17 May-13 Jun): avg. 1.5 hard days/week
 Second half (14 Jun-11 Jul): avg. 1.5 hard days/week
@@ -54,9 +54,7 @@ TSS: 1050 (900)
 Apr-Jun monthly avg. TSS: 980 (870)
 CTL peak: 44.2 (40.5)
 CTL end: 43.8 (39.9)
-Z1+Z2 (cycling, power; prior power): 90% (93%)
-Z3 (cycling, power; prior power): 6% (4%)
-Z4+ (cycling, power; prior power): 4% (3%)
+Zones (cycling, power, 5/5 weeks; 12/12 sessions each side): Z1+Z2 90% (93%), Z3 6% (4%), Z4+ 4% (3%)
 Hard days: June avg. 1.8/week (1.5/week)
 Longest ride: 2.75h (2.5h)
 HRV: June avg. 62 ms (59 ms)
@@ -94,7 +92,7 @@ Completed-week volume and the matched June comparison show a larger training bas
 
 ## Example 2: short history and partial power coverage
 
-Two completed Sunday-start weeks are available. One ACWR value is 0.95; the other is unknown. There is no prior-year match. Only retained power and moving-time facts are supplied.
+Two completed Sunday-start weeks are available. One ACWR value is 0.95; the other is unknown. There is no prior-year match. Only retained power and moving-time facts are supplied. This older history has no report_intensity_season block.
 
 ```text
 **Season report: Sun 28 June to Sat 11 July 2026**
@@ -119,6 +117,9 @@ ACWR 0.8 through 1.3: 1
 ACWR above 1.3: none
 ACWR known: 1 of 2 weeks
 
+**Intensity**
+Season zones: unavailable, older history has no multisport intensity block
+
 **Fun facts (cycling, descriptive)**
 Max power (1 s): 540 W, 30 Jun, River path (stale, partial coverage: 1 of 2 expected rides, sampled 5 Jul)
 
@@ -129,3 +130,22 @@ The completed weeks support a volume summary, with only one known coupled ACWR v
 ```
 
 Zero bins, empty Notable lines, absent equivalents and missing metrics are omitted. A phase gap is never bridged. Peaks live in Fun facts, not a separate Best efforts section.
+
+## Synthetic seasonal selection and unmatched sports
+
+In 24 completed weeks, cycling contributes 92% TSS/88% time with twenty 4.4-hour weeks. Four three-hour ski weeks supply 8% TSS/12% time and pass the guarded weekly-winner floor of 2.2 hours. Both sports are selected in report_intensity_season; current cycling primacy does not relabel the ski weeks. Every included observation contributes, even if its sport did not qualify in its own week.
+
+```
+Zones (cycling, power, 20/24 weeks; 60/60 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3%
+Zones (skiing, HR, 4/24 weeks; 12/12 sessions): Z1+Z2 85%, Z3 10%, Z4+ 5%
+Skiing coverage: 4 active weeks; observed sessions only
+```
+
+A separate matched-month example has only cycling this year and only skiing last year. Show the independently selected union without pairing unlike sports:
+
+```
+Zones (cycling, power, 4 covered weeks; 8/8 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3% (prior unavailable)
+Zones (skiing, HR): unavailable (prior Z1+Z2 85%, Z3 10%, Z4+ 5%; 4 covered weeks, 8/8 sessions)
+```
+
+Missing sport evidence is not zero. With different mapping versions, show separate labelled observations and mark the comparison unavailable. Never add overlapping monthly tiers or classify Season from these distributions.

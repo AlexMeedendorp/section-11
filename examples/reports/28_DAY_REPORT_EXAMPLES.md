@@ -4,7 +4,7 @@ Synthetic fixtures only. The four supplied chunks are newest first in JSON and d
 
 ## Example 1: four rolling chunks
 
-Intensity illustrates supplied cycling-primary, power-basis blocks for all four chunks and the 28-day window. Walks remain in totals only. The flagged activity has a synthetic power/outdoor/270 W zone_reference.
+Intensity illustrates synthetic period-local report_intensity blocks selecting cycling in each chunk and the whole 28-day window. Walks remain below selection thresholds. Cycling has 4, 4, 3 and 3 covered sessions in chronological chunks, 14 in total. Fetch completeness is unknown. The flagged activity has a synthetic power/outdoor/270 W zone_reference. These illustrations decode the file-level schema 2; counts do not imply exact covered dates.
 
 ```text
 **28-day report: Wed 17 June to Tue 14 July 2026**
@@ -34,7 +34,7 @@ TSB: -4.2 -> -1.4 (+2.8)
 Hours: 6h
 TSS: 270
 CTL: 43.2
-Zones (cycling, power): Z1+Z2 89%, Z3 7%, Z4+ 4%
+Zones (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 89%, Z3 7%, Z4+ 4%
 Hard days: 2 (18 Jun intervals; 21 Jun tempo)
 Durability: 7-day avg 3.6% (N=2)
 EF: 7-day avg 1.25 (N=2)
@@ -47,7 +47,7 @@ Sleep: 7-day avg 7.00h (7 days)
 Hours: 6.5h
 TSS: 300
 CTL: 43.8
-Zones (cycling, power): Z1+Z2 86%, Z3 10%, Z4+ 4%
+Zones (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 86%, Z3 10%, Z4+ 4%
 Hard days: 2 (25 Jun intervals; 28 Jun by power Z3 only)
 Durability: 7-day avg 3.4% (N=2)
 EF: 7-day avg 1.27 (N=3)
@@ -60,7 +60,7 @@ Sleep: 7-day avg 7.25h (6 days)
 Hours: 4.75h
 TSS: 220
 CTL: 42.1
-Zones (cycling, power): Z1+Z2 94%, Z3 4%, Z4+ 2%
+Zones (cycling, power, 1/1 rolling week; 3/3 sessions): Z1+Z2 94%, Z3 4%, Z4+ 2%
 Hard days: 1 (3 Jul intervals)
 Durability: 7-day avg 3.1% (N=2)
 EF: 7-day avg 1.29 (N=2)
@@ -73,7 +73,7 @@ Sleep: 7-day avg 7.25h (7 days)
 Hours: 5h
 TSS: 235
 CTL: 42.6
-Zones (cycling, power): Z1+Z2 91%, Z3 6%, Z4+ 3%
+Zones (cycling, power, 1/1 rolling week; 3/3 sessions): Z1+Z2 91%, Z3 6%, Z4+ 3%
 Hard days: 1 (10 Jul intervals)
 Durability: 7-day avg 3.1% (N=2)
 EF: 7-day avg 1.30 (N=3)
@@ -93,7 +93,8 @@ Feel: 28-day avg 2.1/5 (N=11)
 RPE: 28-day avg 3.9/10 (N=11)
 
 **Intensity**
-TID 28d (cycling, power): Pyramidal
+Zones 28d (cycling, power, 4/4 rolling weeks; 14/14 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3%
+TID 28d (cycling, power, 4/4 rolling weeks; 14/14 sessions): Pyramidal
 
 **Key sessions**
 **⚠️ 10 Jul, Stepped endurance**
@@ -188,3 +189,15 @@ Pairing alone does not establish execution quality, and the sparse observations 
 ```
 
 When LT1/LT2 estimates are absent, their rows are absent. An eligible easy-state guard remains visible independently of threshold confidence; a null drift estimate is never displayed as zero.
+
+## Synthetic ski holiday and indoor ski fragment
+
+For 28 September to 25 October, cycling supplies 75% TSS/60% time and skiing 25%/40%. Skiing combines four outdoor Nordic ski sessions and one indoor ski session in the 5-11 October chunk, all using the same five-band HR mapping. Cycling has eight power sessions in the other three chunks. The independently selected whole-period lines are:
+
+```
+Zones (cycling, power, 3/4 rolling weeks; 8/8 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3%
+Zones (skiing, HR, 1/4 rolling weeks; 5/5 sessions): Z1+Z2 85%, Z3 10%, Z4+ 5%
+Skiing coverage: 1 active week; absence in the other chunks is not missing zones
+```
+
+These describe observed sessions; activity-fetch completeness is unknown. If a sixth ski session lacks zones, show 5/6 and partial coverage without a whole-period drift claim. Keep a separate power or incompatible HR-mapping bucket if one occurs; never label the line mixed.

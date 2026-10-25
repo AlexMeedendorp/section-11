@@ -6,7 +6,7 @@ Synthetic values only. Both examples end on Tuesday, independent of the configur
 
 Cadence endurance has no steps and a 3300-second plan; Park walk has no steps and a 1800-second plan. Both durations are within tolerance. Valley endurance is a paired step plan without an assessment. The partly-followed ride has observed off-target steps.
 
-The revised intensity values illustrate supplied cycling-primary, power-basis blocks; the walk is excluded. The flagged session has a synthetic power/indoor/260 W zone_reference. These are invented source assumptions for the example, not recomputed athlete results.
+The intensity values illustrate synthetic report_intensity blocks selecting cycling only; walking is below both share thresholds. Power covers all three observed cycling sessions in the rolling week; the independent 28-day block has 14/14 covered sessions across four chunks. Fetch completeness remains unknown. The flagged session has a synthetic power/indoor/260 W zone_reference. These illustrations decode the file-level schema 2; counts do not imply exact covered dates.
 
 ```text
 **7-day report: Wed 8 July to Tue 14 July 2026**
@@ -38,9 +38,9 @@ HR: 131 average, 163 maximum
 HRRc: 31 bpm
 
 **Intensity and capability**
-Zones (cycling, power): Z1+Z2 91%, Z3 6%, Z4+ 3%
-TID 7d (cycling, power): Pyramidal
-TID 28d (cycling, power): Pyramidal
+Zones (cycling, power, 1/1 rolling week; 3/3 sessions): Z1+Z2 91%, Z3 6%, Z4+ 3%
+TID 7d (cycling, power, 3/3 sessions): Pyramidal
+TID 28d (cycling, power, 4/4 rolling weeks; 14/14 sessions): Pyramidal
 
 Durability: 7-day avg 3.1% (N=2), 28-day avg 3.3% (N=8)
 EF: 7-day avg 1.30 (N=3), 28-day avg 1.28 (N=10)
@@ -135,11 +135,13 @@ Missing comparisons, zero climbing, unavailable peaks, absent equivalents and un
 
 ## Runner intensity fragment
 
-For a synthetic primary sport of run, the supplied HR-based primary block has z1_pct=75, z2_pct=15, z3_pct=10 and classification=Pyramidal. Cycling cross-training is excluded; the display expands the supplied run family to running:
+For a synthetic period with running at 88% TSS and cycling at 12%, both sports qualify. Three running sessions supply HR and one ride supplies power, all within the rolling week. Separate buckets yield:
 
 ```
-Zones (running, HR): Z1+Z2 75%, Z3 15%, Z4+ 10%
-TID 7d (running, HR): Pyramidal
+Zones (running, HR, 1/1 rolling week; 3/3 sessions): Z1+Z2 75%, Z3 15%, Z4+ 10%
+Zones (cycling, power, 1/1 rolling week; 1/1 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3%
+TID 7d (running, HR, 3/3 sessions): Pyramidal
+TID 7d (cycling, power, 1/1 sessions): Pyramidal
 ```
 
-If the primary block is missing, omit these lines and explain the missing intensity source when material. Never reuse a cycling label or all-sports share.
+If report_intensity is missing, state intensity unavailable when material; never reuse a cycling label or old all-sport/primary percentages. A present empty block remains empty. A selected sport without zones gets a short unavailable line, for example `Zones (swimming, 1 active rolling week; 0/2 sessions): unavailable, pace mapping deferred`.

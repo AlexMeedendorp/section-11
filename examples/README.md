@@ -180,9 +180,9 @@ Pre-calculated values for Section 11 compliance: AI should use these, not calcul
 | `phase_detected` | Auto-detected: Build, Base, Peak, Taper, Deload, Recovery, Overreached, null |
 | `phase_detection` | Full phase detection object: phase, confidence, reason_codes, basis (dual-stream), phase_duration_weeks |
 | `benchmark_indoor` / `benchmark_outdoor` | 8-week FTP progression |
-| `seiler_tid_7d_primary` / `seiler_tid_28d_primary` | Report intensity with returned sport/basis; all-sports seiler_tid_7d / seiler_tid_28d remain context only. See [Report intensity source](../SECTION_11.md#report-intensity-source) |
+| `report_intensity_7d` / `report_intensity_28d` | Period-local main sports, separate power/HR mapping buckets and weeks/sessions coverage. Legacy primary/all-sport fields retain their meanings. See [Report intensity source](../SECTION_11.md#report-intensity-source) |
 | `capability.durability` | Aggregate decoupling 7d/28d mean + trend (improving/stable/declining) |
-| `capability.tid_comparison_primary` | Report TID drift for the selected main sport; existing tid_comparison remains all-sports diagnostic context |
+| `capability.report_intensity_comparison` | Same sport/basis/mapping observed-session drift with coverage read from both ready blocks; partial/incompatible evidence has null drift. Legacy tid_comparison_primary and tid_comparison remain unchanged |
 | `readiness_decision` | Pre-computed go/modify/skip with priority ladder (P0–P3) and signal breakdown |
 | `capability.efficiency_factor` | Aerobic efficiency (power÷HR normalized) 7d/28d with trend |
 | `capability.hrrc` | Heart rate recovery 7d/28d aggregate trend (improving/stable/declining) |

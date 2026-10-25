@@ -1,6 +1,6 @@
 # Post-Workout Report Examples
 
-For the updated report-source illustration, Polarization/TID lines below are fictional primary cycling/power examples with matching primary drift, not reanalyses of the legacy sessions. Other legacy aggregates remain preserved. The sport label is data-dependent; a runner example appears in 7_DAY_REPORT_EXAMPLES.md.
+For the updated report-source illustration, Polarization/TID lines below use fictional period-local report_intensity blocks selecting cycling, with four power-covered sessions in the seven-day window and sixteen across four 28-day chunks. These intensity values and coverage counts are synthetic and independent of the legacy session aggregates. Both blocks use compatible mappings and complete observed sessions; fetch completeness is unknown. Other legacy aggregates remain preserved. These illustrations decode the file-level schema 2; counts do not imply exact covered dates.
 
 > Anonymized examples showing standard post-workout report format.  
 > See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference. Legacy examples do not supply recorded elevation, so Ascent is omitted. Missing matched-step data is stated explicitly; aggregate numbers are preserved. The fictional field excerpts below illustrate the new producer contract without inventing step actuals for those legacy reports.
@@ -260,11 +260,11 @@ TSS: 10 (planned 10)
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk2
 
-Polarization (cycling, power): Z1+Z2 97%, Z3 1%, Z4+ 3%
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 2.14% 7d mean(3) / 2.50% 28d mean(11) (stable)
 EF: 1.45 7d mean(4) / 1.42 28d mean(14) (stable)
 HRRc: 36 bpm 28d mean(5); 7d: no data
-TID 28d (cycling, power): Polarized (PI: 3.18); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -4.85
 CTL: 71.20
@@ -373,11 +373,11 @@ TSS: 5
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk3
 
-Polarization (cycling, power): Z1+Z2 88%, Z3 7%, Z4+ 5%: Polarized (PI: 1.85)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 3.20% 7d mean(3) / 2.75% 28d mean(12) (stable)
 EF: 1.38 7d mean(4) / 1.42 28d mean(15) (stable)
 HRRc: 32 bpm 7d mean(2) / 31 bpm 28d mean(8) (stable)
-TID 28d (cycling, power): Polarized (PI: 2.42); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -3.75
 CTL: 68.40
@@ -444,11 +444,11 @@ Effort response: negative
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk3
 
-Polarization (cycling, power): Z1+Z2 84%, Z3 2%, Z4+ 13%
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 2.95% 7d mean(3) / 2.50% 28d mean(11) (stable)
 EF: 1.46 7d mean(4) / 1.43 28d mean(14) (stable)
 HRRc: 34 bpm 7d mean(1) / 36 bpm 28d mean(5) (stable)
-TID 28d (cycling, power): Polarized (PI: 3.10); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -11.40
 CTL: 72.80
@@ -510,10 +510,10 @@ Reason: Precautionary (knee discomfort from ride)
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk4
 
-Polarization (cycling, power): Z1+Z2 98%, Z3 0%, Z4+ 2%
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 1.92% 7d mean(2) / 2.40% 28d mean(10) (improving)
 EF: 1.41 7d mean(3) / 1.42 28d mean(12) (stable)
-TID 28d (cycling, power): Polarized (PI: 3.15); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: +2.35
 CTL: 70.50
@@ -556,10 +556,10 @@ TSS: 6
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk2
 
-Polarization (cycling, power): Z1+Z2 97%, Z3 0%, Z4+ 3%
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 2.30% 7d mean(3) / 2.55% 28d mean(11) (stable)
 EF: 1.44 7d mean(4) / 1.43 28d mean(13) (stable)
-TID 28d (cycling, power): Polarized (PI: 3.22); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: +0.85
 CTL: 73.10
@@ -625,11 +625,11 @@ Effort response: negative
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk4
 
-Polarization (cycling, power): Z1+Z2 92%, Z3 5%, Z4+ 3%
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 4.50% 7d mean(3) / 3.20% 28d mean(13) (declining)
 EF: 1.36 7d mean(4) / 1.41 28d mean(15) (declining)
 HRRc: 30 bpm 7d mean(2) / 33 bpm 28d mean(9) (declining)
-TID 28d (cycling, power): Polarized (PI: 2.95); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -8.20
 CTL: 78.40
@@ -703,11 +703,11 @@ Effort response: neutral
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk2
 
-Polarization (cycling, power): Z1+Z2 81%, Z3 6%, Z4+ 13%
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 2.80% 7d mean(2) / 2.95% 28d mean(12) (stable)
 EF: 1.48 7d mean(3) / 1.45 28d mean(14) (improving)
 HRRc: 33 bpm 7d mean(2) / 32 bpm 28d mean(8) (stable)
-TID 28d (cycling, power): Polarized (PI: 3.05); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -6.50
 CTL: 76.20
@@ -778,11 +778,11 @@ Effort response: positive
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk1
 
-Polarization (cycling, power): Z1+Z2 84%, Z3 4%, Z4+ 12%
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 Durability: 2.30% 7d mean(2) / 2.65% 28d mean(11) (improving)
 EF: 1.58 7d mean(3) / 1.50 28d mean(13) (improving)
 HRRc: 38 bpm 7d mean(2) / 34 bpm 28d mean(9) (improving)
-TID 28d (cycling, power): Polarized (PI: 3.12); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: 3.20
 CTL: 72.50
@@ -808,4 +808,17 @@ Ride: Endurance 2h, Z2 steady
 ```
 
 ---
+
+
+## Synthetic power and HR fallback excerpt
+
+Cycling qualifies from period totals. Three of four sessions provide power zones; the fourth has only five-band HR. One source per session yields two partial lines, not a mixed line or a duplicate contribution:
+
+```text
+Polarization (cycling, power, 1/1 rolling week; 3/4 sessions): Z1+Z2 80%, Z3 15%, Z4+ 5%
+Polarization (cycling, HR, 1/1 rolling week; 1/4 sessions): Z1+Z2 95%, Z3 3%, Z4+ 2%
+Zones cover 4 observed cycling sessions across separate bases; each line is partial
+```
+
+No drift label follows from these partial buckets. If zone seconds use a different clock from moving time, show both durations with coverage ratio unavailable, for example `HR zones: 65m observed; session moving time: 60m; clocks not established`. Never cap the ratio at 100% or assign a current FTP to the period.
 

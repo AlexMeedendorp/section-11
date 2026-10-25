@@ -67,11 +67,11 @@ Note: [description or chat_notes text]
 **Weekly totals (rolling 7 days)**
 Phase: [phase_detection.phase] Wk[phase_detection.phase_duration_weeks]
 
-Polarization ([sport], [basis]): Z1+Z2 [XX]%, Z3 [X]%, Z4+ [X]%: [Classification] (PI: [X.XX])
+Polarization ([sport], [basis], [covered/period weeks; covered/sport sessions]): Z1+Z2 [XX]%, Z3 [X]%, Z4+ [X]%: [Classification] (PI: [X.XX])
 Durability: [X.XX]% 7d mean([X]) / [X.XX]% 28d mean([X]) ([trend])
 EF: [X.XX] 7d mean([X]) / [X.XX] 28d mean([X]) ([trend])
 HRRc: [XX] bpm 7d mean([X]) / [XX] bpm 28d mean([X]) ([trend]) [4 cases: (a) 28d ≥ 3 and 7d ≥ 1: full line as shown; (b) 28d ≥ 3 and 7d = 0: "[XX] bpm 28d mean([X]); 7d: no data"; (c) 28d < 3 and 7d ≥ 1: "[XX] bpm 7d mean([X]); 28d: insufficient data"; (d) 28d < 3 and 7d = 0: omit entirely]
-TID 28d ([sport], [basis]): [Classification] (PI: [X.XX]); drift: [consistent/shifting/acute_depolarization]
+TID 28d ([sport], [basis], [coverage]): [Classification] (PI: [X.XX]); drift: [consistent/shifting/acute_depolarization]
 
 TSB: [X.XX]
 CTL: [XX.XX]
@@ -105,6 +105,8 @@ Round zone percentages to the nearest **whole number** (1%). The JSON data sourc
 Round report durations to the nearest whole minute (30 seconds rounds up), retaining hours and minutes. Use `display.moving_time` and `display.elapsed_time`; `elapsed_formatted` has the same minute rounding. Use the exact paired `interval_data.plan_match.plan.duration_s` when present, otherwise the verified paired plan's exact `duration_formatted`; round at presentation, never decimal hours or a duration parsed from a name. A missing start is omitted; otherwise show HH:MM without seconds. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 ## Field Notes
+
+Repeat intensity lines for every selected sport and actual basis/mapping, with covered/period weeks and covered/sport sessions. Weeks mean rolling chunks in current reports and configured weeks in Season/months; a covered week is not necessarily fully measured. Decode the file-level report_intensity_schema (2). Display keys of selected; sports[sport] supplies totals, active-week and zone columns, while zones[mapping] supplies three raw seconds and session/week counts. Show active-week counts and partial coverage without inferring exact covered dates. Resolve explicit rolling refs using the consuming chunk's dates, and monthly blocks by first occurrence in monthly_1y, monthly_2y, monthly_3y. Distinct mappings of the same basis stay separately labelled. Selected sports without zones get a short zones-unavailable line; pace/GAP is deferred. Missing report_intensity blocks mean unavailable; a present empty block is authoritative. Never use legacy primary/all-sport fields as fallback. Use ready-block tid[sport][mapping] percentages; for compact rows divide each bucket's raw seconds by their sum, never average percentages. Keep observed coverage and unknown activity-fetch completeness explicit.
 
 | Field | When to include | Notes |
 |-------|----------------|-------|
@@ -142,8 +144,8 @@ Round report durations to the nearest whole minute (30 seconds rounds up), retai
 | Heat context | When `avg_temp` indicates Tier 1+ heat stress (delta above 14d thermal baseline, or absolute fallback) | Contextualize decoupling, power, and RPE against temperature in the Interpretation section. Do not flag heat-elevated decoupling as durability decline. See **Environmental Conditions Protocol** in SECTION_11.md |
 | Durability (weekly) | Aggregate decoupling 7d/28d | Steady-state sessions only (VI ≤ 1.05, ≥ 90min). Trend direction matters more than absolute value |
 | EF (weekly) | Aggregate EF 7d/28d | Steady-state cycling only (VI ≤ 1.05, ≥ 20min). Trend direction matters more than absolute value |
-| TID 28d (weekly) | Primary-sport 28d Seiler classification + supported drift | Use derived_metrics.seiler_tid_28d_primary and capability.tid_comparison_primary, labelled with the block's sport and zone_basis. Include drift when supplied, never substitute all-sports drift |
-| Polarization (weekly) | Primary-sport Seiler groups | Use derived_metrics.seiler_tid_7d_primary.z1_pct/z2_pct/z3_pct as Z1+Z2 / Z3 / Z4+, with its sport and zone_basis. No hardcoded cycling or all-sports fallback; omit unavailable values. See [Report intensity source](../../SECTION_11.md#report-intensity-source) |
+| TID 28d (weekly) | Selected sports' observed 28d classification | Use derived_metrics.report_intensity_28d and capability.report_intensity_comparison, matched by sport/basis/mapping with coverage read from both ready blocks. Include only supported observed-session drift; partial or unavailable evidence supplies no drift |
+| Polarization (weekly) | Selected sport/basis Seiler groups | Use derived_metrics.report_intensity_7d.selected and tid[sport][mapping] percentages as Z1+Z2 / Z3 / Z4+, with sport, actual basis/mapping and weeks/sessions coverage. See [Report intensity source](../../SECTION_11.md#report-intensity-source) |
 | Weekly totals (rolling 7 days) | Always | Rolling last 7 days including today, not calendar week. Bold heading, four blank-line groups, all existing fields and conditionals retained |
 | Interpretation | Every report | Bold heading; 2–4 sentences preserving compliance, metric-validity, load and recovery rules, with supported terrain/heat/wind causal clauses here |
 | Tomorrow | Any planned session tomorrow | Bold heading then one session per line in start-time order, with sport, type, duration, condensed supported main set and time when supplied. Keep every session and the summary/description fallback rules above |

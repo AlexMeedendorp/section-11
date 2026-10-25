@@ -230,13 +230,14 @@ class ReportIntensity(unittest.TestCase):
         act["icu_zone_times"] = []
         self.assertIsNone(self.sync._zone_reference(act)["basis"])
 
-    def test_guidance_routes_all_reports_to_primary_sources_and_provenance(self):
+    def test_guidance_routes_reports_to_additive_sources_and_preserves_provenance(self):
         reports = REPO_ROOT / "examples/reports"
         for name in ("PRE_WORKOUT", "POST_WORKOUT", "7_DAY", "28_DAY", "SEASON"):
             text = (reports / (name + "_REPORT_TEMPLATE.md")).read_text()
             self.assertIn("#report-intensity-source", text)
-            self.assertIn("seiler_tid_", text)
-            self.assertIn("primary", text)
+            self.assertIn("report_intensity", text)
+            self.assertIn("covered", text)
+            self.assertIn("unavailable", text)
             self.assertNotIn("seiler_tid_7d.z1_pct", text)
         weekly = (reports / "7_DAY_REPORT_TEMPLATE.md").read_text()
         self.assertIn("zone_reference", weekly)
@@ -244,7 +245,7 @@ class ReportIntensity(unittest.TestCase):
         output, _, sync = collect(mod, self.folder, [activity("a")])
         for guidance in (output["READ_THIS_FIRST"], mod.DataOverview.build(sync, output)):
             note = guidance["report_intensity_note"]
-            for phrase in ("seiler_tid_7d_primary", "seiler_tid_28d_primary", "zone_reference",
+            for phrase in ("report_intensity_7d", "report_intensity_28d", "zone_reference",
                            "sport", "zone_basis", "aggregate context only"):
                 self.assertIn(phrase, note)
 

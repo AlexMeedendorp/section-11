@@ -469,7 +469,7 @@ Zone aggregations (TID, polarization, grey zone %) default to power zones with H
 
 See [examples/README.md](examples/README.md) for the full derived metrics table and data output structure.
 
-Report intensity uses the primary-sport Seiler blocks, with supplied sport/basis labels; all-sports zones stay context only. Activity zone_reference records the captured FTP/environment. Historical scoped intensity appears on normal history refresh, without a new request or trigger. See [Report intensity source](SECTION_11.md#report-intensity-source).
+Report intensity selects main sports independently per period and shows separate power/HR lines with covered weeks and sessions. Pace-only sports can qualify, with zones unavailable until pace mapping is supported. Legacy fields and activity zone_reference retain their meanings. New history blocks appear on normal refresh; missing blocks are unavailable. Optional report_main_sports is an explicit producer configuration, absent by default. See [Report intensity source](SECTION_11.md#report-intensity-source).
 
 ### Longitudinal History
 

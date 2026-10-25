@@ -23,7 +23,7 @@ Read the planned summary's `detail_file`, match event ID, route_ref, departure, 
 
 ## Report intensity and zone provenance (synthetic fragments)
 
-Use primary-sport Seiler blocks for all period intensity lines, labelled with their sport and zone_basis. All-sports zone_distribution_7d and Seiler blocks remain context only. The current seven-day highest-TSS sport also scopes rolling chunks and, at ordinary refresh, historical weekly/monthly blocks. Older history missing these blocks is unavailable for scoped intensity, never a fallback to all-sports percentages. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+Use report_intensity_7d / report_intensity_28d, rolling/weekly report_intensity and unique monthly blocks resolved across ordered tiers and history.report_intensity_season for period intensity. Every period selects independently. Decode report_intensity_schema (2) and display selected map keys with separate power/HR basis/mapping buckets and weeks/sessions coverage; all observed eligible sports remain stored, including nonqualifiers. Missing new history is unavailable, not a fallback to old primary or all-sport percentages; a present empty block is authoritative. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
 
 ```json
 {
@@ -33,20 +33,36 @@ Use primary-sport Seiler blocks for all period intensity lines, labelled with th
 
 This is an activity fragment: FTP is the activity's captured threshold, not current athlete settings. A runner using HR could have `{"basis":"hr","ftp_w":null,"environment":"outdoor"}`. Environment is indoor for true trainer/indoor flags or a Virtual* activity type, otherwise outdoor including false/null/absent flags; malformed non-boolean flags without a positive indoor marking mean unknown. A Walk with trainer null is outdoor; VirtualRide with trainer null and VirtualSki with trainer true are indoor. Type is a data marking, never a name inference; the separate legacy indoor field is unchanged. No supported zone source leaves basis null. Pace-only data does not invent a basis or threshold. With provenance, a Z3 flag can say `Zones: power, from indoor FTP 260 W`; generic uncertainty wording is only for missing provenance.
 
-The following distribution shape applies to derived_metrics.seiler_tid_7d_primary / seiler_tid_28d_primary and to rolling/history period seiler_tid_primary. The run family renders as running, with HR basis; it never defaults to cycling. Report drift uses capability.tid_comparison_primary, not its unchanged all-sports sibling.
+The following abbreviated synthetic fragment shows the shared schema and one selected running/HR ready block. The producer emits the column/reason definitions once per file. Sport arrays contain sessions, known TSS, known moving seconds, active weeks, zone map, then optional exceptions. Each zone array contains three raw zone seconds, covered sessions and covered weeks. Ready tid arrays contain percentages followed by PI/classification; Season omits the last two. Period rows omit tid and use raw seconds. See the protocol for missingness and reference rules.
 
 ```json
 {
-  "seiler_tid_primary": {
-    "sport": "run", "zone_basis": "hr",
-    "z1_seconds": 2700, "z2_seconds": 540, "z3_seconds": 360,
-    "z1_pct": 75.0, "z2_pct": 15.0, "z3_pct": 10.0,
-    "polarization_index": null, "classification": "Pyramidal"
+  "report_intensity_schema": {
+    "schema_version": 2,
+    "rule_version": "endurance_10_50_week_guard_v1",
+    "selection_config": {"main_sports": [], "zone_preference": {}},
+    "week_start_day": 0,
+    "mappings": {"p7": "power/power_7to3_v1", "h5": "hr/hr_5to3_v1", "h7": "hr/hr_7to3_v1"},
+    "reasons": {"p": "period_primary", "l": "load_share_10pct", "t": "time_share_50pct", "w": "guarded_week_winner", "e": "explicit_main_sport"}
+  },
+  "derived_metrics": {
+    "report_intensity_7d": {
+      "start": "2026-06-09", "end": "2026-06-15", "week_mode": "rolling", "weeks": 1,
+      "selected": {"running": "plt"},
+      "sports": {"running": [1, 80, 3600, 1, {"h5": [2700, 540, 360, 1, 1]}]},
+      "tid": {"running": {"h5": [75, 15, 10, null, "Pyramidal"]}}
+    }
   }
 }
 ```
 
-The historical JSON files keep their original headers and omit these current additive fields. These fragments are synthetic schema evidence, never athlete data.
+In a sport's optional sixth array entry, `{"missing":[1,1],"indeterminate":true}` means one unknown load and duration and no defensible selection. The earlier numeric sums remain known subtotals, not replacement zeros for missing data. `{"unaligned":["p7"]}` marks per-session clock disagreement even when aggregate sums match. Absent exceptions mean zero missing counts, a determinate selection result and no additional clock-disagreement marker; they never prove complete upstream retrieval. A basis with fewer sessions than its sport is partial.
+
+A rolling `report_intensity: {"ref":"derived_metrics.report_intensity_7d"}` reuses identical independently computed values, not dates: use the consuming chunk's start/end. Missing targets are unavailable. Monthly blocks are stored only on the first occurrence of each month when searching monthly_1y, monthly_2y, monthly_3y. Later copies of that month omit report_intensity; resolve the matching month from the ordered union, never from another month or by summing tiers. This also works when monthly_1y is absent: search the remaining tiers. An unresolved month is unavailable.
+
+Read current comparison coverage from the two ready blocks; the comparison stores only sport/mapping, status and drift/PI delta. Recognised SS power overlays are validated and skipped, never added to numbered zone seconds. Source types, environments and exact covered ranges are not repeated in period summaries; activity zone_reference remains unchanged.
+
+The historical JSON files keep their original headers and omit these additive report blocks: updated consumers must show unavailable intensity for them. These fragments are synthetic schema evidence, never athlete data. Pace-only sports still contribute to selection totals but have an empty zone map. An empty selected map is authoritative. Empty data is never permission to infer zeros or a legacy fallback.
 
 ## Adjacent interval sources (synthetic fragment)
 

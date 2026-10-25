@@ -30,7 +30,7 @@ TSB: [start] -> [now] ([signed delta])
 Hours: [supplied hours]
 TSS: [supplied TSS]
 CTL: [supplied end CTL]
-Zones ([sport], [basis]): [primary Seiler Z1+Z2 %, Z3 %, Z4+ %]
+Zones ([sport], [basis], [covered/period weeks; covered/sport sessions]): [Z1+Z2 %, Z3 %, Z4+ %]
 Hard days: [count, dates and supported names/reasons]
 Durability: [7-day avg, N]
 EF: [7-day avg, N]
@@ -52,7 +52,8 @@ Feel: [28-day avg, N sessions]
 RPE: [28-day avg, N sessions]
 
 **Intensity**
-TID 28d ([sport], [basis]): [supplied primary Seiler classification, PI]
+Zones 28d ([sport], [basis], [coverage]): [Z1+Z2 %, Z3 %, Z4+ %]
+TID 28d ([sport], [basis], [coverage]): [supplied observed classification, PI]
 
 **Key sessions**
 **[Status emoji] [date, name]**
@@ -93,16 +94,18 @@ Easy-state guard: [eligible estimate and N, descriptive]
 
 ## Sources and gates
 
+Repeat intensity lines for every selected sport and actual basis/mapping, with covered/period weeks and covered/sport sessions. Weeks mean rolling chunks in current reports and configured weeks in Season/months; a covered week is not necessarily fully measured. Decode the file-level report_intensity_schema (2). Display keys of selected; sports[sport] supplies totals, active-week and zone columns, while zones[mapping] supplies three raw seconds and session/week counts. Show active-week counts and partial coverage without inferring exact covered dates. Resolve explicit rolling refs using the consuming chunk's dates, and monthly blocks by first occurrence in monthly_1y, monthly_2y, monthly_3y. Distinct mappings of the same basis stay separately labelled. Selected sports without zones get a short zones-unavailable line; pace/GAP is deferred. Missing report_intensity blocks mean unavailable; a present empty block is authoritative. Never use legacy primary/all-sport fields as fallback. Use ready-block tid[sport][mapping] percentages; for compact rows divide each bucket's raw seconds by their sum, never average percentages. Keep observed coverage and unknown activity-fetch completeness explicit.
+
 `interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 For compliance, read the compact per-step rows with their evaluator, completion and availability; select main work from the authoritative prescription. Unlabelled lower-target rows are not automatic exclusions, and compressed-set totals are never an all-steps aggregate.
 
 - Totals by sport use exact-window recent_activities, distinct IDs, moving_time_s and achieved TSS. Total hours/TSS must reconcile with the four supplied chunks, allowing display rounding. Do not reconstruct chunk metrics from activities or history. Missing metrics remove their own lines, not other supplied observations.
 - Pairing comes from plan_pairing for every sport. "Rides: 12 of 12 planned ✅" counts paired activities, not adherence. Checked against plan includes assessed step statuses and paired no-step activities with a non-null duration result; only followed steps or within-tolerance no-step durations contribute to its followed numerator. Do not substitute a duration check for a structured plan assessment. Exclude unassessed/unknown results from the checked denominator; never show not-assessed counts. Explain material retained-step coverage without inventing assessments: full detail remains 14 days; older step results are last captured. Pairing identity/duration refresh across 28 days.
 - Fitness uses exact dated start-of-period and current CTL/ATL/TSB. Start -> now is allowed here. If the start is missing, show only the dated current value. No seven-day ramp, FTP, eFTP, W/kg, ceilings or separate progression section.
-- Each chunk's hours, TSS, ctl_end, hard_days, hard_day_details, capability means/N and wellness are supplied. Zones use chunk.seiler_tid_primary.z1_pct/z2_pct/z3_pct as Z1+Z2/Z3/Z4+, labelled with sport and zone_basis. All chunks retain the current primary sport; never reselect an older chunk's winner or use all-sports zone_distribution. Missing primary data is unavailable. Hard-day reasons use actual rung/basis: e.g. "Hard days: 3 (10 Jul intervals; 12 and 13 Jul by power Z3 only)" only when hard_day_details supports that distinction. No reclassification; unknown plan intensity stays unknown.
+- Each chunk's hours, TSS, ctl_end, hard_days, hard_day_details, capability means/N and wellness are supplied. Zones use chunk.report_intensity for each independently selected sport and actual basis/mapping, with weeks/sessions coverage. The full 28-day block includes all observations for its selected sports, including chunks where they did not qualify. Missing new blocks are unavailable. Hard-day reasons use actual rung/basis: e.g. "Hard days: 3 (10 Jul intervals; 12 and 13 Jul by power Z3 only)" only when hard_day_details supports that distinction. No reclassification; unknown plan intensity stays unknown.
 - Chunk Durability/EF/HRRc say 7-day avg and N. HRRc only when present, numbers only, no trend words. All producer eligibility gates and per-session decoupling >=90 min/VI <=1.05 and EF cycling >=20 min/power+HR/VI <=1.05 gates remain. A per-session value with `decoupling_detail.comparability: plan_changes_power` stays in the series, marked "plan changes power", without a drift verdict or trend claim from that value; chunk Durability means are unchanged.
 - Wellness uses latest.json.wellness_28d, not seven-day wellness_data or a mean of chunk means. Each metric's own observed-day count is authoritative. Weight uses weight_kg.avg/days/latest/latest_date with display conversion; keep the existing current_status.weight slope gate independently. Feel/RPE use available exact-window recent_activities with N; no missing values become zero.
-- Intensity uses derived_metrics.seiler_tid_28d_primary, labelled with its sport and zone_basis. No hardcoded cycling or all-sports fallback. See [Report intensity source](../../SECTION_11.md#report-intensity-source). Phase is current derived_metrics.phase_detection only, still based on configured calendar weeks.
+- Intensity uses derived_metrics.report_intensity_28d.selected, tid and sports coverage columns, with sport/basis/mapping and coverage labels. Keep its four-chunk scope distinct from each chunk's own selection. See [Report intensity source](../../SECTION_11.md#report-intensity-source). Phase is current derived_metrics.phase_detection only, still based on configured calendar weeks.
 - Key-session header markers and plan identity follow 7_DAY_REPORT_TEMPLATE.md. Use exact identified target/actual windows. Long-ride observations and a tempo whole-ride decoupling series remain clearly distinct from main-set measures. No invented target power from session average/NP.
 - Best efforts uses supplied capability.power_curve_delta current/previous anchor watts and hr_curve_delta with their own window. Attribute current dates from matching exact fun_facts.rolling_28d.peaks or exact activity observations; do not attach a date to a different maximum. Missing previous values remove only the bracket. Dates absent from the source are omitted, not guessed. Shift uses words, no percentages or rotation scores.
 - Flags follow the 7-day per-flag layout and Z3 intent/basis rules. No high-drift count flag.

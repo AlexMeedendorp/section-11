@@ -31,8 +31,8 @@ Durability: [X.XX]% 7d mean([X]) ([trend])
 EF: [X.XX] 7d mean([X]) ([trend])
 Monotony: [X.XX] ([primary sport] [X.XX], total [X.XX]); [note]
 
-Polarization ([sport], [basis]): Z1+Z2 [XX]%, Z3 [X]%, Z4+ [X]%; [Classification] (PI: [X.XX])
-TID 28d ([sport], [basis]): [Classification] (PI: [X.XX]); drift: [shifting/acute_depolarization] [only if not consistent]
+Polarization ([sport], [basis], [covered/period weeks; covered/sport sessions]): Z1+Z2 [XX]%, Z3 [X]%, Z4+ [X]%; [Classification] (PI: [X.XX])
+TID 28d ([sport], [basis], [coverage]): [Classification] (PI: [X.XX]); drift: [shifting/acute_depolarization] [only if not consistent]
 
 Total hours, last 7 days: [XhYm]
 Total activities, last 7 days: [XX]
@@ -117,6 +117,8 @@ The attribution is one line, last in the report text, with linked provider/licen
 
 ## Conditional Fields
 
+Repeat intensity lines for every selected sport and actual basis/mapping, with covered/period weeks and covered/sport sessions. Weeks mean rolling chunks in current reports and configured weeks in Season/months; a covered week is not necessarily fully measured. Decode the file-level report_intensity_schema (2). Display keys of selected; sports[sport] supplies totals, active-week and zone columns, while zones[mapping] supplies three raw seconds and session/week counts. Show active-week counts and partial coverage without inferring exact covered dates. Resolve explicit rolling refs using the consuming chunk's dates, and monthly blocks by first occurrence in monthly_1y, monthly_2y, monthly_3y. Distinct mappings of the same basis stay separately labelled. Selected sports without zones get a short zones-unavailable line; pace/GAP is deferred. Missing report_intensity blocks mean unavailable; a present empty block is authoritative. Never use legacy primary/all-sport fields as fallback. Use ready-block tid[sport][mapping] percentages; for compact rows divide each bucket's raw seconds by their sum, never average percentages. Keep observed coverage and unknown activity-fetch completeness explicit.
+
 | Field | Rule |
 |-------|------|
 | Phase | Include only when `phase_detection.confidence` is "high" or "medium". Omit when "low" or phase is null |
@@ -125,8 +127,8 @@ The attribution is one line, last in the report text, with linked provider/licen
 | Monotony | Include **only** if > 2.3. Omit entirely when normal |
 | Durability | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
 | EF | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
-| TID 28d + drift | Use derived_metrics.seiler_tid_28d_primary and capability.tid_comparison_primary. Include only for supported shifting/acute_depolarization; omit for consistent or unavailable. Label sport and zone_basis from the primary block; never use all-sports drift |
-| Polarization | Use derived_metrics.seiler_tid_7d_primary.z1_pct/z2_pct/z3_pct as Z1+Z2 / Z3 / Z4+, with its sport and zone_basis. These are Seiler groups, including when basis is HR. No all-sports fallback or hardcoded cycling; omit unavailable values. See [Report intensity source](../../SECTION_11.md#report-intensity-source) |
+| TID 28d + drift | Use derived_metrics.report_intensity_28d and capability.report_intensity_comparison, matched by sport/basis/mapping with coverage read from both ready blocks. Include only supported observed-session shifting/acute_depolarization; omit for consistent, partial or unavailable evidence. Retain unknown-fetch limits |
+| Polarization | Use derived_metrics.report_intensity_7d.selected and tid[sport][mapping] percentages as Z1+Z2 / Z3 / Z4+. Label sport, actual basis/mapping and weeks/sessions coverage. See [Report intensity source](../../SECTION_11.md#report-intensity-source) |
 | Load/Recovery context | Include tolerance note only when within 0.2 of threshold |
 | Next session | Include only on rest days |
 | Distance / Ascent / Terrain / Climbs / Pacing | Terrain and climb detail require `has_terrain: true`, `route_status: "ok"` and matching event ID and complete `route_ref` in `routes.json`. Quote supplied `display.position`, `display.distance` and elevation units; gradients use %. Include each supplied climb on its own line, followed by Pacing. `no_elevation` preserves distance/location in `route_geometry`, but never infer flatness, zero ascent, climbs or terrain-adjusted pacing. Omit unsupported fields. State other route limitations when route advice is requested. Full pre-ride briefing available on request |

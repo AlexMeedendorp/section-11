@@ -37,8 +37,8 @@ ACWR above 1.5: [weeks]
 ACWR known: [K] of [N] weeks
 
 **Intensity**
-Zones ([sport], [basis], [N] weeks): [primary Seiler Z1+Z2 %, Z3 %, Z4+ %, weighted by zone seconds]
-TID 28d (now, [sport], [basis]): [supplied primary Seiler classification]
+Zones ([sport], [basis], [covered/N weeks; covered/sport sessions]): [Z1+Z2 %, Z3 %, Z4+ %]
+TID 28d (now, [sport], [basis], [coverage]): [supplied observed classification]
 Hard days: [avg. per week over N completed weeks]
 First half ([dates]): [avg. hard days/week]
 Second half ([dates]): [avg. hard days/week]
@@ -51,9 +51,7 @@ TSS: [current] ([prior])
 [Three-month label] monthly avg. TSS: [current] ([prior])
 CTL peak: [current] ([prior])
 CTL end: [current] ([prior])
-Z1+Z2 ([sport], [current basis]; prior [basis]): [current] ([prior])
-Z3 ([sport], [current basis]; prior [basis]): [current] ([prior])
-Z4+ ([sport], [current basis]; prior [basis]): [current] ([prior])
+Zones ([sport], [basis/mapping], [current coverage; prior coverage]): [current Z1+Z2/Z3/Z4+] ([prior Z1+Z2/Z3/Z4+ or unavailable])
 Hard days: [month avg. per week] ([prior])
 Longest ride: [current] ([prior])
 HRV: [month avg.] ([prior])
@@ -72,16 +70,18 @@ RHR: [month avg.] ([prior])
 
 ## Sources and gates
 
+Repeat intensity lines for every selected sport and actual basis/mapping, with covered/period weeks and covered/sport sessions. Weeks mean rolling chunks in current reports and configured weeks in Season/months; a covered week is not necessarily fully measured. Decode the file-level report_intensity_schema (2). Display keys of selected; sports[sport] supplies totals, active-week and zone columns, while zones[mapping] supplies three raw seconds and session/week counts. Show active-week counts and partial coverage without inferring exact covered dates. Resolve explicit rolling refs using the consuming chunk's dates, and monthly blocks by first occurrence in monthly_1y, monthly_2y, monthly_3y. Distinct mappings of the same basis stay separately labelled. Selected sports without zones get a short zones-unavailable line; pace/GAP is deferred. Missing report_intensity blocks mean unavailable; a present empty block is authoritative. Never use legacy primary/all-sport fields as fallback. Use ready-block tid[sport][mapping] percentages; for compact rows divide each bucket's raw seconds by their sum, never average percentages. Keep observed coverage and unknown activity-fetch completeness explicit.
+
 - Read latest.json and history.json separately. All Season numbers/facts share the completed-week scope and history freshness. Current phase, CTL and TID explicitly refer to latest. No completed weeks means no fabricated Season view.
 - Position uses derived_metrics.seasonal_context and phase_detection.{phase,previous_phase,phase_duration_weeks}. Phases use completed weekly phase_detected values, coalescing consecutive equal phases inside each cycle. Each cycle ends at a Deload (include consecutive Deload weeks in that ending); show an unfinished final cycle through its actual end. Every null-phase week gets its own dated line and breaks the cycle. Never bridge gaps or rename a supplied phase to Deload. Example: `26 Apr-30 May: Build 4 weeks, Deload 1`.
 - Volume sums total_hours/total_tss over the same N rows and labels weekly averages. Longest ride uses longest_ride_hours, longest week total_hours. Preserve missing observation coverage.
 - CTL peak is a known completed ctl_end and its week; CTL now is current_status.fitness.ctl with snapshot date.
 - ACWR uses supplied coupled weekly 7:28 ratios, never ATL/CTL or a new calculation. Bins are <0.8, 0.8<=x<=1.3, 1.3<x<=1.5, x>1.5. Unknown ratios are not low-load weeks. Omit zero bins; if both above-1.3 bins are zero and at least one ratio is known, replace them with `ACWR above 1.3: none`. Always show `ACWR known: K of N weeks`; unknown initial weeks stay unknown.
-- Zones use completed-week seiler_tid_primary blocks matching current derived_metrics.primary_sport. Sum their z1_seconds/z2_seconds/z3_seconds, divide by the sum, and render Z1+Z2/Z3/Z4+ with sport and zone_basis (mixed when contributing bases differ). Never weight by all-sport total_hours or use legacy all-sports percentages. State contributing N weeks. Missing or sport-mismatched history makes the affected view unavailable until normal refresh; do not mix sports. TID 28d (now) uses derived_metrics.seiler_tid_28d_primary with its sport/basis, not a new Season classification. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+- Zones use history.json.report_intensity_season, whose start/end and weeks must match weekly_180d[:-1]. Consume the producer's selected map, tid percentages and sports coverage columns. They sum all that sport's observed zone seconds, including nonqualifying weeks; no current-primary filter, mixed basis or new Season classifier. TID 28d (now) uses latest derived_metrics.report_intensity_28d, independently selected and separately dated. Missing new history is unavailable until ordinary refresh. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
 - Hard days use completed-week hard_days. Split the chronological rows into first floor(N/2) and remaining rows; label each half with its actual dates and avg. Omit empty halves; missing days are not zero. Weeks with a hard day counts rows with hard_days>=1.
 - Year comparison anchor is the last fully completed calendar month before metadata.last_updated. Match month keys across monthly_1y/monthly_2y/monthly_3y, never positions. Current values followed by prior values in brackets, one metric per line, no difference or percentage-change lines. A three-month monthly avg requires all three matched months per side and its date label (e.g. Jul-Sep monthly avg.). No invented prior-year phase claims. If no matched month, omit the block and mention the limitation once.
 - Additional 2y/3y rows need material context: hours/TSS >=15%, CTL >=3 points or zone share >=5 percentage points. These are selection gates, not extra difference/% display lines. A missing/zero prior denominator does not create a percentage.
-- Year-comparison intensity uses each matched month's seiler_tid_primary percentages only when both sports match current primary_sport. Label the common sport and each side's basis. Missing new fields are unavailable, never legacy all-sports fallback. Weekly load-winner primary_sport metadata does not select Season intensity; multi-main-sport support is deferred.
+- Year-comparison intensity uses each matched month's report_intensity, selecting each side independently and showing the union of qualifying sports. Pair only identical sport, actual basis and mapping_version under compatible file-level rule_version/selection_config, with coverage read from both ready blocks. An absent sport/block or incompatible mapping is unavailable, never zero or a cross-sport match. Preserve a supported zero zone share. Resolve the first report_intensity block for that month in monthly_1y, monthly_2y, monthly_3y; overlapping later rows omit it. An unresolved month is unavailable; never sum tiers. Weekly legacy primary_sport does not select Season intensity.
 - Notable includes only non-empty in-window ftp_timeline, data_gaps, completed A-races, supplied next A-race and a supported deviation pattern. Omit "none" placeholders. Goal auditing stays deferred.
 - Fun facts source: history.json.fun_facts.season. Require start/end/completed_weeks to agree with the chosen weeks; keep partial/stale power coverage. Most work in a week is a completed configured calendar week. Peaks belong here; there is no Best efforts block in Season.
 
