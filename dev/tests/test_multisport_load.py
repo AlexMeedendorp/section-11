@@ -86,7 +86,7 @@ class MainSportLoad(unittest.TestCase):
         self.assertEqual(result["sports"], ["cycling"])
         self.assertEqual([r["tss"] for r in result["weeks"]], [700, 700, 700, 600])
         report = self.sync._report_intensity(acts, "2026-10-17", "2026-10-23")
-        self.assertTrue({"walking", "hiking", "e_cycling"} <= set(report["selected_sports"]))
+        self.assertTrue({"walking", "hiking", "e_cycling"}.isdisjoint(report["selected_sports"]))
 
     def test_weekend_union_retains_small_ski_block_in_every_week(self):
         acts = block(current=25)
@@ -94,14 +94,14 @@ class MainSportLoad(unittest.TestCase):
             if act["id"] in ("w0d4", "w0d5"):
                 act.update(type="NordicSki", icu_training_load=50, moving_time=60)
         result = self.basis(acts)
-        self.assertNotIn("skiing", result["selections"][0]["sports"])
-        self.assertIn("skiing", result["sports"])
+        self.assertNotIn("nordic_skiing", result["selections"][0]["sports"])
+        self.assertIn("nordic_skiing", result["sports"])
         self.assertEqual(result["weeks"][-1]["tss"], 200)
         # Equal-load replacement cannot create a drop by changing modality.
         holiday = self.basis(block(sport="VirtualSki"))
         aligned = holiday["load_evidence"]["day_aligned"]
         self.assertEqual((aligned["completed_tss"], aligned["reference_tss_mean"], aligned["tss_delta"]), (600, 600, 1))
-        self.assertEqual(holiday["sports"], ["cycling", "skiing"])
+        self.assertEqual(holiday["sports"], ["cycling", "nordic_skiing"])
 
     def test_selection_partial_invalid_time_selected_load_and_no_fallback(self):
         for bad in (None, True, -1, float("nan"), float("inf"), "12"):
@@ -213,10 +213,10 @@ class MainSportLoad(unittest.TestCase):
         acts[0]["icu_training_load"] = None
         rich = self.basis(acts)
         compact = self.sync._pack_phase_load(rich)
-        self.assertEqual(compact["sports"], ["cycling", "skiing"])
+        self.assertEqual(compact["sports"], ["cycling", "nordic_skiing"])
         self.assertEqual(compact["observation_cutoff"], "2026-10-23")
         self.assertEqual(compact["weeks"][-1], ["2026-10-18", 500.0, 1, None, "partial"])
-        self.assertEqual(compact["selections"][-1], [["skiing"], "complete"])
+        self.assertEqual(compact["selections"][-1], [["nordic_skiing"], "complete"])
         self.assertEqual(compact["status"], "partial")
         self.assertEqual(self.sync._phase_load_schema()["week"], "week_start,known_tss,missing_tss,tss,status")
         self.assertFalse(any("name" in key for key in compact))

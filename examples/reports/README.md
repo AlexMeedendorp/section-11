@@ -14,7 +14,7 @@ Every period intensity line uses its own report_intensity block decoded with rep
 **Pre-Workout Reports must include:**
 - Readiness assessment (HRV, RHR, Sleep vs baselines)
 - Load context (TSB, ACWR, Load/Recovery, Monotony if elevated)
-- Capability snapshot (Durability 7d mean + trend; TID drift if not consistent)
+- Capability snapshot (Durability (cycling) 7d mean + trend; TID drift if not consistent)
 - One Today block per planned session in calendar order (or rest day + next session preview)
 - Go/Modify/Skip recommendation with rationale
 
@@ -78,7 +78,7 @@ Generated **before** a planned session. Includes:
 - Bold Pre-workout date and zone-labelled Data updated header
 - Current readiness (HRV, RHR, Sleep vs baselines)
 - Load context (TSB, ACWR, Load/Recovery, Monotony if > 2.3)
-- Capability snapshot (Durability 7d mean + trend; TID drift if not consistent)
+- Capability snapshot (Durability (cycling) 7d mean + trend; TID drift if not consistent)
 - Four blank-separated status groups without subgroup headings; preserve all template fields and conditionals
 - A Today block per session with available type, route facts, duration, TSS and condensed main set; omit an absent structure rather than printing a no-structure line
 - Weather directly under outdoor rides and runs only, with labelled home location/source when no route is supplied
@@ -90,7 +90,7 @@ Generated **after** a completed session. Includes:
 - Key metrics (power, HR, decoupling, VI, carbs)
 - Zone distribution (Grey Zone and Quality tracking)
 - Load impact (updated CTL, ATL, TSB, weekly totals)
-- Capability update (Durability 7d/28d + trend, TID 28d + drift in weekly totals)
+- Capability update (Durability (cycling) 7d/28d + trend, TID 28d + drift in weekly totals)
 - Coaching interpretation
 - Descriptive W/kg, work, available exact power peaks, elapsed time and sport-aware pace from sync 3.147; peaks never establish FTP, zones or readiness
 

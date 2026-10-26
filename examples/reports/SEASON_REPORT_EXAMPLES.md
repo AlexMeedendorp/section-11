@@ -28,7 +28,7 @@ Previous phase: Deload
 **Volume (8 completed weeks)**
 Hours: 40h (avg. 5 h/week over 8 completed weeks)
 TSS: 1880 (avg. 235/week over 8 completed weeks)
-Longest ride: 2.75h, week of 28 Jun
+Longest ride: 2.75h, 28 Jun
 Longest week: 6.5h, week of 21 Jun
 
 **Fitness**
@@ -137,15 +137,15 @@ In 24 completed weeks, cycling contributes 92% TSS/88% time with twenty 4.4-hour
 
 ```
 Zones (cycling, power, 20/24 weeks; 60/60 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3%
-Zones (skiing, HR, 4/24 weeks; 12/12 sessions): Z1+Z2 85%, Z3 10%, Z4+ 5%
-Skiing coverage: 4 active weeks; observed sessions only
+Zones (Nordic skiing, HR, 4/24 weeks; 12/12 sessions): Z1+Z2 85%, Z3 10%, Z4+ 5%
+Nordic skiing coverage: 4 active weeks; observed sessions only
 ```
 
-A separate matched-month example has only cycling this year and only skiing last year. Show the independently selected union without pairing unlike sports:
+A separate matched-month example has only cycling this year and only Nordic skiing last year. Show the independently selected union without pairing unlike sports:
 
 ```
 Zones (cycling, power, 4 covered weeks; 8/8 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3% (prior unavailable)
-Zones (skiing, HR): unavailable (prior Z1+Z2 85%, Z3 10%, Z4+ 5%; 4 covered weeks, 8/8 sessions)
+Zones (Nordic skiing, HR): unavailable (prior Z1+Z2 85%, Z3 10%, Z4+ 5%; 4 covered weeks, 8/8 sessions)
 ```
 
 Missing sport evidence is not zero. With different mapping versions, show separate labelled observations and mark the comparison unavailable. Never add overlapping monthly tiers or classify Season from these distributions.

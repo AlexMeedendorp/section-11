@@ -179,7 +179,7 @@ class CalendarSpans(unittest.TestCase):
         self.assertEqual(anchor["source"], "observed_unknown")
         self.assertIsNone(anchor["coggan_watts"])
         self.assertEqual([p for endpoint, p in calls if endpoint == "activities"],
-                         [{"oldest": "2026-09-25", "newest": "2026-11-05"}])
+                         [{"oldest": "2026-09-11", "newest": "2026-11-05"}])
         old["trainer"] = True
         uniform, uniform_calls = self.collect(activities=[old, recent], curves=curve)
         anchor = uniform["derived_metrics"]["capability"]["sustainability_profile"]["cycling"]["anchors"]["300s"]

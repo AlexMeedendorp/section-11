@@ -261,7 +261,7 @@ TSS: 10 (planned 10)
 Phase: Build Wk2
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 2.14% 7d mean(3) / 2.50% 28d mean(11) (stable)
+Durability (cycling): 2.14% 7d mean(3) / 2.50% 28d mean(11) (stable)
 EF: 1.45 7d mean(4) / 1.42 28d mean(14) (stable)
 HRRc: 36 bpm 28d mean(5); 7d: no data
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
@@ -374,7 +374,7 @@ TSS: 5
 Phase: Base Wk3
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 3.20% 7d mean(3) / 2.75% 28d mean(12) (stable)
+Durability (cycling): 3.20% 7d mean(3) / 2.75% 28d mean(12) (stable)
 EF: 1.38 7d mean(4) / 1.42 28d mean(15) (stable)
 HRRc: 32 bpm 7d mean(2) / 31 bpm 28d mean(8) (stable)
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
@@ -445,7 +445,7 @@ Effort response: negative
 Phase: Build Wk3
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 2.95% 7d mean(3) / 2.50% 28d mean(11) (stable)
+Durability (cycling): 2.95% 7d mean(3) / 2.50% 28d mean(11) (stable)
 EF: 1.46 7d mean(4) / 1.43 28d mean(14) (stable)
 HRRc: 34 bpm 7d mean(1) / 36 bpm 28d mean(5) (stable)
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
@@ -511,7 +511,7 @@ Reason: Precautionary (knee discomfort from ride)
 Phase: Base Wk4
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 1.92% 7d mean(2) / 2.40% 28d mean(10) (improving)
+Durability (cycling): 1.92% 7d mean(2) / 2.40% 28d mean(10) (improving)
 EF: 1.41 7d mean(3) / 1.42 28d mean(12) (stable)
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
@@ -557,7 +557,7 @@ TSS: 6
 Phase: Base Wk2
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 2.30% 7d mean(3) / 2.55% 28d mean(11) (stable)
+Durability (cycling): 2.30% 7d mean(3) / 2.55% 28d mean(11) (stable)
 EF: 1.44 7d mean(4) / 1.43 28d mean(13) (stable)
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
@@ -626,7 +626,7 @@ Effort response: negative
 Phase: Base Wk4
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 4.50% 7d mean(3) / 3.20% 28d mean(13) (declining)
+Durability (cycling): 4.50% 7d mean(3) / 3.20% 28d mean(13) (declining)
 EF: 1.36 7d mean(4) / 1.41 28d mean(15) (declining)
 HRRc: 30 bpm 7d mean(2) / 33 bpm 28d mean(9) (declining)
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
@@ -704,7 +704,7 @@ Effort response: neutral
 Phase: Build Wk2
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 2.80% 7d mean(2) / 2.95% 28d mean(12) (stable)
+Durability (cycling): 2.80% 7d mean(2) / 2.95% 28d mean(12) (stable)
 EF: 1.48 7d mean(3) / 1.45 28d mean(14) (improving)
 HRRc: 33 bpm 7d mean(2) / 32 bpm 28d mean(8) (stable)
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
@@ -779,7 +779,7 @@ Effort response: positive
 Phase: Build Wk1
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
-Durability: 2.30% 7d mean(2) / 2.65% 28d mean(11) (improving)
+Durability (cycling): 2.30% 7d mean(2) / 2.65% 28d mean(11) (improving)
 EF: 1.58 7d mean(3) / 1.50 28d mean(13) (improving)
 HRRc: 38 bpm 7d mean(2) / 34 bpm 28d mean(9) (improving)
 TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent

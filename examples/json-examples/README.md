@@ -39,7 +39,7 @@ The following abbreviated synthetic fragment shows the shared schema and one sel
 {
   "report_intensity_schema": {
     "schema_version": 2,
-    "rule_version": "endurance_10_50_week_guard_v1",
+    "rule_version": "endurance_10_50_week_guard_v2",
     "selection_config": {"main_sports": [], "zone_preference": {}},
     "week_start_day": 0,
     "mappings": {"p7": "power/power_7to3_v1", "h5": "hr/hr_5to3_v1", "h7": "hr/hr_7to3_v1"},
@@ -60,7 +60,7 @@ In a sport's optional sixth array entry, `{"missing":[1,1],"indeterminate":true}
 
 A rolling `report_intensity: {"ref":"derived_metrics.report_intensity_7d"}` reuses identical independently computed values, not dates: use the consuming chunk's start/end. Missing targets are unavailable. Monthly blocks are stored only on the first occurrence of each month when searching monthly_1y, monthly_2y, monthly_3y. Later copies of that month omit report_intensity; resolve the matching month from the ordered union, never from another month or by summing tiers. This also works when monthly_1y is absent: search the remaining tiers. An unresolved month is unavailable.
 
-Read current comparison coverage from the two ready blocks; the comparison stores only sport/mapping, status and drift/PI delta. Recognised SS power overlays are validated and skipped, never added to numbered zone seconds. Source types, environments and exact covered ranges are not repeated in period summaries; activity zone_reference remains unchanged.
+Read current comparison coverage from the two ready blocks; the comparison records its rule and stores sport/mapping, status and drift/PI delta. Recognised SS power overlays are validated and skipped, never added to numbered zone seconds. Source types, environments and exact covered ranges are not repeated in period summaries; activity zone_reference remains unchanged.
 
 The historical JSON files keep their original headers and omit these additive report blocks: updated consumers must show unavailable intensity for them. These fragments are synthetic schema evidence, never athlete data. Pace-only sports still contribute to selection totals but have an empty zone map. An empty selected map is authoritative. Empty data is never permission to infer zeros or a legacy fallback.
 
@@ -165,7 +165,7 @@ The core examples originated with sync.py v3.86 / Section 11 v11.17; the excepti
 - `zone_basis` on all TID/Seiler blocks
 - `feel_count`, `avg_rpe`, `rpe_count` in weekly history rows
 - `primary_sport`, `primary_sport_tss`, `sport_tss_breakdown` on weekly history rows
-- `derived_metrics.monotony_main_sports` and `weekly_180d[].monotony_main_sports`: combined eligible selected-sport load, value and availability. Legacy primary/all-sport monotony fields retain their meanings
+- `derived_metrics.monotony_main_sports` and `weekly_180d[].monotony_main_sports`: combined eligible selected-sport load, value and availability. strain_main_sports uses that exact seven-day TSS and monotony for the reporting alarm. Legacy primary/all-sport monotony and strain retain their meanings
 - `phase_detection.basis.decision_load_source: main_sport_load` and `main_sport_load`: one fixed sport set for every compared week, matched span and prospective load numerator. Legacy stream evidence remains compatibility data
 - `weekly_180d[].phase_load_basis` and file-level `phase_load_schema`: target-local selection/load provenance; settings resolve through report_intensity_schema.selection_config. Unmarked legacy labels cannot supply new-rule transitions
 - `hard_days_coverage` beside the current-week hard-day count, on live/history weekly rows and rolling chunks: activity days, days without power/HR zones and coverage status. Unknown coverage displays unknown rather than a bare zero; counts/ladders are unchanged

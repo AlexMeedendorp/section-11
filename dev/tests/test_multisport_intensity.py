@@ -46,10 +46,10 @@ class MultisportIntensity(unittest.TestCase):
         cases = [
             ([("Ride", 93.8, 80), ("Walk", 3.9, 16.6), ("VirtualSki", 2.3, 3.4)], ["cycling"]),
             ([("Ride", 60, 50), ("Run", 28, 30), ("Swim", 12, 20)], ["cycling", "running", "swimming"]),
-            ([("Ride", 75, 60), ("NordicSki", 25, 40)], ["cycling", "skiing"]),
-            ([("Ride", 88, 7), ("Hike", 12, 35)], ["cycling", "hiking"]),
+            ([("Ride", 75, 60), ("NordicSki", 25, 40)], ["cycling", "nordic_skiing"]),
+            ([("Ride", 88, 7), ("Hike", 12, 35)], ["cycling"]),
             ([("Run", 88, 75), ("Ride", 12, 25)], ["cycling", "running"]),
-            ([("Ride", 92, 1), ("Walk", 8, 2)], ["cycling", "walking"]),
+            ([("Ride", 92, 1), ("Walk", 8, 2)], ["cycling"]),
             ([("WeightTraining", 900, 8), ("Run", 80, 1.5), ("Ride", 20, .5)], ["cycling", "running"]),
             ([("Ride", 92, 55), ("Walk", 8, 45)], ["cycling"]),
             ([("Ride", 62, 50), ("Run", 30, 30), ("Swim", 8, 20)], ["cycling", "running"]),
@@ -64,24 +64,22 @@ class MultisportIntensity(unittest.TestCase):
         types = list(self.sync.REPORT_SPORTS) + ["WeightTraining", "Yoga", "Workout", "Other", "Unknown", "ride"]
         acts = [activity(str(i), t, name="Main sport cycling", tss=10) for i, t in enumerate(types)]
         result = self.block(acts)
-        self.assertEqual(result["denominator"]["sessions"], len(self.sync.REPORT_SPORTS))
-        self.assertEqual(set(result["sports"]), set(self.sync.REPORT_SPORTS.values()))
-        self.assertEqual(result["sports"]["skiing"]["sessions"], 2)
-        self.assertEqual(result["sports"]["walking"]["sessions"], 1)
-        self.assertEqual(result["sports"]["hiking"]["sessions"], 1)
-        self.assertEqual(result["sports"]["e_cycling"]["sessions"], 1)
+        self.assertEqual(result["denominator"]["sessions"], 26)
+        self.assertEqual(set(result["sports"]), self.sync.LOAD_SPORTS)
+        self.assertEqual(result["sports"]["nordic_skiing"]["sessions"], 4)
+        self.assertTrue({"walking", "hiking", "e_cycling"}.isdisjoint(result["sports"]))
         self.assertEqual(self.sync.SPORT_FAMILIES["EBikeRide"], "cycling")
         self.assertEqual(self.sync.SPORT_FAMILIES["Hike"], "walk")
 
     def test_inclusive_unrounded_thresholds_and_all_reasons(self):
         for share, expected in ((9.9999, False), (10, True), (10.0001, True)):
             b = self.block([activity("b", tss=100-share, moving_time=9000),
-                            activity("w", "Walk", tss=share, moving_time=1000)])
-            self.assertEqual(b["sports"]["walking"]["selected"], expected)
+                            activity("w", "Run", tss=share, moving_time=1000)])
+            self.assertEqual(b["sports"]["running"]["selected"], expected)
         for share, expected in ((49.9999, False), (50, True), (50.0001, True)):
             b = self.block([activity("b", tss=99, moving_time=100-share),
-                            activity("w", "Walk", tss=1, moving_time=share)])
-            self.assertEqual(b["sports"]["walking"]["selected"], expected)
+                            activity("w", "Run", tss=1, moving_time=share)])
+            self.assertEqual(b["sports"]["running"]["selected"], expected)
         self.sync.report_main_sports = ["cycling"]
         b = self.block([activity("b")])
         self.assertEqual(b["sports"]["cycling"]["selection_reasons"],
@@ -113,8 +111,8 @@ class MultisportIntensity(unittest.TestCase):
     def test_invalid_values_disable_only_their_routes(self):
         for bad in (None, True, "12", -1, float("nan"), float("inf")):
             b = self.block([activity("b", tss=80, moving_time=bad),
-                            activity("w", "Walk", tss=20)])
-            self.assertEqual(b["selected_sports"], ["cycling", "walking"])
+                            activity("w", "Run", tss=20)])
+            self.assertEqual(b["selected_sports"], ["cycling", "running"])
             self.assertIsNone(b["denominator"]["moving_seconds"])
             b = self.block([activity("b", tss=bad), activity("r", "Run", tss=20, moving_time=1)])
             self.assertEqual(b["selected_sports"], ["cycling"])
@@ -163,12 +161,12 @@ class MultisportIntensity(unittest.TestCase):
                 tss=92/20 if i < 20 else 8/4, moving_time=(4.4 if i < 20 else 3)*3600))
         end = (start + timedelta(days=24*7-1)).strftime("%Y-%m-%d")
         b = self.block(acts, start.strftime("%Y-%m-%d"), end, weekly_rescue=True)
-        self.assertEqual(b["selected_sports"], ["cycling", "skiing"])
-        self.assertEqual(b["sports"]["skiing"]["selection_reasons"], ["guarded_week_winner"])
+        self.assertEqual(b["selected_sports"], ["cycling", "nordic_skiing"])
+        self.assertEqual(b["sports"]["nordic_skiing"]["selection_reasons"], ["guarded_week_winner"])
         self.assertEqual(b["weekly_guard"]["minimum_winner_seconds"], 2.2*3600)
         quiet = [activity(str(i), date=(start+timedelta(days=7*i)).strftime("%Y-%m-%d"),
                           tss=100, moving_time=8*3600) for i in range(24)]
-        quiet.append(activity("quiet", "Walk", date=(start+timedelta(days=24*7)).strftime("%Y-%m-%d"),
+        quiet.append(activity("quiet", "Run", date=(start+timedelta(days=24*7)).strftime("%Y-%m-%d"),
                               tss=1, moving_time=1800))
         b = self.block(quiet, start.strftime("%Y-%m-%d"), "2026-06-14", weekly_rescue=True)
         self.assertEqual(b["selected_sports"], ["cycling"])
@@ -178,9 +176,9 @@ class MultisportIntensity(unittest.TestCase):
         acts = [activity("b", date="2026-06-01", tss=1000, moving_time=1000),
                 activity("b2", date="2026-05-25", tss=1000, moving_time=1000)]
         for seconds, expected in ((499.99, False), (500, True)):
-            b = self.block(acts + [activity("w", "Walk", date="2026-06-08", tss=1, moving_time=seconds)],
+            b = self.block(acts + [activity("w", "Run", date="2026-06-08", tss=1, moving_time=seconds)],
                            "2026-05-25", "2026-06-14", weekly_rescue=True)
-            self.assertEqual(b["sports"]["walking"]["selected"], expected)
+            self.assertEqual(b["sports"]["running"]["selected"], expected)
         b = self.block(acts[:1], "2026-05-25", "2026-06-14", weekly_rescue=True)
         self.assertIsNone(b["weekly_guard"]["median_moving_seconds"])
         acts[1]["moving_time"] = None
@@ -191,14 +189,14 @@ class MultisportIntensity(unittest.TestCase):
         self.sync.week_start_day = 6
         acts = [activity("b1", date="2026-05-04", tss=1000, moving_time=3600),
                 activity("b2", date="2026-05-11", tss=1000, moving_time=3600),
-                activity("edge", "Hike", date="2026-05-01", tss=1, moving_time=2000)]
+                activity("edge", "AlpineSki", date="2026-05-01", tss=1, moving_time=2000)]
         b = self.block(acts, "2026-05-01", "2026-05-31", weekly_rescue=True)
         self.assertEqual(b["selected_sports"], ["cycling"])
         self.assertFalse(b["weeks"][0]["winner_eligible"])
         self.assertFalse(b["weeks"][-1]["winner_eligible"])
         self.assertEqual(b["weeks"][1]["start"], "2026-05-03")
         acts[-1]["start_date_local"] = "2026-05-18T10:00:00"
-        self.assertIn("hiking", self.block(acts, "2026-05-01", "2026-05-31", weekly_rescue=True)["selected_sports"])
+        self.assertIn("alpine_skiing", self.block(acts, "2026-05-01", "2026-05-31", weekly_rescue=True)["selected_sports"])
 
     def test_rolling_chunk_edges_and_ski_holiday_share_one_sport(self):
         acts = [activity("b", date="2026-05-20", tss=900, moving_time=7200),
@@ -206,10 +204,10 @@ class MultisportIntensity(unittest.TestCase):
                 activity("ski", "NordicSki", date="2026-06-08", tss=30, moving_time=4000),
                 activity("erg", "VirtualSki", date="2026-06-09", tss=2, moving_time=600)]
         b = self.block(acts, "2026-05-19", D, week_mode="rolling", weekly_rescue=True)
-        self.assertEqual(b["selected_sports"], ["cycling", "skiing"])
-        self.assertEqual(b["sports"]["skiing"]["sessions"], 2)
-        self.assertEqual(b["sports"]["skiing"]["active_weeks"], [2, 3])
-        self.assertEqual(len(b["sports"]["skiing"]["by_basis"]), 1)
+        self.assertEqual(b["selected_sports"], ["cycling", "nordic_skiing"])
+        self.assertEqual(b["sports"]["nordic_skiing"]["sessions"], 2)
+        self.assertEqual(b["sports"]["nordic_skiing"]["active_weeks"], [2, 3])
+        self.assertEqual(len(b["sports"]["nordic_skiing"]["by_basis"]), 1)
         self.assertEqual(b["weeks"][2]["end"], "2026-06-08")
         self.assertEqual(b["weeks"][3]["start"], "2026-06-09")
 
@@ -230,7 +228,7 @@ class MultisportIntensity(unittest.TestCase):
         after = self.sync._build_monthly_tier(by_date(acts), {}, days=60)
         may_before = next(m for m in before if m["month"] == "2026-05")
         may_after = next(m for m in after if m["month"] == "2026-05")
-        self.assertEqual(list(may_before["report_intensity"]["selected"]), ["skiing"])
+        self.assertEqual(list(may_before["report_intensity"]["selected"]), ["nordic_skiing"])
         self.assertEqual(may_before["report_intensity"], may_after["report_intensity"])
         self.assertNotEqual(may_before["seiler_tid_primary"], may_after["seiler_tid_primary"])
 

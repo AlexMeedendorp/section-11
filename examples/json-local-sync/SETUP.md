@@ -475,7 +475,7 @@ tail -f ~/training-data/sync.log
 - `route_weather_default_start`: local HH:MM, default `"10:00"`, used only for date-only/exact-midnight workouts. `SECTION11_ROUTE_WEATHER_DEFAULT_START` in the timer environment overrides it. The AI labels ASSUMED and asks for the actual time. See [departure handling](../../README.md#route-weather-departure), including genuine midnight rides and confirmed push.py time updates.
 - `week_start`: training week start day (`mon`–`sun`, default: `mon`)
 - `zone_preference`: per-sport zone override for aggregations, e.g. `"run:hr,cycling:power"`. Only override what you need; unspecified sports default to power-preferred with HR fallback.
-- `report_main_sports`: optional comma-separated report IDs, e.g. `"cycling,swimming"`. Absent by default; only sports present in the period can be retained. The sync process environment `REPORT_MAIN_SPORTS` is the fallback. This affects report selection only. See the protocol for exact IDs and recorded historical settings.
+- `report_main_sports`: optional comma-separated report IDs, e.g. `"cycling,swimming"`. Absent by default; only sports present in the period can be retained. The sync process environment `REPORT_MAIN_SPORTS` is the fallback. This affects report selection, main-sport load and per-sport curves; skiing is accepted as an alias for nordic_skiing, while everyday overrides never select a main sport. See the protocol for exact IDs and recorded historical settings.
 
 **Permissions**: the timer runs as your user. Ensure the output directory is writable.
 

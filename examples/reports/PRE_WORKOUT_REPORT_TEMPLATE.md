@@ -27,7 +27,7 @@ ACWR: [X.XX] ([assessment]); start-of-day
 Recovery Index: [X.XX] ([assessment])
 Ramp Rate: [X.XX]
 Load/Recovery: [X.X] (tolerance [X.X]); [context note if near edge]
-Durability: [X.XX]% 7d mean([X]) ([trend])
+Durability (cycling): [X.XX]% 7d mean([X]) ([trend])
 EF: [X.XX] 7d mean([X]) ([trend])
 Monotony ([supplied main sports]): [supplied combined value]; [material context]
 Hard days this week: [count with missing-zone-day coverage, or unknown]
@@ -118,7 +118,7 @@ The attribution is one line, last in the report text, with linked provider/licen
 
 ## Conditional Fields
 
-Repeat intensity lines for every selected sport and actual basis/mapping, with covered/period weeks and covered/sport sessions. Weeks mean rolling chunks in current reports and configured weeks in Season/months; a covered week is not necessarily fully measured. Decode the file-level report_intensity_schema (2). Display keys of selected; sports[sport] supplies totals, active-week and zone columns, while zones[mapping] supplies three raw seconds and session/week counts. Show active-week counts and partial coverage without inferring exact covered dates. Resolve explicit rolling refs using the consuming chunk's dates, and monthly blocks by first occurrence in monthly_1y, monthly_2y, monthly_3y. Distinct mappings of the same basis stay separately labelled. Selected sports without zones get a short zones-unavailable line; pace/GAP is deferred. Missing report_intensity blocks mean unavailable; a present empty block is authoritative. Never use legacy primary/all-sport fields as fallback. Use ready-block tid[sport][mapping] percentages; for compact rows divide each bucket's raw seconds by their sum, never average percentages. Keep observed coverage and unknown activity-fetch completeness explicit.
+Repeat intensity lines for every selected sport and actual basis/mapping, with covered/period weeks and covered/sport sessions. Weeks mean rolling chunks in current reports and configured weeks in Season/months; a covered week is not necessarily fully measured. Decode the file-level report_intensity_schema (2); require matching rule_version in each block, otherwise unavailable. Display keys of selected; sports[sport] supplies totals, active-week and zone columns, while zones[mapping] supplies three raw seconds and session/week counts. Show active-week counts and partial coverage without inferring exact covered dates. Resolve explicit rolling refs using the consuming chunk's dates, and monthly blocks by first occurrence in monthly_1y, monthly_2y, monthly_3y. Distinct mappings of the same basis stay separately labelled. Selected sports without zones get a short zones-unavailable line; pace/GAP is deferred. Missing report_intensity blocks mean unavailable; a present empty block is authoritative. Never use legacy primary/all-sport fields as fallback. Use ready-block tid[sport][mapping] percentages; for compact rows divide each bucket's raw seconds by their sum, never average percentages. Keep observed coverage and unknown activity-fetch completeness explicit.
 
 | Field | Rule |
 |-------|------|
@@ -127,7 +127,7 @@ Repeat intensity lines for every selected sport and actual basis/mapping, with c
 | Prepare (weather) | Include only if actionable (e.g., dress warm, indoor day). When forecast triggers heat stress Tier 1+: Tier 1: note hydration emphasis. Tier 2: specify session modification per Environmental Conditions Protocol session-type rules (e.g., "Threshold intervals planned: keep power targets, consider reducing from 4×8min to 3×8min"). Tier 3: recommend reschedule or endurance-only. See **Environmental Conditions Protocol** in SECTION_11.md for tier definitions and session-type rules. |
 | Monotony | Use derived_metrics.monotony_main_sports and its supplied sports/interpretation/context. Include the value **only** if > 2.3; omit when normal. If materially unavailable, give a short reason without substituting legacy total or primary values |
 | Hard days | Use derived_metrics.hard_days_this_week with hard_days_coverage for the configured current week. Partial coverage: e.g. "Hard days: 2 (1 day without zone data)". Unknown or missing coverage: say unknown, never a bare 0. no_activities means no observed activities, not proven rest. Do not reclassify days |
-| Durability | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
+| Durability (cycling) | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
 | EF | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
 | TID 28d + drift | Use derived_metrics.report_intensity_28d and capability.report_intensity_comparison, matched by sport/basis/mapping with coverage read from both ready blocks. Include only supported observed-session shifting/acute_depolarization; omit for consistent, partial or unavailable evidence. Retain unknown-fetch limits |
 | Polarization | Use derived_metrics.report_intensity_7d.selected and tid[sport][mapping] percentages as Z1+Z2 / Z3 / Z4+. Label sport, actual basis/mapping and weeks/sessions coverage. See [Report intensity source](../../SECTION_11.md#report-intensity-source) |

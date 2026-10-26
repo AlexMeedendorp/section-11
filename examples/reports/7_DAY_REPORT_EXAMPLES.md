@@ -42,7 +42,7 @@ Zones (cycling, power, 1/1 rolling week; 3/3 sessions): Z1+Z2 91%, Z3 6%, Z4+ 3%
 TID 7d (cycling, power, 3/3 sessions): Pyramidal
 TID 28d (cycling, power, 4/4 rolling weeks; 14/14 sessions): Pyramidal
 
-Durability: 7-day avg 3.1% (N=2), 28-day avg 3.3% (N=8)
+Durability (cycling): 7-day avg 3.1% (N=2), 28-day avg 3.3% (N=8)
 EF: 7-day avg 1.30 (N=3), 28-day avg 1.28 (N=10)
 HRRc: 7-day avg 31 bpm (N=1), 28-day avg 32 bpm (N=4)
 

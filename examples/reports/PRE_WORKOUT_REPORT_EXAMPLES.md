@@ -71,7 +71,7 @@ ACWR: 0.84 (optimal); start-of-day
 Recovery Index: 0.93 (good)
 Ramp Rate: -1.30
 Load/Recovery: 5.8
-Durability: 2.14% 7d mean(4) (stable)
+Durability (cycling): 2.14% 7d mean(4) (stable)
 EF: 1.44 7d mean(4) (stable)
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
@@ -110,7 +110,7 @@ ACWR: 1.04 (optimal); start-of-day
 Recovery Index: 0.88 (good)
 Ramp Rate: 0.45
 Load/Recovery: 6.0
-Durability: 1.85% 7d mean(3) (stable)
+Durability (cycling): 1.85% 7d mean(3) (stable)
 EF: 1.45 7d mean(3) (stable)
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
@@ -169,7 +169,7 @@ ACWR: 0.99 (optimal); start-of-day
 Recovery Index: 0.91 (good)
 Ramp Rate: 0.30
 Load/Recovery: 5.9
-Durability: 2.40% 7d mean(3) (improving)
+Durability (cycling): 2.40% 7d mean(3) (improving)
 EF: 1.47 7d mean(3) (improving)
 
 Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
@@ -210,7 +210,7 @@ ACWR: 1.17 (optimal); start-of-day
 Recovery Index: 0.68 (moderate)
 Ramp Rate: 1.10
 Load/Recovery: 7.1 (tolerance 6.4): over threshold; back off today.
-Durability: 5.80% 7d mean(3) (declining) ⚠️
+Durability (cycling): 5.80% 7d mean(3) (declining) ⚠️
 EF: 1.38 7d mean(3) (declining) ⚠️
 Monotony: 2.5: elevated, add variety this week
 

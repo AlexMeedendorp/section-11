@@ -260,13 +260,13 @@ After configuration, test with:
 **Good response includes:**
 - ✅ Readiness assessment (HRV, RHR, Sleep vs 7d/28d baselines)
 - ✅ Load context (TSB, ACWR, Monotony if > 2.3)
-- ✅ Capability snapshot (durability 7d + trend, TID drift if not consistent)
+- ✅ Capability snapshot (Durability (cycling) 7d + trend, TID drift if not consistent)
 - ✅ Today's planned workout details from planned_workouts
 - ✅ Go / Modify / Skip recommendation with reasoning
 
 **Bad response:**
 - ❌ Skipping readiness check and jumping straight to workout description
-- ❌ Missing capability snapshot (durability, TID drift)
+- ❌ Missing capability snapshot (Durability (cycling), TID drift)
 - ❌ Generic "listen to your body" without referencing actual metrics
 
 ### Weather Test
@@ -463,7 +463,7 @@ The protocol is designed to work with [Intervals.icu](https://intervals.icu) as 
 
 ### Derived Metrics
 
-The sync script pre-calculates Section 11-compliant metrics so AI doesn't need to compute them. Key metrics include ACWR, Recovery Index, Monotony/Strain, Grey Zone %, Quality Intensity %, Easy Time Ratio, Benchmark Index, Phase Detection, Seiler TID, Aggregate Durability, and TID Drift.
+The sync script pre-calculates Section 11-compliant metrics so AI doesn't need to compute them. Key metrics include ACWR, Recovery Index, Monotony/Strain, Grey Zone %, Quality Intensity %, Easy Time Ratio, Benchmark Index, Phase Detection, Seiler TID, Durability (cycling), per-sport curve deltas and main-sport TID Drift; strain alarms use strain_main_sports while legacy strain remains all-sport context.
 
 Zone aggregations (TID, polarization, grey zone %) default to power zones with HR fallback. Configure `ZONE_PREFERENCE` to override per sport, e.g. `run:hr,cycling:power` for runners who prefer HR-based zone analysis. See [auto-sync setup](examples/json-auto-sync/SETUP.md) or [local sync setup](examples/json-local-sync/SETUP.md) for configuration.
 

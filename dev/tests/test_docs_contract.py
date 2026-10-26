@@ -283,6 +283,14 @@ def version_issues(name, source):
     return issues
 
 
+def report_rule_issues(name, source):
+    if name in {'SECTION_11.md', 'examples/json-examples/README.md'}:
+        return []
+    return [f'{name}:{number}: {line}'
+            for number, line in enumerate(source.splitlines(), 1)
+            if re.search(r'\b(?:endurance_10_50_week_guard|report_sport_identity|report_sport_longest)_v\d+\b', line)]
+
+
 def repository_data(root):
     documents, entries = {}, set()
     for path in sorted(root.rglob('*')):
@@ -314,6 +322,25 @@ class TestDocsContract(unittest.TestCase):
         documents, _entries = repository_data(ROOT)
         issues = [issue for name, source in documents.items() for issue in version_issues(name, source)]
         self.assertEqual([], issues, '\n'.join(issues))
+
+    def test_repository_report_rule_owners(self):
+        documents, _entries = repository_data(ROOT)
+        issues = [issue for name, source in documents.items() for issue in report_rule_issues(name, source)]
+        self.assertEqual([], issues, '\n'.join(issues))
+
+    def test_report_rule_owner_violation_and_nearby_valid(self):
+        for rule in ('endurance_10_50_week_guard_v2', 'endurance_10_50_week_guard_v99',
+                     'report_sport_identity_v2', 'report_sport_identity_v99',
+                     'report_sport_longest_v1', 'report_sport_longest_v99'):
+            for source in (f'Require {rule}.', f'Use `{rule}`.', f'```json\n{{"rule_version": "{rule}"}}\n```'):
+                for name in ('guide.md', 'PROJECT_INSTRUCTIONS_AGENTIC.md', 'sub/SECTION_11.md'):
+                    with self.subTest(name=name, source=source):
+                        self.assertEqual(1, len(report_rule_issues(name, source)))
+                for name in ('SECTION_11.md', 'examples/json-examples/README.md'):
+                    self.assertEqual([], report_rule_issues(name, source))
+        self.assertEqual([], report_rule_issues('guide.md',
+            'Use report_intensity blocks matching the same file report_intensity_schema.rule_version; schema_version: 2. '
+            'Require the sport_identity_rule marker; decode history.longest_session_schema columns.'))
 
     def test_slug_rules_and_collisions(self):
         self.assertEqual('å-2--é-e\u0301-字-ⅱ-a_b', slug('Å 2 & É e\u0301 字 Ⅱ A_B'))

@@ -36,7 +36,7 @@ TSS: 270
 CTL: 43.2
 Zones (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 89%, Z3 7%, Z4+ 4%
 Hard days: 2 (18 Jun intervals; 21 Jun tempo)
-Durability: 7-day avg 3.6% (N=2)
+Durability (cycling): 7-day avg 3.6% (N=2)
 EF: 7-day avg 1.25 (N=2)
 HRRc: 7-day avg 33 bpm (N=1)
 HRV: 7-day avg 61 ms (7 days)
@@ -49,7 +49,7 @@ TSS: 300
 CTL: 43.8
 Zones (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 86%, Z3 10%, Z4+ 4%
 Hard days: 2 (25 Jun intervals; 28 Jun by power Z3 only)
-Durability: 7-day avg 3.4% (N=2)
+Durability (cycling): 7-day avg 3.4% (N=2)
 EF: 7-day avg 1.27 (N=3)
 HRRc: 7-day avg 32 bpm (N=1)
 HRV: 7-day avg 62 ms (6 days)
@@ -62,7 +62,7 @@ TSS: 220
 CTL: 42.1
 Zones (cycling, power, 1/1 rolling week; 3/3 sessions): Z1+Z2 94%, Z3 4%, Z4+ 2%
 Hard days: 1 (3 Jul intervals)
-Durability: 7-day avg 3.1% (N=2)
+Durability (cycling): 7-day avg 3.1% (N=2)
 EF: 7-day avg 1.29 (N=2)
 HRRc: 7-day avg 32 bpm (N=1)
 HRV: 7-day avg 62 ms (7 days)
@@ -75,7 +75,7 @@ TSS: 235
 CTL: 42.6
 Zones (cycling, power, 1/1 rolling week; 3/3 sessions): Z1+Z2 91%, Z3 6%, Z4+ 3%
 Hard days: 1 (10 Jul intervals)
-Durability: 7-day avg 3.1% (N=2)
+Durability (cycling): 7-day avg 3.1% (N=2)
 EF: 7-day avg 1.30 (N=3)
 HRRc: 7-day avg 31 bpm (N=1)
 HRV: 7-day avg 63 ms (7 days)
@@ -104,7 +104,7 @@ Actual: 176 W over 1799 seconds
 Long ride: 28 Jun, Meadow route, 2h45m, steady power with VI 1.03
 Tempo whole-ride decoupling: 21 Jun 3.8%; 28 Jun 3.4% (both at least 90m, VI 1.03)
 
-**Best efforts (last 28 days, previous 28 days in brackets)**
+**Best efforts (Cycling, last 28 days, previous 28 days in brackets)**
 5 s: 670 W, 25 Jun (700 W)
 1 min: 370 W, 25 Jun (380 W)
 5 min: 265 W, 25 Jun (260 W)
@@ -192,12 +192,12 @@ When LT1/LT2 estimates are absent, their rows are absent. An eligible easy-state
 
 ## Synthetic ski holiday and indoor ski fragment
 
-For 28 September to 25 October, cycling supplies 75% TSS/60% time and skiing 25%/40%. Skiing combines four outdoor Nordic ski sessions and one indoor ski session in the 5-11 October chunk, all using the same five-band HR mapping. Cycling has eight power sessions in the other three chunks. The independently selected whole-period lines are:
+For 28 September to 25 October, cycling supplies 75% TSS/60% time and Nordic skiing 25%/40%. Nordic skiing combines four outdoor Nordic ski sessions and one indoor ski session in the 5-11 October chunk, all using the same five-band HR mapping. Cycling has eight power sessions in the other three chunks. The independently selected whole-period lines are:
 
 ```
 Zones (cycling, power, 3/4 rolling weeks; 8/8 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3%
-Zones (skiing, HR, 1/4 rolling weeks; 5/5 sessions): Z1+Z2 85%, Z3 10%, Z4+ 5%
-Skiing coverage: 1 active week; absence in the other chunks is not missing zones
+Zones (Nordic skiing, HR, 1/4 rolling weeks; 5/5 sessions): Z1+Z2 85%, Z3 10%, Z4+ 5%
+Nordic skiing coverage: 1 active week; absence in the other chunks is not missing zones
 ```
 
 These describe observed sessions; activity-fetch completeness is unknown. If a sixth ski session lacks zones, show 5/6 and partial coverage without a whole-period drift claim. Keep a separate power or incompatible HR-mapping bucket if one occurs; never label the line mixed.

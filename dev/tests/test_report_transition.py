@@ -346,7 +346,7 @@ class ReportContracts(unittest.TestCase):
             template = (REPORTS / f"{stem}_REPORT_TEMPLATE.md").read_text()
             examples = (REPORTS / f"{stem}_REPORT_EXAMPLES.md").read_text()
             self.assertNotRegex(template + examples, r"(?i)virtual|zwift")
-            for term in ("solely from sync's indoor flag", "Never infer environment from names",
+            for term in ("solely from the emitted fact environment", "Never infer environment from names",
                          "Any indoor distance, speed or climbing outside the split"):
                 self.assertIn(term, template)
         sync = mod.IntervalsSync("synthetic", "synthetic")
@@ -355,7 +355,10 @@ class ReportContracts(unittest.TestCase):
                                      (None, "Outdoor road loop", "unknown")):
             row = {"id": "synthetic", "type": "Ride", "date": "2026-07-09",
                    "indoor": flag, "name": name, "source": "conflicting source app"}
-            self.assertEqual(sync._fact_activity(row, formatted=True)["environment"], expected)
+            raw = {"synthetic": {"id": "synthetic", "type": "Ride",
+                   "start_date_local": "2026-07-09T12:00:00", "trainer": flag}} if flag is not None else {}
+            self.assertEqual(sync._fact_activity(row, formatted=True, raw_by_id=raw)["environment"], expected)
+            self.assertEqual(sync._fact_activity(row, formatted=True)["environment"], "unknown")
         self.assertIn("Longest ride: Easy spin, 9 Jul, 20m, 8 km (indoor)", self.reports("7_DAY")[1])
 
     def test_chunk_totals_order_and_seven_day_agreement(self):

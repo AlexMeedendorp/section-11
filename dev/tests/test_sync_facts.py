@@ -343,7 +343,8 @@ class RollingChunks(FactsCase):
         self.assertIsNone(single["ef_mean"])
         self.assertEqual(single["durability_qualifying"], 1)
         running = self.chunks([dict(a, type="Run") for a in acts])[0]
-        self.assertEqual(running["durability_mean"], -1)
+        self.assertIsNone(running["durability_mean"])
+        self.assertEqual(running["durability_qualifying"], 0)
         self.assertIsNone(running["ef_mean"])
         self.assertEqual(running["fun_facts"]["cycling_activity_count"], 0)
 
@@ -448,6 +449,21 @@ class SeasonCurves(FactsCase):
         acts[0]["name"] = "Changed"
         _, _, get = self.weeks(acts, previous=previous)
         self.assertEqual(get.call_count, 1)
+
+    def test_old_sport_identity_cache_cannot_restore_excluded_peaks(self):
+        acts = [ride()]
+        weeks, meta, _ = self.weeks(acts)
+        del self.sync._fun_fact_curve_run
+        previous = self.packed_previous(weeks, meta)
+        previous["fun_facts_power"].pop("sport_identity_rule")
+        fresh = [{"week_start": w["week_start"]} for w in weeks]
+        with mock.patch.object(self.sync, "_intervals_get", side_effect=mod.requests.exceptions.Timeout("synthetic")) as get:
+            failed = self.sync._history_fun_fact_power(fresh, acts, previous)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(failed["status"], "unavailable")
+        self.assertEqual(failed["sport_identity_rule"], self.sync.SPORT_IDENTITY_RULE)
+        self.assertTrue(all(w["fun_facts"]["max_power"] is None for w in fresh))
+        self.assertTrue(all(p is None for w in fresh for p in w["fun_facts"]["peaks"].values()))
 
     def test_failure_preserves_old_peaks_and_marks_uncovered_weeks(self):
         acts = [ride()]

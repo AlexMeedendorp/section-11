@@ -98,7 +98,7 @@ latest.json
 │   ├── thresholds       → FTP, eFTP, LTHR, W', P-max, VO2max (per-sport)
 │   └── current_metrics  → Weight, RHR, HRV, sleep, subjective state, vitals, body comp
 ├── derived_metrics      → Section 11 calculated values (see below)
-│   ├── capability       → Durability, EF, HRRc trends + TID drift (7d vs 28d)
+│   ├── capability       → Durability (cycling), EF, HRRc trends + main-sport TID drift and per-sport curve deltas
 │   └── phase_detection  → Dual-stream phase detection with confidence
 ├── recent_activities    → Detailed activity data with zones, EF, HRRc, has_intervals, has_dfa, dfa_summary, effort_response, has_structure, interval_data (plan_match/compliance/icu_detected), terrain_summary/weather_summary (outdoor only)
 ├── wellness_data        → Daily HRV, RHR, sleep, subjective state, vitals, nutrition, lifestyle
@@ -172,7 +172,7 @@ Pre-calculated values for Section 11 compliance: AI should use these, not calcul
 |--------|-------------|
 | `acwr` | Acute:Chronic Workload Ratio (0.8–1.3 optimal) |
 | `recovery_index` | HRV/RHR composite (>1.0 = good recovery) |
-| `monotony` / `strain` | Training variability (Foster) |
+| `monotony` / `strain` | Legacy all-sport training variability (Foster); reporting alarms use monotony_main_sports / strain_main_sports |
 | `grey_zone_percentage` | Z3 time %: minimize in polarized training |
 | `quality_intensity_percentage` | Z4+ time %: target ~20% |
 | `easy_time_ratio` | Easy time ratio: target ~0.80 |
@@ -181,7 +181,7 @@ Pre-calculated values for Section 11 compliance: AI should use these, not calcul
 | `phase_detection` | Full phase detection object: phase, confidence, reason_codes, basis (dual-stream), phase_duration_weeks |
 | `benchmark_indoor` / `benchmark_outdoor` | 8-week FTP progression |
 | `report_intensity_7d` / `report_intensity_28d` | Period-local main sports, separate power/HR mapping buckets and weeks/sessions coverage. Legacy primary/all-sport fields retain their meanings. See [Report intensity source](../SECTION_11.md#report-intensity-source) |
-| `capability.durability` | Aggregate decoupling 7d/28d mean + trend (improving/stable/declining) |
+| `capability.durability` | Cycling decoupling 7d/28d mean + trend (improving/stable/declining) |
 | `capability.report_intensity_comparison` | Same sport/basis/mapping observed-session drift with coverage read from both ready blocks; partial/incompatible evidence has null drift. Legacy tid_comparison_primary and tid_comparison remain unchanged |
 | `readiness_decision` | Pre-computed go/modify/skip with priority ladder (P0–P3) and signal breakdown |
 | `capability.efficiency_factor` | Aerobic efficiency (power÷HR normalized) 7d/28d with trend |
