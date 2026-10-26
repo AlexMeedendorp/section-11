@@ -165,6 +165,10 @@ The core examples originated with sync.py v3.86 / Section 11 v11.17; the excepti
 - `zone_basis` on all TID/Seiler blocks
 - `feel_count`, `avg_rpe`, `rpe_count` in weekly history rows
 - `primary_sport`, `primary_sport_tss`, `sport_tss_breakdown` on weekly history rows
+- `derived_metrics.monotony_main_sports` and `weekly_180d[].monotony_main_sports`: combined eligible selected-sport load, value and availability. Legacy primary/all-sport monotony fields retain their meanings
+- `phase_detection.basis.decision_load_source: main_sport_load` and `main_sport_load`: one fixed sport set for every compared week, matched span and prospective load numerator. Legacy stream evidence remains compatibility data
+- `weekly_180d[].phase_load_basis` and file-level `phase_load_schema`: target-local selection/load provenance; settings resolve through report_intensity_schema.selection_config. Unmarked legacy labels cannot supply new-rule transitions
+- `hard_days_coverage` beside the current-week hard-day count, on live/history weekly rows and rolling chunks: activity days, days without power/HR zones and coverage status. Unknown coverage displays unknown rather than a bare zero; counts/ladders are unchanged
 - `sport_type` on planned workouts
 - `current_week_hard_days_completed`, `current_week_hard_days_total` in `phase_detection.basis.stream_2`
 - `athlete_profile`: stable identity block (DOB, age, height, sex, location, timezone, platform tenure)

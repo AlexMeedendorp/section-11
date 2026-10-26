@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.161 - Main-sport load diagnostics: monotony from the 7-day selected main
+  sports, phase load from one common main-sport set across compared weeks (walking,
+  hiking and e-cycling excluded), hard_days_coverage. Pairs with protocol v11.97.
+
 Version 3.160 - Multi-sport report intensity: per-window sport selection (10% TSS /
   50% time / guarded week winner / declared main sport), separate power and HR lines,
   compact report_intensity blocks. Pairs with protocol/skill v11.95.
@@ -4621,7 +4625,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.160"
+    VERSION = "3.161"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -4839,7 +4843,7 @@ class IntervalsSync:
         "Workout": "other",
     }
 
-    # Report-only identities. Never use this map for legacy diagnostics.
+    # Report and additive main-sport load identities; never legacy diagnostics.
     REPORT_SPORTS = {
         "Ride": "cycling", "VirtualRide": "cycling",
         "MountainBikeRide": "cycling", "GravelRide": "cycling",
@@ -4850,6 +4854,8 @@ class IntervalsSync:
         "Swim": "swimming", "Walk": "walking", "Hike": "hiking",
     }
     REPORT_INTENSITY_RULE = "endurance_10_50_week_guard_v1"
+    LOAD_SPORTS = frozenset(("cycling", "running", "rowing", "skiing", "swimming"))
+    PHASE_LOAD_RULE = "selected_union_fixed_scope_v1"
     
     # Activity types that may contain location data in their name
     OUTDOOR_TYPES = {"Ride", "MountainBikeRide", "GravelRide", "EBikeRide",
@@ -5918,6 +5924,7 @@ class IntervalsSync:
                     "zone_basis": zones["zone_basis"]},
                 "hard_days": hard_days,
                 "hard_day_details": hard_day_details,
+                "hard_days_coverage": self._hard_days_coverage(acts),
                 "wellness": self._report_wellness(wellness, start, end),
                 "durability_mean": durability["mean_decoupling_7d"],
                 "durability_qualifying": durability["qualifying_sessions_7d"],
@@ -10856,6 +10863,9 @@ class IntervalsSync:
                 "primary_sport_tss": round(w_primary_tss, 0),
                 "primary_sport": primary_sport,
                 "hard_days": w_hard_days,
+                "hard_days_coverage": self._hard_days_coverage(week_acts),
+                "monotony_main_sports": self._main_monotony(
+                    activities_28d, ws, min(we, today), weekly=True),
                 "activity_count": len(week_acts),
             })
         
@@ -10883,8 +10893,10 @@ class IntervalsSync:
         # Enrich completed rows with phase_detected from history where available.
         for row in weekly_rows[:-1]:
             hist = history_by_ws.get(row["week_start"])
-            if hist and "phase_detected" in hist:
+            if hist and hist.get("_phase_load_compatible") and "phase_detected" in hist:
                 row["phase_detected"] = hist["phase_detected"]
+                row["phase_load_basis"] = hist.get("phase_load_basis")
+                row["_phase_load_compatible"] = True
         
         previous_phase = None
         if len(weekly_rows) >= 2:
@@ -10912,7 +10924,8 @@ class IntervalsSync:
             primary_sport=primary_sport,
             completed_event_ids=completed_event_ids,
             completed_activities=observed_acts,
-            current_week_events=past_events
+            current_week_events=past_events,
+            load_activities=activities_28d
         )
         phase_detected = phase_result["phase"]
         
@@ -10954,6 +10967,9 @@ class IntervalsSync:
                 "chronic_days": 28
             },
             "monotony": monotony,
+            "monotony_main_sports": self._main_monotony(
+                activities_28d, (now_dt - timedelta(days=6)).strftime("%Y-%m-%d"), today,
+                report=report_intensity_7d, chronic=True),
             "monotony_interpretation": self._interpret_monotony(monotony, effective_monotony, is_multi_sport),
             "primary_sport": primary_sport,
             "primary_sport_monotony": primary_sport_monotony,
@@ -10982,6 +10998,7 @@ class IntervalsSync:
             "easy_time_ratio": easy_time_ratio,
             "easy_time_ratio_note": "Easy time (Z1+Z2) / Total - target ~80% in polarized training",
             "hard_days_this_week": hard_days_this_week,
+            "hard_days_coverage": weekly_rows[-1]["hard_days_coverage"],
             "hard_days_note": "Power ladder: z3+ >= 30min, z4+ >= 10min, z5+ >= 5min, z6+ >= 2min, z7 >= 1min. HR fallback (when no power): z4+ >= 10min, z5+ >= 5min. Per Seiler 3-zone model + Foster. HR-based days flagged with intensity_basis: hr",
             
             # Tier 3: Seiler TID (Training Intensity Distribution)
@@ -11569,6 +11586,262 @@ class IntervalsSync:
                 "median_moving_seconds": median, "minimum_winner_seconds": floor},
             "weeks": weeks, "selected_sports": [s for s in sports if sports[s]["selected"]],
             "sports": sports}
+
+    def _phase_load_schema(self):
+        """Current-run settings, not historical athlete preferences."""
+        return {"rule": self.PHASE_LOAD_RULE, "eligible_sports": sorted(self.LOAD_SPORTS),
+                "selection_rule": self.REPORT_INTENSITY_RULE,
+                "week_start_day": self.week_start_day,
+                "selection_config_ref": "report_intensity_schema.selection_config",
+                "selection": "sports,status; rolling_28d then four configured weeks oldest first",
+                "week": "week_start,known_tss,missing_tss,tss,status",
+                "week_end": "minimum of week_start plus 6 days and observation_cutoff",
+                "monotony_rule": "selected_s7_combined_load_v1",
+                "activity_fetch_coverage": "unknown"}
+
+    @staticmethod
+    def _pack_phase_load(basis):
+        """History keeps target evidence once, decoded by phase_load_schema."""
+        return {**{k: basis[k] for k in ("rule", "sports", "status", "selection_status",
+                                        "window_28d", "observation_cutoff")},
+                "selections": [[s["sports"], s["status"]] for s in basis["selections"]],
+                "weeks": [[w[k] for k in ("week_start", "known_tss", "missing_tss", "tss", "status")]
+                          for w in basis["weeks"]]}
+
+    def _weekly_main_monotony(self, activities, start, end):
+        result = self._main_monotony(activities, start, end, weekly=True)
+        return {k: result[k] for k in ("sports", "selection_status", "status", "value",
+                "active_days", "elapsed_days", "known_tss", "tss", "missing_tss")}
+
+    @staticmethod
+    def _load_cutoff(activities, cutoff):
+        # Filter before identity reconciliation: future duplicates cannot poison
+        # an earlier target. Retain malformed dates for explicit missingness.
+        result = []
+        for act in activities or []:
+            date = act.get("start_date_local") if isinstance(act, dict) else None
+            try:
+                parsed = datetime.strptime(date[:10], "%Y-%m-%d")
+                valid = parsed.strftime("%Y-%m-%d") == date[:10]
+            except (TypeError, ValueError):
+                valid = False
+            if isinstance(act, dict) and (not valid or date[:10] <= cutoff):
+                result.append(act)
+        return result
+
+    def _load_selection(self, activities, start, end, report=None, rolling=False, rescue=False):
+        if activities is None:
+            return {"start": start, "end": end, "sports": [], "status": "unavailable"}
+        block = report if report is not None else self._report_intensity(
+            activities, start, end, week_mode="rolling" if rolling else "calendar",
+            weekly_rescue=rescue, as_of=end)
+        if block.get("schema_version") != 1 or block.get("rule_version") != self.REPORT_INTENSITY_RULE:
+            return {"start": start, "end": end, "sports": [], "status": "unavailable"}
+        sports = sorted(set(block["selected_sports"]) & self.LOAD_SPORTS)
+        uncertain = any(s in self.LOAD_SPORTS and v["qualification"] == "indeterminate"
+                        for s, v in block["sports"].items())
+        # An undated eligible observation cannot be assigned to a complete period.
+        _, identity = self._report_observations(
+            [a for a in activities if self.REPORT_SPORTS.get(a.get("type")) in self.LOAD_SPORTS],
+            start, end)
+        status = "partial" if uncertain or identity["invalid_date_records"] else "complete"
+        return {"start": start, "end": end, "sports": sports,
+                "status": status if sports or status != "complete" else "empty"}
+
+    def _main_load_days(self, activities, sports, start, end):
+        first, last = (datetime.strptime(d, "%Y-%m-%d") for d in (start, end))
+        daily = {(first + timedelta(days=i)).strftime("%Y-%m-%d"): []
+                 for i in range((last - first).days + 1)}
+        acts, identity = self._report_observations(activities or [], start, end)
+        _, selected_identity = self._report_observations(
+            [a for a in activities or [] if self.REPORT_SPORTS.get(a.get("type")) in sports], start, end)
+        missing = selected_identity["invalid_date_records"]
+        for act in acts:
+            if self.REPORT_SPORTS.get(act.get("type")) not in sports:
+                continue
+            value = self._fact_number(act.get("icu_training_load"))
+            if value is None or value < 0:
+                missing += 1
+            else:
+                daily[act["start_date_local"][:10]].append(value)
+        values = [math.fsum(v) for v in daily.values()]
+        return values, {"known_tss": math.fsum(values), "missing_tss": missing,
+                        "status": "unavailable" if activities is None else
+                        "partial" if missing else "complete"}
+
+    def _main_monotony(self, activities, start, end, report=None, weekly=False, chronic=False):
+        bounded = None if activities is None else self._load_cutoff(activities, end)
+        # Reuse a ready selection only when its input had no future observations.
+        if bounded != activities:
+            report = None
+        selection = self._load_selection(bounded, start, end, report, rolling=not weekly)
+        values, load = self._main_load_days(bounded, selection["sports"], start, end)
+        status = selection["status"]
+        value = None
+        active = sum(v > 0 for v in values)
+        if status == "complete":
+            status = load["status"]
+            if status == "complete":
+                if weekly and (len(values) < 5 or active < 3):
+                    status = "insufficient_days"
+                elif not active:
+                    status = "zero_load"
+                else:
+                    sd = statistics.stdev(values) if len(values) > 1 else 0
+                    status = "available" if sd > 0 else "zero_variance"
+                    value = round(statistics.mean(values) / sd, 2) if sd > 0 else None
+        status = {"empty": "no_main_sports", "partial": "missing_load" if selection["status"] == "complete"
+                  else "incomplete_selection"}.get(status, status)
+        result = {**selection, **load, "rule": "selected_s7_combined_load_v1",
+                  "selection_source": "configured_week" if weekly else "report_intensity_7d",
+                  "selection_status": selection["status"], "status": status, "value": value,
+                  "interpretation": self._interpret_monotony(value, value, False),
+                  "tss": load["known_tss"] if selection["status"] == "complete" and load["status"] == "complete" else None,
+                  "active_days": active, "elapsed_days": len(values), "activity_fetch_coverage": "unknown"}
+        if chronic:
+            first = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=27)).strftime("%Y-%m-%d")
+            _, chronic_load = self._main_load_days(bounded, selection["sports"], first, end)
+            result["reference_28d"] = {"start": first, "end": end, **chronic_load}
+            result["deload_context"] = (self._detect_deload_context(load["known_tss"], chronic_load["known_tss"])
+                if value is not None and chronic_load["status"] == "complete" else None)
+            result["reference_28d"].update(
+                tss=chronic_load["known_tss"] if chronic_load["status"] == "complete" else None,
+                deload_context=result["deload_context"])
+        return result
+
+    def _main_phase_load(self, activities, weekly_rows, cutoff):
+        """One target-local union; never sum locally selected weekly totals."""
+        bounded = None if activities is None else self._load_cutoff(activities, cutoff)
+        end = datetime.strptime(cutoff, "%Y-%m-%d")
+        start28 = (end - timedelta(days=27)).strftime("%Y-%m-%d")
+        selections = [self._load_selection(bounded, start28, cutoff, rolling=True, rescue=True)]
+        target = datetime.strptime(weekly_rows[-1]["week_start"], "%Y-%m-%d") if weekly_rows else end
+        starts = [(target - timedelta(weeks=i)).strftime("%Y-%m-%d") for i in (3, 2, 1, 0)]
+        for start in starts:
+            finish = min(cutoff, (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d"))
+            selections.append(self._load_selection(bounded, start, finish))
+        sports = sorted({s for selection in selections for s in selection["sports"]})
+        status = ("unavailable" if any(s["status"] == "unavailable" for s in selections) else
+                  "partial" if any(s["status"] == "partial" for s in selections) else
+                  "complete" if sports else "empty")
+        rows = []
+        supplied = {r.get("week_start") for r in weekly_rows}
+        for selection in selections[1:]:
+            _, load = self._main_load_days(bounded, sports, selection["start"], selection["end"])
+            if selection["start"] not in supplied:
+                load["status"] = "unavailable"
+            rows.append({"week_start": selection["start"], "end": selection["end"], **load,
+                         "tss": round(load["known_tss"], 0) if status == "complete" and load["status"] == "complete" else None})
+        selection_status = status
+        if status == "complete" and any(r["status"] != "complete" for r in rows):
+            status = "partial"
+        return {"rule": self.PHASE_LOAD_RULE, "sports": sports, "status": status,
+                "selection_status": selection_status, "window_28d": {"start": start28, "end": cutoff},
+                "observation_cutoff": cutoff, "selections": selections, "weeks": rows,
+                "activity_fetch_coverage": "unknown"}
+
+    def _main_phase_features(self, activities, rows, plans, events, completed_ids,
+                             today, is_backfill, legacy_s2):
+        cutoff = ((datetime.strptime(rows[-1]["week_start"], "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d")
+                  if is_backfill and rows else today)
+        basis = self._main_phase_load(activities, rows, cutoff)
+        bounded = None if activities is None else self._load_cutoff(activities, cutoff)
+        loads = {r["week_start"]: r for r in basis["weeks"]}
+        decision_rows = []
+        for row in rows:
+            start = row["week_start"]
+            load = loads.get(start, {"tss": None, "end": min(cutoff,
+                (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d"))})
+            mono = self._main_monotony(bounded, start, load["end"], weekly=True)
+            if start in loads:
+                loads[start]["monotony_main_sports"] = mono
+            decision_rows.append({**row, "total_tss": load["tss"],
+                                  "monotony": mono["value"]})
+        s1 = self._phase_stream1_features(decision_rows, is_backfill=is_backfill)
+        available = basis["status"] == "complete"
+        if not available:
+            s1["tss_values"] = []
+        s1["primary_tss_values"] = []
+        # Missing newest monotony must not promote an older elevated value.
+        finalized = decision_rows if is_backfill else decision_rows[:-1]
+        if not finalized or finalized[-1]["monotony"] is None:
+            s1["monotony_trend"] = None
+            s1["suggested_phase"] = self._phase_from_stream1(s1, finalized)
+        s2 = dict(legacy_s2)
+        evidence = dict(legacy_s2["load_evidence"])
+        s2["load_evidence"] = evidence
+        s2["load_basis_available"] = available
+        reference = statistics.mean(s1["tss_values"][-3:]) if s1["tss_values"] else None
+        completed = loads[rows[-1]["week_start"]]["tss"] if rows and available else None
+        evidence.update(sport_scope=basis["sports"], reference_week_tss=reference,
+                        completed_tss=completed, completed_tss_delta=(completed / reference
+                            if completed is not None and reference and reference > 0 else None),
+                        full_week_reduction="unverified", next_week_rebound="unverified")
+        if evidence["completed_tss_delta"] is not None and evidence["completed_tss_delta"] > 0.80:
+            evidence["full_week_reduction"] = "contradicted"
+        as_of = datetime.strptime(today, "%Y-%m-%d")
+        week_end = as_of + timedelta(days=((self.week_start_day - 1) - as_of.weekday()) % 7)
+        for key, lo, hi, ratio_key in (
+                ("remaining", today, week_end.strftime("%Y-%m-%d"), "planned_tss_delta"),
+                ("next_week", (week_end + timedelta(days=1)).strftime("%Y-%m-%d"),
+                 (week_end + timedelta(days=7)).strftime("%Y-%m-%d"), "next_week_tss_delta")):
+            detail = dict(evidence[key], known_tss=0, missing_tss=0, excluded_sports=[])
+            for pw in plans or []:
+                date = (pw.get("date") or "")[:10]
+                if (pw.get("type") not in self.TRAINING_EVENT_CATEGORIES or not lo <= date <= hi
+                        or (pw.get("id") is not None and str(pw["id"]) in (completed_ids or set()))):
+                    continue
+                sport = self.REPORT_SPORTS.get(pw.get("sport_type"))
+                value = self._fact_number(pw.get("planned_tss"))
+                if sport in basis["sports"]:
+                    if value is None or value < 0:
+                        detail["missing_tss"] += 1
+                    else:
+                        detail["known_tss"] += value
+                elif sport is None:
+                    detail["missing_tss"] += 1
+                elif sport not in detail["excluded_sports"]:
+                    detail["excluded_sports"].append(sport)
+            detail["excluded_sports"].sort()
+            detail["status"] = ("unavailable" if plans is None or not available else
+                                "partial" if detail["missing_tss"] else "complete")
+            evidence[key] = detail
+            factor = 7 / ((week_end - as_of).days + 1) if key == "remaining" else 1
+            # Preserve the legacy positive-plan projection gate, including zero.
+            s2[ratio_key] = (round(detail["known_tss"] * factor / reference, 2)
+                if detail["status"] == "complete" and reference and reference > 0
+                and detail["known_tss"] > 0 else None)
+        if not is_backfill:
+            clean, _ = self._report_observations(bounded or [], basis["selections"][1]["start"], cutoff)
+            aligned = self._phase_current_evidence(clean if bounded is not None else None,
+                events, plans, rows, today, None, load_sports=basis["sports"])
+            if not available:
+                aligned.update(status="unavailable", tss_delta=None)
+            evidence["day_aligned"] = aligned
+            if aligned["status"] == "reduced" and s2["next_week_tss_delta"] is not None and s2["next_week_tss_delta"] >= 0.80:
+                evidence["next_week_rebound"] = "confirmed"
+        s2["suggested_phase"] = self._phase_from_stream2(s2)
+        evidence["sports"] = evidence.pop("sport_scope")
+        if "day_aligned" in evidence:
+            evidence["day_aligned"]["sports"] = evidence["day_aligned"].pop("sport_scope")
+        basis.update(load_evidence=evidence, planned_tss_delta=s2["planned_tss_delta"],
+                     next_week_tss_delta=s2["next_week_tss_delta"], monotony_trend=s1["monotony_trend"],
+                     selection_config=self._report_intensity_schema()["selection_config"],
+                     week_start_day=self.week_start_day)
+        return s1, s2, basis
+
+    def _hard_days_coverage(self, activities):
+        """Day-level zone presence only; counts and ladders remain independent."""
+        days = {}
+        for act in activities:
+            date = (act.get("start_date_local") or "")[:10]
+            zones, basis = self._get_activity_zones(act,
+                sport_family=self.SPORT_FAMILIES.get(act.get("type")))
+            days[date] = days.get(date, False) or bool(zones and basis)
+        missing = sum(not present for present in days.values())
+        return {"days_with_activity": len(days), "days_without_zone_data": missing,
+                "status": "no_activities" if not days else "unknown" if missing == len(days)
+                else "partial" if missing else "complete"}
 
     def _report_intensity_schema(self):
         """One file-level decoder for compact report-only observations."""
@@ -13300,7 +13573,7 @@ class IntervalsSync:
     PHASE_MIN_ELAPSED_DAYS = 2
 
     def _phase_current_evidence(self, activities, events, plans, weekly_rows,
-                                today, primary_sport):
+                                today, primary_sport, load_sports=None):
         """Matched-sport execution over equal weekday spans; names support only."""
         as_of = datetime.strptime(today, "%Y-%m-%d")
         start = as_of - timedelta(days=(as_of.weekday() - self.week_start_day) % 7)
@@ -13309,7 +13582,7 @@ class IntervalsSync:
         end_str = (start + timedelta(days=6)).strftime("%Y-%m-%d")
         prior_starts = [(start - timedelta(weeks=i)).strftime("%Y-%m-%d") for i in (1, 2, 3)]
         result = {
-            "sport_scope": primary_sport,
+            "sport_scope": primary_sport if load_sports is None else load_sports,
             "elapsed_days": span,
             "minimum_elapsed_days": self.PHASE_MIN_ELAPSED_DAYS,
             "observation_cutoff": today,
@@ -13326,26 +13599,30 @@ class IntervalsSync:
         # Generic English whole-word/phrase intent, not an intensity classifier.
         # Deload week is covered by deload; recovery alone names isolated easy rides.
         name_pattern = re.compile(r"\b(?:deload|recovery week|rest week)\b", re.IGNORECASE)
+        def matches(sport):
+            if load_sports is not None:
+                return self.REPORT_SPORTS.get(sport) in load_sports
+            return not primary_sport or self.SPORT_FAMILIES.get(sport) == primary_sport
         named_events = set()
         for index, event in enumerate(list(events or []) + list(plans or [])):
             date = (event.get("date") or event.get("start_date_local") or "")[:10]
             category = event.get("category") or event.get("type")
             sport = event.get("sport_type") if "sport_type" in event else event.get("type")
             if (start_str <= date <= end_str and category in self.TRAINING_EVENT_CATEGORIES
-                    and (not primary_sport or self.SPORT_FAMILIES.get(sport) == primary_sport)
+                    and matches(sport)
                     and name_pattern.search(event.get("name") or "")):
                 named_events.add(str(event["id"]) if event.get("id") is not None else (date, index))
         result["name_support"]["planned_events"] = len(named_events)
         for act in activities or []:
             date = (act.get("start_date_local") or "")[:10]
             if (start_str <= date <= today
-                    and (not primary_sport or self.SPORT_FAMILIES.get(act.get("type")) == primary_sport)
+                    and matches(act.get("type"))
                     and name_pattern.search(act.get("name") or "")):
                 result["name_support"]["completed_activities"] += 1
         # The normal caller supplies the full fetched activity window. A missing
         # list, unknown sport or missing finalized week cannot establish reduction.
         finalized = {row.get("week_start") for row in (weekly_rows or [])[:-1]}
-        if activities is None or not primary_sport or not set(prior_starts) <= finalized:
+        if activities is None or not (primary_sport or load_sports) or not set(prior_starts) <= finalized:
             return result
         totals = []
         for offset in (0, 1, 2, 3):
@@ -13356,7 +13633,7 @@ class IntervalsSync:
             for act in activities:
                 date = (act.get("start_date_local") or "")[:10]
                 if not (first_str <= date <= last_str and date <= today
-                        and self.SPORT_FAMILIES.get(act.get("type")) == primary_sport):
+                        and matches(act.get("type"))):
                     continue
                 tss = act.get("icu_training_load")
                 if isinstance(tss, (int, float)) and not isinstance(tss, bool) and math.isfinite(tss) and tss >= 0:
@@ -13383,7 +13660,8 @@ class IntervalsSync:
                           is_backfill: bool = False,
                           completed_event_ids: Optional[set] = None,
                           completed_activities: Optional[List[Dict]] = None,
-                          current_week_events: Optional[List[Dict]] = None) -> Dict:
+                          current_week_events: Optional[List[Dict]] = None,
+                          load_activities: Optional[List[Dict]] = None) -> Dict:
         """
         Dual-stream phase detection (v2).
         
@@ -13422,21 +13700,52 @@ class IntervalsSync:
         
         # Data quality assessment
         data_quality = self._phase_data_quality(weekly_rows, s1, reason_codes)
+
+        # Keep the legacy streams above byte-compatible; only this explicit view
+        # supplies load to classification. Missing raw observations never fall back.
+        decision_s1, decision_s2, main_load = self._main_phase_features(
+            load_activities if load_activities is not None else completed_activities,
+            weekly_rows, planned_workouts, current_week_events, completed_event_ids,
+            today, is_backfill, s2)
+        prior = weekly_rows[-2] if len(weekly_rows) >= 2 else {}
+        prior_basis = prior.get("phase_load_basis") or {}
+        expected_prior = ((datetime.strptime(weekly_rows[-1]["week_start"], "%Y-%m-%d")
+                           - timedelta(weeks=1)).strftime("%Y-%m-%d") if weekly_rows else None)
+        compatible_previous = (prior.get("week_start") == expected_prior
+                               and (is_backfill or prior.get("_phase_load_compatible"))
+                               and prior_basis.get("rule") == self.PHASE_LOAD_RULE
+                               and prior_basis.get("status") == "complete"
+                               and prior_basis.get("observation_cutoff") == (
+                                   datetime.strptime(expected_prior, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d"))
+        if not compatible_previous:
+            previous_phase = None
         
         # Classification
         phase, confidence, extra_reasons = self._phase_classify(
-            s1, s2, previous_phase, data_quality
+            decision_s1, decision_s2, previous_phase, data_quality
         )
         reason_codes.extend(extra_reasons)
+        if main_load["status"] != "complete":
+            reason_codes.append("MAIN_SPORT_LOAD_UNAVAILABLE")
+            if phase not in ("Taper", "Peak"):
+                confidence = "low"
         
         # Phase duration: count consecutive weeks of same phase from history.
         # Skip weekly_rows[-1] — it's the current week (being classified now,
         # phase_detected is stale or absent). Count from [-2] backward, +1 for current.
-        phase_duration = 0
-        if phase and weekly_rows:
+        phase_duration = None if not compatible_previous else 0
+        if phase and weekly_rows and compatible_previous:
+            expected_week = expected_prior
             for row in reversed(weekly_rows[:-1]):
-                if row.get("phase_detected") == phase:
+                if (row.get("phase_detected") == phase
+                        and row.get("week_start") == expected_week
+                        and (is_backfill or row.get("_phase_load_compatible"))
+                        and (row.get("phase_load_basis") or {}).get("rule") == self.PHASE_LOAD_RULE
+                        and (row.get("phase_load_basis") or {}).get("status") == "complete"
+                        and (row.get("phase_load_basis") or {}).get("observation_cutoff") == (
+                            datetime.strptime(expected_week, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d")):
                     phase_duration += 1
+                    expected_week = (datetime.strptime(expected_week, "%Y-%m-%d") - timedelta(weeks=1)).strftime("%Y-%m-%d")
                 else:
                     break
             phase_duration += 1  # current week (just classified)
@@ -13447,8 +13756,8 @@ class IntervalsSync:
             dossier_agreement = (dossier_declared == phase) if phase else None
         
         # Stream agreement
-        stream_agreement = s1.get("suggested_phase") == s2.get("suggested_phase")
-        if s1.get("suggested_phase") is None or s2.get("suggested_phase") is None:
+        stream_agreement = decision_s1.get("suggested_phase") == decision_s2.get("suggested_phase")
+        if decision_s1.get("suggested_phase") is None or decision_s2.get("suggested_phase") is None:
             stream_agreement = None  # can't assess if one stream has no opinion
         
         # Bounded temporal provenance, not a historical knowledge-time record.
@@ -13475,6 +13784,8 @@ class IntervalsSync:
             "confidence": confidence,
             "reason_codes": reason_codes,
             "basis": {
+                "decision_load_source": "main_sport_load",
+                "main_sport_load": main_load,
                 "stream_1": {
                     "ctl_slope": s1.get("ctl_slope"),
                     "acwr_trend": s1.get("acwr_trend"),
@@ -13971,6 +14282,7 @@ class IntervalsSync:
         aligned = evidence.get("day_aligned") or {}
         aligned_delta = aligned.get("tss_delta")
         completed_delta = evidence.get("completed_tss_delta")
+        load_available = s2.get("load_basis_available", True)
         # Live execution can contradict low-load readings even before reduction
         # is established. Backfill has no day_aligned entry and keeps its rules.
         live_load_contradicted = bool(aligned) and (
@@ -14063,7 +14375,7 @@ class IntervalsSync:
         # 2+ hard sessions = not structurally a deload.
         # When hard_planned == 1, require ≥3 planned sessions to trust the plan
         # is representative — a 2-session plan with 1 hard is too sparse to judge.
-        if hard_planned == 0 or (hard_planned == 1 and next_7d_sessions >= 3):
+        if load_available and (hard_planned == 0 or (hard_planned == 1 and next_7d_sessions >= 3)):
             # Path A: reduction over the calibrated same-weekday execution span.
             if aligned.get("status") == "reduced" and build_history:
                 deload_signal = True
@@ -14073,7 +14385,8 @@ class IntervalsSync:
                 deload_path = "B"
             # Path B: sparse plan, all easy, strong Build history
             elif (next_7d_sessions > 0 and not tss_delta_reliable and build_history
-                  and ctl_slope > 1.0 and hard_avg >= 2.0):
+                  and ctl_slope > 1.0 and hard_avg >= 2.0
+                  and not evidence.get("remaining", {}).get("missing_tss")):
                 deload_signal = True
                 deload_path = "B"
         
@@ -14081,7 +14394,7 @@ class IntervalsSync:
         # shows clear TSS reduction vs prior 3 weeks.  Build evidence computed
         # from prior 3 weeks ONLY (excludes the current deload week which
         # would dilute hard_avg / ctl_slope in the 4-week window).
-        if not deload_signal and next_7d_sessions == 0:
+        if load_available and not deload_signal and next_7d_sessions == 0:
             tss_values = s1.get("tss_values", [])
             hard_values = s1.get("hard_day_values", [])
             if len(tss_values) >= 4 and len(hard_values) >= 4:
@@ -14267,6 +14580,11 @@ class IntervalsSync:
             with open(history_path, 'r') as f:
                 history_data = json.load(f)
             rows = history_data.get("weekly_180d", [])
+            compatible = (history_data.get("phase_load_schema") == self._phase_load_schema()
+                          and (history_data.get("report_intensity_schema") or {}).get("selection_config")
+                          == self._report_intensity_schema()["selection_config"])
+            for row in rows:
+                row["_phase_load_compatible"] = compatible
             # Retained pre-upgrade history may survive refresh backoff. Recompute
             # before slicing, using the complete supplied week sequence.
             self._couple_weekly_acwr(rows)
@@ -14285,8 +14603,7 @@ class IntervalsSync:
         Severity levels: "info" → "warning" → "alarm"
         Empty array = green light.
         
-        Monotony alerts use effective_monotony (primary sport when multi-sport
-        detected) to avoid false positives from cross-training TSS floor inflation.
+        Monotony alerts use only the additive combined main-sport diagnostic.
         """
         alerts = []
         
@@ -14339,17 +14656,14 @@ class IntervalsSync:
                     "readiness_eligible": False
                 })
         
-        # --- Monotony Alerts (with deload context + multi-sport awareness) ---
-        # Use effective_monotony for alert thresholds. When multi-sport training
-        # is detected and primary sport monotony is lower than total, the effective
-        # value reflects the actual training load variation of the main modality.
+        # --- Monotony Alerts (same selected set for acute/chronic context) ---
+        main_monotony = derived_metrics.get("monotony_main_sports") or {}
+        effective_monotony = (main_monotony.get("value")
+                             if main_monotony.get("status") == "available" else None)
         if effective_monotony is not None:
-            deload_context = self._detect_deload_context(tss_7d_total, tss_28d_total)
+            deload_context = main_monotony.get("deload_context")
 
-            # Build context string for multi-sport cases
-            multi_sport_note = ""
-            if is_multi_sport and primary_sport_monotony is not None and monotony is not None and primary_sport_monotony < monotony:
-                multi_sport_note = f" (total monotony {monotony} inflated by multi-sport training; {primary_sport} monotony {primary_sport_monotony} used for alerting)"
+            multi_sport_note = " (combined main sports: " + ", ".join(main_monotony["sports"]) + ")"
 
             if effective_monotony >= 2.5:
                 if deload_context:
@@ -14394,6 +14708,10 @@ class IntervalsSync:
                         "tier": 2
                     })
         
+        for alert in alerts:
+            if alert["metric"] == "monotony":
+                alert.update(basis="main_sports", sports=list(main_monotony["sports"]))
+
         # --- Strain Alerts ---
         if strain is not None and strain > 3500:
             alerts.append({
@@ -15390,8 +15708,13 @@ class IntervalsSync:
                 previous_phase=prev_phase,
                 today=weekly_180d[i]["week_start"],
                 is_backfill=True,
+                load_activities=all_activities,
             )
             weekly_180d[i]["phase_detected"] = result["phase"]
+            weekly_180d[i]["phase_load_basis"] = self._pack_phase_load(result["basis"]["main_sport_load"])
+        if weekly_180d:
+            weekly_180d[-1]["phase_load_basis"] = self._pack_phase_load(self._main_phase_load(
+                all_activities, weekly_180d[-4:], now.strftime("%Y-%m-%d")))
         
         # === MONTHLY TIERS ===
         monthly_tiers = {}
@@ -15438,6 +15761,7 @@ class IntervalsSync:
             "daily_90d": daily_90d,
             "weekly_180d": weekly_180d,
             "report_intensity_schema": self._report_intensity_schema(),
+            "phase_load_schema": self._phase_load_schema(),
             "report_intensity_season": self._report_pack(self._report_season_intensity(
                 all_activities, weekly_180d, newest), ready=True),
             "fun_facts_power": fun_facts_power,
@@ -15886,6 +16210,7 @@ class IntervalsSync:
                 "z4_plus_pct": round((z4_plus_time / total_zone_time) * 100, 1) if total_zone_time > 0 else None,
                 "hard_days": hard_days,
                 "longest_ride_hours": round(longest_ride / 3600, 2),
+                "hard_days_coverage": self._hard_days_coverage(_week_acts),
                 "avg_feel": round(statistics.mean(week_feel), 1) if week_feel else None,
                 "feel_count": len(week_feel) if week_feel else 0,
                 "avg_rpe": round(statistics.mean(week_rpe), 1) if week_rpe else None,
@@ -15898,6 +16223,9 @@ class IntervalsSync:
                     ),
                 },
                 "monotony": week_monotony,
+                "monotony_main_sports": self._weekly_main_monotony(
+                    report_activities, current.strftime("%Y-%m-%d"),
+                    week_end.strftime("%Y-%m-%d")),
                 "intensity_basis_breakdown": intensity_basis_counts if hard_days > 0 else None,
                 "acwr": None,  # computed in post-pass below
                 "phase_detected": None,  # populated by _detect_phase_v2

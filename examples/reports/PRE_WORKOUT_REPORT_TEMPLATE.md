@@ -29,7 +29,8 @@ Ramp Rate: [X.XX]
 Load/Recovery: [X.X] (tolerance [X.X]); [context note if near edge]
 Durability: [X.XX]% 7d mean([X]) ([trend])
 EF: [X.XX] 7d mean([X]) ([trend])
-Monotony: [X.XX] ([primary sport] [X.XX], total [X.XX]); [note]
+Monotony ([supplied main sports]): [supplied combined value]; [material context]
+Hard days this week: [count with missing-zone-day coverage, or unknown]
 
 Polarization ([sport], [basis], [covered/period weeks; covered/sport sessions]): Z1+Z2 [XX]%, Z3 [X]%, Z4+ [X]%; [Classification] (PI: [X.XX])
 TID 28d ([sport], [basis], [coverage]): [Classification] (PI: [X.XX]); drift: [shifting/acute_depolarization] [only if not consistent]
@@ -124,7 +125,8 @@ Repeat intensity lines for every selected sport and actual basis/mapping, with c
 | Phase | Include only when `phase_detection.confidence` is "high" or "medium". Omit when "low" or phase is null |
 | Weather | Outdoor rides/runs only. Use the shared [Point-weather location](../../SECTION_11.md#point-weather-location) rule: route data for the session takes precedence over any home location for that session's weather. For a separate point forecast, use an explicit current-chat athlete statement `(you said)` first, then `athlete_profile.location` in the current `latest.json` `(from Intervals.icu)` as the default, then the current official dossier's Home region `(from dossier)` only when `athlete_profile.location` is null/empty. Always show the place and source. The chat override is valid only for that conversation, never from memory or earlier chats; heartbeat configuration is not a weather-location source. If something indicates the athlete is elsewhere and the location is unresolved, omit weather or ask. City-level text requires [Open-Meteo geocoding](../agentic/EXTERNAL_APIS.md#geocoding-for-point-weather); ambiguity or failure means unavailable with the reason, never a guess or a fallback to a lower-priority location. With no location in any source, say "A home forecast isn't available: no home location. Add your city/country to your Intervals.icu athlete profile, or a Home region in your dossier." Actual weather-fetch capability is still required |
 | Prepare (weather) | Include only if actionable (e.g., dress warm, indoor day). When forecast triggers heat stress Tier 1+: Tier 1: note hydration emphasis. Tier 2: specify session modification per Environmental Conditions Protocol session-type rules (e.g., "Threshold intervals planned: keep power targets, consider reducing from 4×8min to 3×8min"). Tier 3: recommend reschedule or endurance-only. See **Environmental Conditions Protocol** in SECTION_11.md for tier definitions and session-type rules. |
-| Monotony | Include **only** if > 2.3. Omit entirely when normal |
+| Monotony | Use derived_metrics.monotony_main_sports and its supplied sports/interpretation/context. Include the value **only** if > 2.3; omit when normal. If materially unavailable, give a short reason without substituting legacy total or primary values |
+| Hard days | Use derived_metrics.hard_days_this_week with hard_days_coverage for the configured current week. Partial coverage: e.g. "Hard days: 2 (1 day without zone data)". Unknown or missing coverage: say unknown, never a bare 0. no_activities means no observed activities, not proven rest. Do not reclassify days |
 | Durability | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
 | EF | Include if qualifying sessions exist. Omit if 0 qualifying sessions in 7d |
 | TID 28d + drift | Use derived_metrics.report_intensity_28d and capability.report_intensity_comparison, matched by sport/basis/mapping with coverage read from both ready blocks. Include only supported observed-session shifting/acute_depolarization; omit for consistent, partial or unavailable evidence. Retain unknown-fetch limits |
