@@ -1,7 +1,5 @@
 # Manual JSON Export
 
-Updated exports add period-local multisport report intensity with separate power/HR lines and coverage, using the existing delivery files. Historical weekly/monthly and Season blocks appear on normal history refresh; missing new blocks remain unavailable. Pace-only sports can qualify but have zones unavailable. No override is required; the optional explicit producer configuration is described under [Report intensity source](../../SECTION_11.md#report-intensity-source). Activity zone_reference and refresh gates are unchanged.
-
 `interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 Export Intervals.icu data locally for different time ranges.

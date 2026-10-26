@@ -64,6 +64,8 @@ For fallback data, the single final attribution names the actual provider: "Weat
 | [7_DAY_REPORT_EXAMPLES.md](7_DAY_REPORT_EXAMPLES.md) | 2 synthetic example 7-day reports |
 | [28_DAY_REPORT_TEMPLATE.md](28_DAY_REPORT_TEMPLATE.md) | Template structure for 28-day reports (no data) |
 | [28_DAY_REPORT_EXAMPLES.md](28_DAY_REPORT_EXAMPLES.md) | 2 synthetic example 28-day reports |
+| [SEASON_REPORT_TEMPLATE.md](SEASON_REPORT_TEMPLATE.md) | Template structure for season reports (no data) |
+| [SEASON_REPORT_EXAMPLES.md](SEASON_REPORT_EXAMPLES.md) | Synthetic season examples |
 | [WEATHER_REPORT_TEMPLATE.md](WEATHER_REPORT_TEMPLATE.md) | On-request five-day planned-route weather |
 | [WEATHER_REPORT_EXAMPLES.md](WEATHER_REPORT_EXAMPLES.md) | Synthetic forecast, outlook and missing-data examples |
 

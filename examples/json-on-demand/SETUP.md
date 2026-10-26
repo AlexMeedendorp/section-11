@@ -10,8 +10,6 @@ Trigger a fresh Intervals.icu sync from your phone or browser, then download the
 
 ## Overview
 
-Updated exports add period-local multisport report intensity with separate power/HR lines and coverage, using the existing delivery files. Historical weekly/monthly and Season blocks appear on normal history refresh; missing new blocks remain unavailable. Pace-only sports can qualify but have zones unavailable. No override is required; the optional explicit producer configuration is described under [Report intensity source](../../SECTION_11.md#report-intensity-source). Activity zone_reference and refresh gates are unchanged.
-
 Date-only/exact-midnight workouts use the labelled 10:00 local default. Optional repository variables are set under **Settings > Secrets and variables > Actions > Variables**: `SECTION11_ROUTE_WEATHER=0` disables weather, and `SECTION11_ROUTE_WEATHER_DEFAULT_START=09:30` chooses a strict local HH:MM default. Unset/empty means on and 10:00; an invalid nonempty start makes assumed-departure weather unavailable. The shared workflow passes both settings, with details in [Optional route-weather variables](../json-auto-sync/SETUP.md#optional-route-weather-variables). The AI asks for the actual start or asks you to set it in Intervals.icu. New points/hours can fetch on the next user-triggered sync, subject to request limits and failure/provider backoff. No extra export/upload step is required. See [departure handling](../../README.md#route-weather-departure).
 
 Uses the same GitHub Actions workflow as auto-sync, but without the cron schedule. You tap a link in your repo's README to trigger a sync, and download the resulting files as a ZIP artifact from the completed run.

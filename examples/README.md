@@ -23,7 +23,7 @@ Working implementations and reference documentation for Section 11 integrations.
 
 ### Option A: Automated Sync (Recommended for web chat)
 
-Best for: Always-fresh data via GitHub, zero maintenance after setup.
+Best for: Scheduled data refresh via GitHub, with occasional manual sync.py updates.
 
 → [json-auto-sync/SETUP.md](json-auto-sync/SETUP.md)
 
@@ -35,7 +35,7 @@ Best for: One-off exports, different time ranges, no GitHub needed.
 
 ### Option C: Local Automated Sync
 
-Best for: Agentic platforms (OpenClaw, Claude Code, Cowork, Hermes, etc.) whose runtime can reach your data directory; where it cannot, the AI reads a cloud-synced copy via connector. Always-fresh data, no GitHub needed. See [Privacy & Security](../README.md#privacy--security).
+Best for: Agentic platforms (OpenClaw, Claude Code, Cowork, Hermes, etc.) whose runtime can reach your data directory; where it cannot, the AI reads a cloud-synced copy via connector. Scheduled data refresh, no GitHub needed. See [Privacy & Security](../README.md#privacy--security).
 
 → [json-local-sync/SETUP.md](json-local-sync/SETUP.md)
 
@@ -49,14 +49,14 @@ Best for: Phone or browser users who want fresh data without a schedule or local
 
 ## Shared Files
 
-Both methods use the same `sync.py` script and produce these files:
+All four methods use the same `sync.py` script and produce these files:
 
 | File | Purpose | Auto-created |
 |------|---------|--------------|
 | `latest.json` | Current 7-day training data for AI consumption | Yes |
 | `history.json` | Longitudinal data: daily (90d), weekly (180d), monthly (3y) | Yes |
 | `intervals.json` | Per-interval segment data for recent structured sessions | Yes |
-| `routes.json` | Route/terrain data for events with GPX/TCX attachments | When attachments exist |
+| `routes.json` | Route/terrain data for events with GPX/TCX attachments | Every successful sync (`events` may be `[]`) |
 | `saved_workouts.json` | Read-only mirror of the athlete's Intervals.icu saved workouts | Every sync (refreshed on its own 6h throttle) |
 | `ftp_history.json` | FTP tracking for Benchmark Index | Yes |
 | `archive/` | Daily UTC snapshots of `latest.json`, overwritten by later successful runs that day (GitHub workflow only, scheduled or Sync Now) | Yes |
@@ -176,7 +176,7 @@ Pre-calculated values for Section 11 compliance: AI should use these, not calcul
 | `grey_zone_percentage` | Z3 time %: minimize in polarized training |
 | `quality_intensity_percentage` | Z4+ time %: target ~20% |
 | `easy_time_ratio` | Easy time ratio: target ~0.80 |
-| `consistency_index` | Plan adherence (completed/planned) |
+| `consistency_index` | Planned-date match ratio (matched dates / planned dates), not execution adherence |
 | `phase_detected` | Auto-detected: Build, Base, Peak, Taper, Deload, Recovery, Overreached, null |
 | `phase_detection` | Full phase detection object: phase, confidence, reason_codes, basis (dual-stream), phase_duration_weeks |
 | `benchmark_indoor` / `benchmark_outdoor` | 8-week FTP progression |

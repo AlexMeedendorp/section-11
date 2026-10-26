@@ -57,9 +57,9 @@ All report types share these formatting principles:
 | File | Description |
 |------|-------------|
 | `PRE_WORKOUT_REPORT_TEMPLATE.md` | Pre-workout briefing template |
-| `PRE_WORKOUT_REPORT_EXAMPLES.md` | 4 anonymized pre-workout examples |
+| `PRE_WORKOUT_REPORT_EXAMPLES.md` | Pre-workout examples |
 | `POST_WORKOUT_REPORT_TEMPLATE.md` | Post-workout analysis template |
-| `POST_WORKOUT_REPORT_EXAMPLES.md` | 4 anonymized post-workout examples |
+| `POST_WORKOUT_REPORT_EXAMPLES.md` | Post-workout examples |
 | `7_DAY_REPORT_TEMPLATE.md` | 7-day report template |
 | `7_DAY_REPORT_EXAMPLES.md` | 2 synthetic 7-day examples |
 | `28_DAY_REPORT_TEMPLATE.md` | 28-day report template |

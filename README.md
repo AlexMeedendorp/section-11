@@ -133,7 +133,7 @@ Cowork is a desktop app that can read files directly from your filesystem.
 ### Gemini CLI
 
 1. Install: `npm install -g @google/gemini-cli` (or `npx @google/gemini-cli`)
-2. Clone your data repo locally; Gemini CLI has full filesystem access
+2. Clone your data repo locally and verify that Gemini CLI can read the required files
 
 ### Grok Bot (experimental)
 

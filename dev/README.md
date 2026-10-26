@@ -150,7 +150,7 @@ directory.
 
 **Shared helpers live in `_harness.py`.** The loader, the `NetworkBlocked` type,
 the verb-seam installer and restorer, and the `RefuseEverything` object-seam
-sentinel are shared by all six modules. There is no single guard installer,
+sentinel are shared by the test modules that use them. There is no single guard installer,
 because the two seams are not the same mechanism: the verb seam swaps named
 attributes on a real module and restores them, while the object seam replaces one
 lazily-bound object with `RefuseEverything` and assigns the saved original back. The leading underscore keeps the file outside
