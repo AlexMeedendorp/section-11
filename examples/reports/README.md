@@ -36,7 +36,7 @@ Post-workout duration displays round to whole minutes, while eligibility gates r
 
 **Season reports** use completed configured calendar weeks: Position, phase cycles ending at Deload (null weeks separate), Volume, Fitness with coupled ACWR known coverage, Intensity with dated half averages, matched-month YoY with prior values in brackets, non-empty Notable, season fun facts and Interpretation.
 
-All three use bold dated headers, local Data updated, blank-line groups and one labelled fact per line. Means say avg with window; omit missing/zero-only lines and retain partial/stale coverage. Fun facts precede Interpretation, with equivalents inline from a clear dossier bottle statement or documented banana fallback. Peaks appear in 7-day/Season fun facts; Most work in a week appears only in 28-day/Season.
+All three use bold dated headers, local Data updated, blank-line groups and one labelled fact per line. Means say avg with window; omit missing/zero-only lines and retain partial/stale coverage. Fun facts precede Interpretation for each period-selected eligible sport; power, work and equivalents remain cycling-only, with equivalents inline from a clear dossier bottle statement or documented banana fallback. Peaks appear in 7-day/Season fun facts; Most work in a week appears only in 28-day/Season.
 
 Permanent request aliases: "weekly report" means 7-day report; "block report" means 28-day report. The four old template/example paths remain managed pointers until the first release after 31 December 2026. Update personal instructions to the new filenames. The configured week start still controls history, Season, phase and planned-week features.
 

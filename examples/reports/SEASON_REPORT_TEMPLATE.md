@@ -61,7 +61,7 @@ RHR: [month avg.] ([prior])
 **Notable**
 [Only non-empty supported lines: FTP changes, data gaps, A-races, next A-race, deviation]
 
-**Fun facts (cycling, descriptive)**
+**Fun facts ([sport], descriptive)**
 [Groups below, with Peaks and Most work in a day/week]
 
 **Interpretation**
@@ -83,7 +83,7 @@ Repeat intensity lines for every selected sport and actual basis/mapping, with c
 - Additional 2y/3y rows need material context: hours/TSS >=15%, CTL >=3 points or zone share >=5 percentage points. These are selection gates, not extra difference/% display lines. A missing/zero prior denominator does not create a percentage.
 - Year-comparison intensity and longest sessions use each matched month's report_intensity selection independently and show the union of qualifying sports. Longest values come from that month's longest_session_by_sport under compatible longest_session_schema; pair identical sports only, retain missing/not-selected sides as unavailable, and never sum duplicate monthly tiers. Pair only identical sport, actual basis and mapping_version under compatible file-level rule_version/selection_config, with coverage read from both ready blocks. An absent sport/block or incompatible mapping is unavailable, never zero or a cross-sport match. Preserve a supported zero zone share. Resolve the first report_intensity block for that month in monthly_1y, monthly_2y, monthly_3y; overlapping later rows omit it. An unresolved month is unavailable; never sum tiers. Weekly legacy primary_sport does not select Season intensity.
 - Notable includes only non-empty in-window ftp_timeline, data_gaps, completed A-races, supplied next A-race and a supported deviation pattern. Omit "none" placeholders. Goal auditing stays deferred.
-- Fun facts source: history.json.fun_facts.season. Require its sport_identity_rule marker and start/end/completed_weeks matching chosen weeks; otherwise unavailable. Keep partial/stale power coverage. Most work in a week is a completed configured calendar week. Peaks belong here; there is no Best efforts block in Season.
+- Fun facts sources: history.json.fun_facts.season for cycling and sport_fun_facts.season.sports for the other four fact sports, gated by history.report_intensity_season.selected. Require compatible identity/selection markers and start/end/completed_weeks matching chosen weeks as defined in [Descriptive Period Facts](../../SECTION_11.md#descriptive-period-facts); otherwise unavailable. Keep history freshness and partial/stale power coverage. Most work in a week is a completed configured calendar week. Peaks belong here; there is no Best efforts block in Season.
 
 ## Shared report rules
 
@@ -93,16 +93,20 @@ Use supplied display values and formatted durations. Seconds-only durations may 
 
 ### Fun facts contract
 
-Place **Fun facts (cycling, descriptive)** immediately before **Interpretation**. Read the report-specific period object, never reconstruct facts from weekly compact caches. Observations are not tests, FTP/zone evidence or readiness evidence. Retain partial/stale coverage, date, activity name (ID if absent) and separate history freshness.
+Place **Fun facts ([sport], descriptive)** blocks immediately before **Interpretation**, in cycling, running, swimming, Nordic skiing, rowing order. Show only those sports selected by this report's own period selection. Read supplied period facts, never reconstruct from weekly compact caches. Missing or incompatible selection/facts are unavailable; an empty selection is authoritative. Observations are not tests, FTP/zone evidence or readiness evidence. Retain partial/stale coverage, date, activity name (ID if absent) and separate history freshness.
 
-Use these blank-line groups, omitting unavailable components:
+For cycling, use these blank-line groups, omitting unavailable components:
 1. Max power (1 s), with date/name; Max HR, with date/name.
-2. Longest ride, with date/name/duration and available distance; Distance for each nonzero environment; Climbing for each nonzero environment.
+2. Longest ride, with date/name/duration and available distance; Distance ridden for each nonzero environment; Climbed for each nonzero environment.
 3. Peaks: one line each for 5 s, 1 min, 5 min, 20 min and 60 min, with date/name. Include only in 7-day and Season fun facts; the 28-day report has its separate Best efforts section.
 4. Time in the saddle.
 5. Work with its energy equivalent inline; Carbs used with its carbohydrate equivalent inline; Most work in a day with date, kJ and same-day carbs. Add Most work in a week only in 28-day and Season, retaining the supplied dates.
 
-Use only Indoor and Outdoor as environment labels, solely from the emitted fact environment or grouping. Never infer environment from names, source apps or platforms. Any indoor distance, speed or climbing outside the split also carries the indoor label. Format split facts as `Distance: 120 km (indoor)` and `Distance: 80 km (outdoor)`. Unknown environment is not Outdoor; state missing coverage when material. Use metres with explicit m if display conversion is unavailable. Omit a zero climbing side.
+For running, swimming, Nordic skiing and rowing, use three blank-line groups: Max HR with date/name; longest run/swim/Nordic session/row with date/name/duration and available distance, then distance and supported outdoor climbing; Running time / Swimming moving time / Nordic skiing time / Rowing time. Longest sessions belong here only in 7-day/28-day reports; Season keeps them in Volume. No power, work, carbs or equivalents belong to these four sports.
+
+Use Distance ridden / Distance run / Distance swum / Distance skied / Distance rowed, and Climbed. Typical lines fit 40 characters: `Distance ridden: 80 km (outdoor)`, `Distance run: 18 km (outdoor)`, `Distance swum: 2 km (pool/other)`, `Distance skied: 18 km (indoor)`, `Distance rowed: 24 km (indoor)`, `Climbed: 600 m (outdoor)`. Use only supplied settings: indoor, outdoor, open water, pool/other, snow, roller, unknown. Generic Swim is pool/other, never a verified pool; OpenWaterSwim is open water unless supplied as unknown. Settings come solely from the emitted fact environment. Never infer environment from names or pool-length fields. Keep indoor, snow, roller and outdoor distance separate. Label a longest session's distance with its setting too. Any indoor distance, speed or climbing outside the split must also carry (indoor). Unknown is never outdoor. Use metres with explicit m if display conversion is unavailable; omit zero-only climbing.
+
+Show observed partial values with coverage on the same fact line, for example `Max HR: 158 bpm, 10 Jul, Lake swim (2 of 3 sessions)` or `Distance rowed: 24 km (indoor, 2 of 3 sessions)`. Keep coverage and attribution when a line wraps. Duration/longest and HR counts use coverage against activity_count; distance/ascent counts use their own setting's activity_count. Zero coverage omits the metric; missing is never zero. Duplicate-conflicting metrics remain unavailable. Cycling retains its existing counts and partial/stale power coverage.
 
 A clear current official dossier statement of positive grams carbohydrate per bottle is sufficient, whether in prose or the Tested training fuel table. For example, "My training bottle contains 90 g carbohydrate" establishes grams per bottle without needing a table. Never infer grams from bottle volume, a product name or a serving without a per-bottle statement. Ambiguous/conflicting statements do not establish a bottle.
 

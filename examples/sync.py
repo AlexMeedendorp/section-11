@@ -4,6 +4,10 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.163 - Fun facts per main sport: optional sport_fun_facts for selected running,
+  swimming, Nordic skiing and rowing (max HR, longest session, time, distance per setting,
+  outdoor climbing); no extra requests; cycling facts unchanged. Pairs with protocol v11.99.
+
 Version 3.162 - Multi-sport corrections: sport identity for every Intervals type (nine
   endurance sports; everyday movement excluded from selection), cycling-only durability,
   per-sport curve deltas, longest session per sport, main-sport strain and TID alerts.
@@ -4631,7 +4635,7 @@ class IntervalsSync:
     HISTORY_FILE = "history.json"
     UPSTREAM_REPO = "CrankAddict/section-11"
     CHANGELOG_FILE = "changelog.json"
-    VERSION = "3.162"
+    VERSION = "3.163"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -5868,6 +5872,135 @@ class IntervalsSync:
                     chunk=(datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(we, "%Y-%m-%d")).days // 7 + 1))
             result["biggest_week"] = self._fact_max(buckets, "work_kj")
         return result
+
+    @staticmethod
+    def _sport_fact_environment(act, sport):
+        """Structured setting only; machine and outdoor distances stay separate."""
+        kind = act.get("type")
+        flags = [act.get(key) for key in ("trainer", "indoor")]
+        positive = any(value is True for value in flags)
+        malformed = any(value is not None and not isinstance(value, bool) for value in flags)
+        if sport == "swimming":
+            if kind == "OpenWaterSwim":
+                return "unknown" if positive or malformed else "open_water"
+            return "pool_other"
+        if kind in ("VirtualRun", "VirtualSki", "VirtualRow") or positive:
+            return "indoor"
+        if malformed:
+            return "unknown"
+        if sport == "nordic_skiing":
+            return "roller" if kind == "RollerSki" else "snow"
+        return "outdoor"
+
+    def _sport_fact_rows(self, activities, start, end):
+        """Preserve selection identities; reconcile extra metrics before collapsing IDs."""
+        observations, _ = self._report_observations(activities, start, end)
+        originals = defaultdict(list)
+        for act in activities:
+            if isinstance(act, dict) and act.get("id") not in (None, ""):
+                originals[str(act["id"])].append(act)
+        rows = defaultdict(list)
+        for act in observations:
+            sport = self._report_sport(act.get("type"))
+            if sport not in ("running", "swimming", "nordic_skiing", "rowing"):
+                continue
+            row = {"activity_id": None, "activity_name": None,
+                   "date": act["start_date_local"][:10], "activity_type": act["type"],
+                   "environment": "unknown", "moving_time_s": None,
+                   "distance_m": None, "elevation_m": None, "max_hr": None}
+            rows[sport].append(row)
+            if act.get("_report_conflict") or act.get("id") in (None, ""):
+                continue
+            group = originals[str(act["id"])]
+            # A malformed duplicate date must not disappear from the fact check.
+            if any(a.get("start_date_local") != act["start_date_local"] or
+                   a.get("type") != act["type"] for a in group):
+                continue
+
+            def agreed(values):
+                return values[0] if values and all(v == values[0] for v in values) else None
+
+            for dest, key in (("moving_time_s", "moving_time"), ("distance_m", "distance"),
+                              ("elevation_m", "total_elevation_gain")):
+                row[dest] = agreed([self._fact_number(a.get(key)) for a in group])
+            hrs = []
+            for original in group:
+                values = {self._fact_number(original.get(key)) for key in
+                          ("max_heartrate", "max_hr", "max_heart_rate", "maxHr", "icu_max_hr")}
+                values.discard(None)
+                values.discard(0)
+                hrs.append(next(iter(values)) if len(values) == 1 else None)
+            row["max_hr"] = agreed(hrs)
+            names = [a.get("name") if isinstance(a.get("name"), str) else None for a in group]
+            settings = [self._sport_fact_environment(a, sport) for a in group]
+            row.update(activity_id=str(act["id"]), activity_name=agreed(names),
+                       environment=agreed(settings) or "unknown")
+        return rows
+
+    def _sport_period_facts(self, activities, selection, season=False):
+        """Reduce observations for the supplied ready selection; never reselect sports."""
+        if not isinstance(selection, dict) or not isinstance(selection.get("selected"), dict):
+            return None
+        start, end = selection.get("start"), selection.get("end")
+        if (not isinstance(start, str) or not isinstance(end, str) or
+                self._fact_date(start) != start or self._fact_date(end) != end or start > end):
+            return None
+        result = {"start": start, "end": end, "sports": {}}
+        if season:
+            result["completed_weeks"] = selection["weeks"]
+        sports = [s for s in ("running", "swimming", "nordic_skiing", "rowing")
+                  if s in selection["selected"]]
+        if not sports:
+            return result
+        groups = self._sport_fact_rows(activities, start, end)
+
+        def total(rows, key):
+            values = [r[key] for r in rows if r[key] is not None]
+            return round(math.fsum(values), 3) if values else None
+
+        def winner(rows, key):
+            valid = [r for r in rows if r[key] is not None]
+            return min(valid, key=lambda r: (-r[key], r["date"], r["activity_id"],
+                                            r["activity_type"])) if valid else None
+
+        def identity(row):
+            return {key: row[key] for key in
+                    ("activity_id", "activity_name", "date", "activity_type")}
+
+        for sport in sports:
+            rows = groups[sport]
+            hr, longest = winner(rows, "max_hr"), winner(rows, "moving_time_s")
+            facts = {"activity_count": len(rows), "moving_time_s": total(rows, "moving_time_s"),
+                     "coverage": {key: sum(r[key] is not None for r in rows)
+                                  for key in ("moving_time_s", "max_hr")},
+                     "max_hr": {**identity(hr), "bpm": hr["max_hr"]} if hr else None,
+                     "distance_elevation": {}}
+            if not season:
+                facts["longest_session"] = ({**identity(longest),
+                    **{key: longest[key] for key in ("moving_time_s", "distance_m", "environment")}}
+                    if longest else None)
+            for setting in ("outdoor", "indoor", "open_water", "pool_other", "snow", "roller", "unknown"):
+                group = [r for r in rows if r["environment"] == setting]
+                if not group:
+                    continue
+                bucket = {"activity_count": len(group), "distance_m": total(group, "distance_m"),
+                          "distance_activities": sum(r["distance_m"] is not None for r in group)}
+                if (sport == "running" and setting == "outdoor" or
+                        sport == "nordic_skiing" and setting in ("snow", "roller")):
+                    bucket.update(elevation_m=total(group, "elevation_m"),
+                                  elevation_activities=sum(r["elevation_m"] is not None for r in group))
+                facts["distance_elevation"][setting] = bucket
+            result["sports"][sport] = facts
+        return result
+
+    def _build_sport_fun_facts(self, activities, selections):
+        """Optional sibling only; legacy cycling objects and persistence stay untouched."""
+        periods = {key: self._sport_period_facts(activities, block, season=key == "season")
+                   for key, block in selections.items()}
+        if not any(block and block["sports"] for block in periods.values()):
+            return None
+        return {"schema_version": 1, "sport_identity_rule": self.SPORT_IDENTITY_RULE,
+                "selection_rule": self.REPORT_INTENSITY_RULE, **periods}
 
     def _report_wellness(self, wellness, start, end, athlete_units=None):
         """Observed local-day statistics, not the seven-day display slice."""
@@ -10209,6 +10342,12 @@ class IntervalsSync:
             "rolling_28d": self._build_fun_facts(
             data["recent_activities"], (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=27)).strftime("%Y-%m-%d"),
             today, formatted=True, include_week=True, raw_activities=activities_extended)}
+
+        sport_facts = self._build_sport_fun_facts(activities_extended, {
+            "rolling_7d": data["derived_metrics"]["report_intensity_7d"],
+            "rolling_28d": data["derived_metrics"]["report_intensity_28d"]})
+        if sport_facts is not None:
+            data["sport_fun_facts"] = sport_facts
 
         # Body weight signal (v3.112) — gated W/kg + weekly weight trend.
         # None when no field qualifies; AI omits the report section silently.
@@ -16100,6 +16239,11 @@ class IntervalsSync:
             "acwr_definition": "coupled_7_28",
             **monthly_tiers
         }
+
+        sport_facts = self._build_sport_fun_facts(
+            all_activities, {"season": history["report_intensity_season"]})
+        if sport_facts is not None:
+            history["sport_fun_facts"] = sport_facts
 
         # The complete season summary above is retained. Only attributed power
         # maxima need persistence between refreshes; other weekly facts are

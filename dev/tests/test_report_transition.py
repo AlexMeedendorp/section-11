@@ -307,13 +307,13 @@ class ReportContracts(unittest.TestCase):
     def test_full_example_fact_inventory_and_equivalent_arithmetic(self):
         for stem in ("7_DAY", "28_DAY", "SEASON"):
             block = self.reports(stem)[0]
-            for label in ("Max power (1 s):", "Max HR:", "Longest ride:", "Distance:", "Climbing:",
+            for label in ("Max power (1 s):", "Max HR:", "Longest ride:", "Distance ridden:", "Climbed:",
                           "Work:", "Carbs used:", "Most work in a day:", "Time in the saddle:"):
                 self.assertIn(label, block)
             self.assert_equivalents(block)
             peaks = re.findall(r"^Peak (.*?):", block, re.M)
             self.assertEqual(peaks, [] if stem == "28_DAY" else ["5 s", "1 min", "5 min", "20 min", "60 min"])
-            self.assertNotRegex(block, r"Climbing: 0\b")
+            self.assertNotRegex(block, r"Climbed: 0\b")
         banana = self.reports("7_DAY")[0]
         for bad in (banana.replace("about 9.3 medium", "about 10.0 medium"),
                     banana.replace("about 28.6 medium", "about 30.0 medium"),

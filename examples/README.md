@@ -97,6 +97,7 @@ latest.json
 │   ├── fitness          → CTL, ATL, TSB, ramp_rate
 │   ├── thresholds       → FTP, eFTP, LTHR, W', P-max, VO2max (per-sport)
 │   └── current_metrics  → Weight, RHR, HRV, sleep, subjective state, vitals, body comp
+├── sport_fun_facts      → Optional period-selected running/swimming/Nordic/rowing facts; cycling remains in fun_facts
 ├── derived_metrics      → Section 11 calculated values (see below)
 │   ├── capability       → Durability (cycling), EF, HRRc trends + main-sport TID drift and per-sport curve deltas
 │   └── phase_detection  → Dual-stream phase detection with confidence
@@ -113,6 +114,7 @@ history.json
 ├── data_gaps            → Detected gaps in training data
 ├── summaries            → Period aggregates (90d, 180d, 1y, 2y, 3y)
 ├── daily_90d            → Day-by-day detail (last 90 days)
+├── sport_fun_facts      → Optional completed-week Season facts for selected running/swimming/Nordic/rowing
 ├── weekly_180d          → Week-by-week (last 180 days)
 └── monthly_1y/2y/3y     → Month-by-month (up to 3 years)
 

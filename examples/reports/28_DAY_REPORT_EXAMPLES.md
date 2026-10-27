@@ -132,10 +132,10 @@ Max power (1 s): 780 W, 25 Jun, Hill circuit
 Max HR: 179 bpm, 25 Jun, Hill circuit
 
 Longest ride: Meadow route, 28 Jun, 2h45m, 72 km (outdoor)
-Distance: 180 km (indoor)
-Distance: 330 km (outdoor)
-Climbing: 350 m (indoor)
-Climbing: 2600 m (outdoor)
+Distance ridden: 180 km (indoor)
+Distance ridden: 330 km (outdoor)
+Climbed: 350 m (indoor)
+Climbed: 2600 m (outdoor)
 
 Time in the saddle: 20h45m
 
@@ -201,3 +201,53 @@ Nordic skiing coverage: 1 active week; absence in the other chunks is not missin
 ```
 
 These describe observed sessions; activity-fetch completeness is unknown. If a sixth ski session lacks zones, show 5/6 and partial coverage without a whole-period drift claim. Keep a separate power or incompatible HR-mapping bucket if one occurs; never label the line mixed.
+
+## Selected-sport fact fragments
+
+Each independent synthetic fragment assumes its named sport is selected for this report's period and that the matching facts are compatible. Snow ascent has no observations. Rowing duration coverage is partial; a longest session's distance is its own distance. Season longest sessions remain in Volume.
+
+```
+**Fun facts (running, descriptive)**
+Max HR: 172 bpm, 12 Jul, Park loop
+
+Longest run: Park loop, 12 Jul, 1h,
+10 km (outdoor)
+Distance run: 18 km (outdoor)
+Climbed: 160 m (outdoor)
+
+Running time: 1h50m
+
+**Fun facts (swimming, descriptive)**
+Max HR: 158 bpm, 10 Jul, Lake swim
+(2 of 3 sessions)
+
+Longest swim: Lake swim, 10 Jul, 40m,
+1.8 km (open water)
+Distance swum: 2 km (pool/other)
+Distance swum: 1.8 km (open water)
+
+Swimming moving time: 1h30m
+
+**Fun facts (Nordic skiing, descriptive)**
+Max HR: 165 bpm, 11 Jul, Steady ski
+
+Longest Nordic session: Snow loop,
+12 Jul, 1h, 12 km (snow)
+Distance skied: 12 km (snow)
+Distance skied: 8 km (roller)
+Distance skied: 10 km (indoor)
+Climbed: 90 m (roller)
+
+Nordic skiing time: 2h30m
+
+**Fun facts (rowing, descriptive)**
+Max HR: 162 bpm, 12 Jul, Steady row
+
+Longest row: Steady row, 12 Jul, 1h,
+12 km (indoor), 3 of 4 sessions
+Distance rowed: 24 km
+(indoor, 2 of 3 sessions)
+Distance rowed: 6 km (outdoor)
+
+Rowing time: 2h30m (3 of 4 sessions)
+```

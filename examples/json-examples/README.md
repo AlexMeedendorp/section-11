@@ -21,6 +21,40 @@ Read the planned summary's `detail_file`, match event ID, route_ref, departure, 
 
 **These are invented data**: realistic values for a ~12h/week multi-sport athlete (cycling + rowing + walks), CTL ~65, FTP 260/270 (indoor/outdoor). Not anonymized real data.
 
+## Descriptive sport facts (synthetic fragments)
+
+Cycling stays in fun_facts. The optional top-level sport_fun_facts in latest/history holds only period-selected running, swimming, nordic_skiing and rowing, following the existing ready selections. Require schema_version 1, sport_identity_rule report_sport_identity_v2 and selection_rule endurance_10_50_week_guard_v2 with compatible report_intensity_schema (2) and matching bounds. No selected new sport in any period omits the sibling; a present empty sports map is authoritative, while a missing/null/incompatible period is unavailable. Old example files without this sibling do not supply new-sport facts.
+
+```json
+{
+  "sport_fun_facts": {
+    "schema_version": 1,
+    "sport_identity_rule": "report_sport_identity_v2",
+    "selection_rule": "endurance_10_50_week_guard_v2",
+    "rolling_7d": {
+      "start": "2026-07-08", "end": "2026-07-14",
+      "sports": {
+        "swimming": {
+          "activity_count": 2, "moving_time_s": 3300,
+          "coverage": {"moving_time_s": 2, "max_hr": 1},
+          "max_hr": {"activity_id": "sw1", "activity_name": "Lane session", "date": "2026-07-10", "activity_type": "Swim", "bpm": 156},
+          "longest_session": {"activity_id": "sw2", "activity_name": "Lake session", "date": "2026-07-12", "activity_type": "OpenWaterSwim", "moving_time_s": 1800, "distance_m": 1200, "environment": "open_water"},
+          "distance_elevation": {
+            "pool_other": {"activity_count": 1, "distance_m": 1000, "distance_activities": 1},
+            "open_water": {"activity_count": 1, "distance_m": 1200, "distance_activities": 1}
+          }
+        }
+      }
+    },
+    "rolling_28d": {"start": "2026-06-17", "end": "2026-07-14", "sports": {}}
+  }
+}
+```
+
+This fragment's independently selected 28-day sports exclude swimming. History uses season instead of rolling blocks, adds completed_weeks matching report_intensity_season.weeks and omits longest_session, which remains in Season Volume. Each sport's moving_time_s/max_hr coverage uses activity_count; each setting's distance_activities/elevation_activities uses its own activity_count. Partial observations retain values and mandatory display counts: the HR above is 156 bpm (1 of 2 sessions), not a complete-period maximum. Zero coverage is null and omitted from reports; recorded zero remains distinct. Conflicting duplicate metrics stay unavailable.
+
+Settings are outdoor/indoor/unknown for running and rowing, snow/roller/indoor/unknown for Nordic skiing, and pool_other/open_water/unknown for swimming. Report pool_other as pool/other, never a verified pool; pool_length/lengths do not classify it. Virtual types override false/null trainer; malformed flags without a positive marker mean unknown. Only outdoor running and snow/roller Nordic buckets carry elevation_m/elevation_activities. Keep settings separate. See [Descriptive Period Facts](../../SECTION_11.md#descriptive-period-facts) for identity, ties and refresh rules.
+
 ## Report intensity and zone provenance (synthetic fragments)
 
 Use report_intensity_7d / report_intensity_28d, rolling/weekly report_intensity and unique monthly blocks resolved across ordered tiers and history.report_intensity_season for period intensity. Every period selects independently. Decode report_intensity_schema (2) and display selected map keys with separate power/HR basis/mapping buckets and weeks/sessions coverage; all observed eligible sports remain stored, including nonqualifiers. Missing new history is unavailable, not a fallback to old primary or all-sport percentages; a present empty block is authoritative. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
