@@ -251,6 +251,7 @@ Walk them through:
 - A `latest.json` file should now exist in the repo root with their training data
 - A `history.json` file should also appear
 - An `intervals.json` file is written on every sync; its activity list can be empty if the athlete has no recent structured interval sessions
+- `latest.json.recent_activities[].interval_data` separates plan-match labels, gated Section 11 compliance evidence and descriptive detected intervals; see [Which interval data to use](SECTION_11.md#which-interval-data-to-use).
 - A `routes.json` file is written on every sync; its `events` list is empty unless the athlete has planned events with GPX/TCX file attachments
 - A `saved_workouts.json` file appears once the first sync completes: a read-only mirror of the athlete's Intervals.icu saved workouts
 
@@ -520,7 +521,7 @@ See `examples/agentic/README.md` for commands, workout syntax, and template mapp
 
 Route by whether the AI has a runtime filesystem at all, not by which sync method they chose. If it does (the athlete's own machine or a provider-hosted agent computer), it is an agentic session: use [`PROJECT_INSTRUCTIONS_AGENTIC.md`](PROJECT_INSTRUCTIONS_AGENTIC.md) and copy the block between the fences there into the agent's instructions. That holds even when the training data itself arrives through a connector. Only a session with no runtime filesystem uses [`PROJECT_INSTRUCTIONS_WEB.md`](PROJECT_INSTRUCTIONS_WEB.md).
 
-The agentic contract names the Workout Reference Library (`section11/examples/workout-library/WORKOUT_REFERENCE.md`, with a fetch fallback) but not the report templates. Where the agent can actually reach them (a provider-hosted computer often cannot), tell them to point it at `section11/examples/reports/` as well.
+The agentic contract names the Workout Reference Library and report templates. Verify that the agent can read the required files at `section11/examples/workout-library/WORKOUT_REFERENCE.md` and `section11/examples/reports/`; a path on the athlete's machine does not establish access from another runtime.
 
 ---
 

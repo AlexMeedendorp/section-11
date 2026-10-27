@@ -69,26 +69,26 @@ class ReportProducers(unittest.TestCase):
                 self.assertTrue(row["plan_pairing"]["duration"]["within_tolerance"])
                 self.assertFalse(row["plan_pairing"]["targets_intensity"])
                 if sport in ("Walk", "Hike"):
-                    self.assertEqual(row["structure_summary"]["issues"], ["sport_out_of_scope"])
+                    self.assertEqual(row["interval_data"]["plan_match"]["issues"], ["sport_out_of_scope"])
 
     def test_old_pairing_refresh_and_assessment_retention(self):
         prior = {"s1": {"structure_summary": {"status": "no_plan"}}}
         row = self.formatted(prior=prior)
-        self.assertEqual(row["structure_summary"]["status"], "no_steps")
+        self.assertEqual(row["interval_data"]["plan_match"]["status"], "no_steps")
         self.assertTrue(row["plan_pairing"]["duration"]["within_tolerance"])
         structured = dict(self.event, workout_doc={"steps": [{"duration": 5400, "power": {"value": 60, "units": "%ftp"}}]})
         row = self.formatted(event=structured)
-        row["structure_summary"].update(status="followed")
+        row["interval_data"]["plan_match"].update(status="followed")
         refreshed = self.formatted(event=dict(structured, name="Renamed"), prior={"s1": row})
-        self.assertEqual(refreshed["structure_summary"]["plan"]["name"], "Renamed")
-        self.assertTrue(refreshed["structure_summary"]["assessment_retained"])
+        self.assertEqual(refreshed["interval_data"]["plan_match"]["plan"]["name"], "Renamed")
+        self.assertTrue(refreshed["interval_data"]["plan_match"]["assessment_retained"])
         changed = dict(structured, workout_doc={"steps": [{"duration": 5400, "power": {"value": 95, "units": "%ftp"}}]})
         refreshed = self.formatted(event=changed, prior={"s1": row})
-        self.assertEqual(refreshed["structure_summary"]["status"], "not_assessed")
-        self.assertEqual(refreshed["structure_summary"]["retained_step_assessment"]["status"], "followed")
+        self.assertEqual(refreshed["interval_data"]["plan_match"]["status"], "not_assessed")
+        self.assertEqual(refreshed["interval_data"]["plan_match"]["retained_step_assessment"]["status"], "followed")
         conflict = self.formatted(event=dict(structured, paired_activity_id="other"), prior={"s1": row})
-        self.assertEqual(conflict["structure_summary"]["status"], "not_assessed")
-        self.assertIn("pairing_conflict", conflict["structure_summary"]["issues"])
+        self.assertEqual(conflict["interval_data"]["plan_match"]["status"], "not_assessed")
+        self.assertIn("pairing_conflict", conflict["interval_data"]["plan_match"]["issues"])
 
     def test_z3_both_bases_plan_intent_and_hard_day_ladder(self):
         act = dict(self.act, icu_zone_times=[{"id": "Z3", "secs": 2400}],

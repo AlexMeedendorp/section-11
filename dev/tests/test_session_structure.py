@@ -358,7 +358,7 @@ class Cache(unittest.TestCase):
             self.assertEqual((row["avg_power"], row["normalized_power"], row["decoupling"]), (200, 220, 0))
             self.assertEqual(row["display"]["elevation"], {"value": 0, "unit": "m"})
             self.assertFalse(row["has_dfa"])
-            self.assertEqual(row["structure_summary"], self.sync._structure_summary(b))
+            self.assertEqual(row["interval_data"]["plan_match"], self.sync._structure_summary(b))
             self.assertTrue(row["has_structure"])
             self.assertNotIn("session_structure", row)
             for kind in ("Walk", "Run", "VirtualRide", "Ride"):
@@ -426,9 +426,9 @@ class Placement(unittest.TestCase):
             for day in range(15, 29):
                 self.sync = self.fresh_sync()  # Only committed JSON survives each run.
                 row = self.cycle(datetime(2026, 1, 1, 12, tzinfo=timezone.utc) + timedelta(days=day))
-                self.assertEqual(row["structure_summary"]["status"], first["structure_summary"]["status"])
-                self.assertEqual(row["structure_summary"]["steps"], first["structure_summary"]["steps"])
-                self.assertTrue(row["structure_summary"]["assessment_retained"])
+                self.assertEqual(row["interval_data"]["plan_match"]["status"], first["interval_data"]["plan_match"]["status"])
+                self.assertEqual(row["interval_data"]["plan_match"]["steps"], first["interval_data"]["plan_match"]["steps"])
+                self.assertTrue(row["interval_data"]["plan_match"]["assessment_retained"])
                 self.assertFalse(row["has_structure"])
                 self.assertFalse(row["has_intervals"])
                 self.assertFalse(row["has_dfa"])
@@ -441,7 +441,7 @@ class Placement(unittest.TestCase):
         self.sync = self.fresh_sync()
         with mock.patch.object(Sync, "_fetch_activity_streams", side_effect=AssertionError("cache refetch")):
             row = self.cycle(NOW + timedelta(hours=1))
-        self.assertEqual(row["structure_summary"], first["structure_summary"])
+        self.assertEqual(row["interval_data"]["plan_match"], first["interval_data"]["plan_match"])
         self.assertTrue(row["has_structure"])
         self.assertFalse(row["has_intervals"])
         self.assertFalse(row["has_dfa"])
@@ -484,7 +484,7 @@ class Placement(unittest.TestCase):
         with mock.patch.object(Sync, "_fetch_activity_streams", side_effect=AssertionError("old fetch")):
             row = self.cycle(NOW + timedelta(days=20))
         self.assertFalse(row["has_structure"])
-        self.assertEqual(row["structure_summary"], {
+        self.assertEqual(row["interval_data"]["plan_match"], {
             "method": "plan_match_v2", "status": "not_assessed",
             "plan": {"event_id": "42", "name": None}, "issues": ["detail_unavailable"]})
 
@@ -493,7 +493,7 @@ class Placement(unittest.TestCase):
         self.event = None
         row = self.capture()
         block = self.sync._intervals_data["activities"][0]["session_structure"]
-        self.assertEqual(row["structure_summary"], {"method": "plan_match_v2", "status": "no_plan"})
+        self.assertEqual(row["interval_data"]["plan_match"], {"method": "plan_match_v2", "status": "no_plan"})
         self.assertTrue(row["has_structure"])
         self.assertEqual(len(block["thirds"]), 3)
         self.assertNotIn("plan", block)
@@ -506,14 +506,15 @@ class Placement(unittest.TestCase):
         self.assertEqual(block["bout_metrics_version"], 4)
         self.assertEqual(set(block["plan"]), {"event_id", "updated", "duration_s", "duration_source"})
         for step in block["steps"]:
-            self.assertEqual(set(step), {"target_w", "actual", "match"})
+            self.assertEqual(set(step), {"target_w", "duration_s", "actual", "match"})
+            self.assertEqual(step["duration_s"], 100)
         self.assertEqual(set(block["cache"]), {"activity_key", "event_key", "plan_key", "plan_key_version",
                                              "sampled_at", "next_refresh_at"})
-        self.assertEqual(row["structure_summary"], {"method": "plan_match_v2", "status": "followed",
+        self.assertEqual(row["interval_data"]["plan_match"], {"method": "plan_match_v2", "status": "followed",
             "plan": {"event_id": "42", "updated": "2026-01-01T09:00:00Z", "duration_s": 300,
                      "duration_source": "workout_doc.duration"},
             "steps": [[99, 100, 100, True], [99, 200, 200, True], [99, 300, 300, True]]})
-        self.assertLess(len(json.dumps(row["structure_summary"], separators=(",", ":"))), 350)
+        self.assertLess(len(json.dumps(row["interval_data"]["plan_match"], separators=(",", ":"))), 350)
 
     def test_missing_event_retains_intent_without_actuals_or_obsolete_issue(self):
         self.capture()
@@ -534,7 +535,7 @@ class Placement(unittest.TestCase):
             self.act["type"] = kind
             formatted = self.sync._format_activities([self.act], previous_latest_lookup={self.act["id"]: row})[0]
             self.assertFalse(formatted["has_structure"])
-            self.assertEqual(formatted["structure_summary"], {
+            self.assertEqual(formatted["interval_data"]["plan_match"], {
                 "method": "plan_match_v2", "status": "unknown", "issues": ["sport_out_of_scope"]})
 
 

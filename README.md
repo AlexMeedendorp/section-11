@@ -133,7 +133,7 @@ Cowork is a desktop app that can read files directly from your filesystem.
 ### Gemini CLI
 
 1. Install: `npm install -g @google/gemini-cli` (or `npx @google/gemini-cli`)
-2. Clone your data repo locally; Gemini CLI has full filesystem access
+2. Clone your data repo locally and verify that Gemini CLI can read the required files
 
 ### Grok Bot (experimental)
 
@@ -260,13 +260,13 @@ After configuration, test with:
 **Good response includes:**
 - ✅ Readiness assessment (HRV, RHR, Sleep vs 7d/28d baselines)
 - ✅ Load context (TSB, ACWR, Monotony if > 2.3)
-- ✅ Capability snapshot (durability 7d + trend, TID drift if not consistent)
+- ✅ Capability snapshot (Durability (cycling) 7d + trend, TID drift if not consistent)
 - ✅ Today's planned workout details from planned_workouts
 - ✅ Go / Modify / Skip recommendation with reasoning
 
 **Bad response:**
 - ❌ Skipping readiness check and jumping straight to workout description
-- ❌ Missing capability snapshot (durability, TID drift)
+- ❌ Missing capability snapshot (Durability (cycling), TID drift)
 - ❌ Generic "listen to your body" without referencing actual metrics
 
 ### Weather Test
@@ -463,11 +463,13 @@ The protocol is designed to work with [Intervals.icu](https://intervals.icu) as 
 
 ### Derived Metrics
 
-The sync script pre-calculates Section 11-compliant metrics so AI doesn't need to compute them. Key metrics include ACWR, Recovery Index, Monotony/Strain, Grey Zone %, Quality Intensity %, Easy Time Ratio, Benchmark Index, Phase Detection, Seiler TID, Aggregate Durability, and TID Drift.
+The sync script pre-calculates Section 11-compliant metrics so AI doesn't need to compute them. Key metrics include ACWR, Recovery Index, Monotony/Strain, Grey Zone %, Quality Intensity %, Easy Time Ratio, Benchmark Index, Phase Detection, Seiler TID, Durability (cycling), per-sport curve deltas and main-sport TID Drift; strain alarms use strain_main_sports while legacy strain remains all-sport context.
 
 Zone aggregations (TID, polarization, grey zone %) default to power zones with HR fallback. Configure `ZONE_PREFERENCE` to override per sport, e.g. `run:hr,cycling:power` for runners who prefer HR-based zone analysis. See [auto-sync setup](examples/json-auto-sync/SETUP.md) or [local sync setup](examples/json-local-sync/SETUP.md) for configuration.
 
 See [examples/README.md](examples/README.md) for the full derived metrics table and data output structure.
+
+Report intensity selects main sports independently per period and shows separate power/HR lines with covered weeks and sessions. Pace-only sports can qualify, with zones unavailable until pace mapping is supported. Legacy fields and activity zone_reference retain their meanings. New history blocks appear on normal refresh; missing blocks are unavailable. Optional report_main_sports is an explicit producer configuration, absent by default. See [Report intensity source](SECTION_11.md#report-intensity-source).
 
 ### Longitudinal History
 
@@ -479,7 +481,7 @@ The script maintains `ftp_history.json` to track indoor and outdoor FTP changes 
 
 ### Completed Session Structure
 
-`latest.json` includes `structure_summary` for recent activities: planned targets beside measured step/set power and duration. `has_structure` points to detail in `intervals.json`, retained for 14 days; the last summary survives for 28 days.
+`latest.json` includes `interval_data` per recent activity: timeline plan match, scoped compliance evidence and descriptive Intervals.icu detected intervals side by side. `has_structure` points to 14-day detail; only plan-match context survives through 28 days. See [Which interval data to use](SECTION_11.md#which-interval-data-to-use).
 
 Whole-session average power and NP are not main-set power. Unknown, no-plan and descriptive fallback differ; broad plan match does not prove formal compliance. See [Completed Session Structure](SECTION_11.md#completed-session-structure) for interpretation, freshness and limits.
 

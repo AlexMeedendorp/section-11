@@ -36,6 +36,9 @@ class PhaseResumption(unittest.TestCase):
             row.update(ctl_end=(80, 81, 77, 90)[i], acwr=(1.1, 1.0, 0.75, 1.0)[i],
                        hard_days=(2, 2, 1, 3)[i], primary_sport_tss=700 if i < 3 else 720)
         weeks[-2]["phase_detected"] = "Deload"
+        weeks[-2]["_phase_load_compatible"] = True
+        weeks[-2]["phase_load_basis"] = {"rule": self.sync.PHASE_LOAD_RULE,
+                                        "status": "complete", "observation_cutoff": "2026-10-18"}
         values = [a for a in activities("2026-10-19", current=144)
                   if a["start_date_local"][:10] <= "2026-10-23"]
         # Real zone-shaped inputs produce the current and prior hard-day counts.

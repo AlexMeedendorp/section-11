@@ -12,6 +12,8 @@
 
 # Training Data Pipeline
 
+`interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](https://github.com/CrankAddict/section-11/blob/main/SECTION_11.md#which-interval-data-to-use).
+
 ![Sync Status](https://github.com/YOUR_GITHUB_USER/YOUR_REPO_NAME/actions/workflows/auto-sync.yml/badge.svg)
 
 **Last successful sync:** _updated automatically_

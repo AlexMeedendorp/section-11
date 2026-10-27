@@ -59,8 +59,12 @@ class PhaseAlignment(unittest.TestCase):
                         else:
                             values[0]["name"] = "Deload endurance"
                         p = self.detect(plans, today=today, acts=values)
-                        self.assertEqual((p["phase"], p["confidence"]), ("Deload", "medium"))
-                        self.assertEqual(p["reason_codes"], ["DELOAD_CURRENT_REDUCTION_UNVERIFIED", "DELOAD_NAME_SUPPORT"])
+                        if missing:
+                            self.assertEqual((p["phase"], p["confidence"]), ("Build", "low"))
+                            self.assertIn("MAIN_SPORT_LOAD_UNAVAILABLE", p["reason_codes"])
+                        else:
+                            self.assertEqual((p["phase"], p["confidence"]), ("Deload", "medium"))
+                            self.assertEqual(p["reason_codes"], ["DELOAD_CURRENT_REDUCTION_UNVERIFIED", "DELOAD_NAME_SUPPORT"])
                         aligned = p["basis"]["stream_2"]["load_evidence"]["day_aligned"]
                         self.assertEqual(aligned["status"], "unavailable" if missing else "insufficient_elapsed")
 
@@ -72,13 +76,13 @@ class PhaseAlignment(unittest.TestCase):
                 if missing:
                     values[0]["icu_training_load"] = None
                 p = self.detect(plans, today=today, acts=values)
-                self.assertEqual((p["phase"], p["confidence"]), ("Deload", "low"))
-                self.assertEqual(p["reason_codes"], ["DELOAD_CURRENT_REDUCTION_UNVERIFIED"])
+                self.assertEqual((p["phase"], p["confidence"]), ("Build" if missing else "Deload", "low"))
+                self.assertIn("MAIN_SPORT_LOAD_UNAVAILABLE" if missing else "DELOAD_CURRENT_REDUCTION_UNVERIFIED", p["reason_codes"])
 
     def test_name_promotion_cannot_override_either_completed_load_guard(self):
         for count in (1, 3):
             plans = [plan("2026-10-20", 10, id=i, name="Deload") for i in range(count)]
-            for current, completed, expected in ((80, 80, "Deload"), (80.01, 80, None), (40, 561, None)):
+            for current, completed, expected in ((80, 80, "Deload"), (80.01, 80, None), (561, 561, None)):
                 p = self.detect(plans, today="2026-10-18", acts=activities(current=current),
                                 weeks=rows(completed=completed))
                 self.assertEqual((p["phase"], p["confidence"]), (expected, "medium" if expected else "low"))
@@ -221,7 +225,7 @@ class PhaseAlignment(unittest.TestCase):
                 p = self.detect(plans + [event], today="2026-10-18")
                 self.assertEqual((p["phase"], p["confidence"]), ("Deload", "low"))
             for changes in ({"start_date_local": "2026-10-11T10:00:00"},
-                            {"start_date_local": "2026-10-19T10:00:00"}, {"type": "Run"}):
+                            {"start_date_local": "2026-10-19T10:00:00"}, {"type": "Walk"}):
                 values = activities()
                 values.append({**values[0], "id": "other", "name": name, **changes})
                 p = self.detect(plans, today="2026-10-18", acts=values)
@@ -231,7 +235,7 @@ class PhaseAlignment(unittest.TestCase):
         for name in ("Recovery week", "Rest week", "Deload week"):
             for count in (1, 3):
                 plans = [plan("2026-10-20", 10, id=i, name=name) for i in range(count)] + [plan("2026-10-25", 900)]
-                for current, completed in ((80.01, 80), (40, 561)):
+                for current, completed in ((80.01, 80), (561, 561)):
                     p = self.detect(plans, today="2026-10-18", acts=activities(current=current),
                                     weeks=rows(completed=completed))
                     self.assertEqual((p["phase"], p["confidence"]), (None, "low"))
@@ -293,7 +297,11 @@ class PhaseAlignment(unittest.TestCase):
         for _ in range(10):
             self.assertEqual(self.detect(plans, acts=values, weeks=week), expected)
         self.assertEqual((values, week, plans), before)
-        self.assertLess(len(json.dumps(expected)), 2500)
+        legacy = copy.deepcopy(expected)
+        legacy["basis"].pop("main_sport_load")
+        legacy["basis"].pop("decision_load_source")
+        self.assertLess(len(json.dumps(legacy)), 2500)
+        self.assertLess(len(json.dumps(expected)), 10000)  # additive weekly load/monotony evidence
 
 
 if __name__ == '__main__':

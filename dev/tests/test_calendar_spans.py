@@ -179,7 +179,7 @@ class CalendarSpans(unittest.TestCase):
         self.assertEqual(anchor["source"], "observed_unknown")
         self.assertIsNone(anchor["coggan_watts"])
         self.assertEqual([p for endpoint, p in calls if endpoint == "activities"],
-                         [{"oldest": "2026-09-25", "newest": "2026-11-05"}])
+                         [{"oldest": "2026-09-11", "newest": "2026-11-05"}])
         old["trainer"] = True
         uniform, uniform_calls = self.collect(activities=[old, recent], curves=curve)
         anchor = uniform["derived_metrics"]["capability"]["sustainability_profile"]["cycling"]["anchors"]["300s"]
@@ -294,19 +294,19 @@ class LegacyAssessmentEvidence(unittest.TestCase):
                 stack.enter_context(mock.patch.object(self.sync, method, return_value=value))
             first = self.sync._format_activities([act], paired_events=[plan],
                        previous_latest_lookup={"s1": {"structure_summary": legacy}})[0]
-            summary = first["structure_summary"]
+            summary = first["interval_data"]["plan_match"]
             self.assertEqual(summary["status"], "not_assessed")
             self.assertEqual(summary["retained_step_assessment"], legacy)
             self.assertNotIn("assessment_retained", summary)
             again = self.sync._format_activities([act], paired_events=[plan],
                                                 previous_latest_lookup={"s1": first})[0]
-            self.assertEqual(again["structure_summary"], summary)
+            self.assertEqual(again["interval_data"]["plan_match"], summary)
             # Nearby valid evidence: captured identity and current definition match.
-            first["structure_summary"] = dict(legacy, plan=first["plan_pairing"]["plan"])
+            first["interval_data"]["plan_match"] = dict(legacy, plan=first["plan_pairing"]["plan"])
             retained = self.sync._format_activities([act], paired_events=[plan],
                                                     previous_latest_lookup={"s1": first})[0]
-            self.assertEqual(retained["structure_summary"]["status"], "followed")
-            self.assertTrue(retained["structure_summary"]["assessment_retained"])
+            self.assertEqual(retained["interval_data"]["plan_match"]["status"], "followed")
+            self.assertTrue(retained["interval_data"]["plan_match"]["assessment_retained"])
 
 
 if __name__ == "__main__":

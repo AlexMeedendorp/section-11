@@ -17,9 +17,11 @@ sync.py runs on a machine or service you control, pulling your data from Interva
 
 The machine doesn't need to be on 24/7. sync.py runs when the machine is on, and the timer picks up automatically after a restart or wake. If you close your laptop at night, data refreshes within minutes of opening it.
 
-For always-fresh data (agentic coaches, heartbeat checks), a machine that stays on is ideal, but not required.
+For regular data refresh (agentic coaches, heartbeat checks), a machine that stays on is ideal, but not required.
 
 ### How the AI reads your data
+
+`interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 Each successful updated sync produces `latest.json.sleep_context` from one fresh 35-date wellness window (D−34..D); existing baselines and reports still use their original 28-date slice. No new file, sleep cache or state must persist between runs, and no history refresh is needed for this field. The AI discovers it through `READ_THIS_FIRST.sleep_context_note` in the same latest export. It is low-confidence context only, with explicit coverage and unavailable states, never a readiness signal. An unknown athlete timezone or current-date mismatch withholds comparison. See [Multi-night sleep context](../../SECTION_11.md#recovery-metrics-integration-hrv--rhr--sleep--feel).
 
@@ -29,7 +31,7 @@ Each successful updated sync produces `latest.json.sleep_context` from one fresh
 ### Why local
 
 - **Cheapest reliable path**: sync.py runs on your machine for free. No GitHub Actions minutes, no compute costs.
-- **Most reliable**: no GitHub raw URL caching issues (AI platforms cache aggressively and serve stale data), no rate limiting, no fetch failures
+- **Direct reads**: local file reads avoid remote URL caching; upstream sync requests can still be rate-limited or fail
 - **Privacy**: your data goes only where you send it: the machine you run sync.py on, and any cloud storage or repository you configure
 - **Speed**: a runtime that can reach the files reads them directly with zero latency. A connector read is slower than that but faster than URL fetching.
 - **Works everywhere**: any machine that runs Python. Any AI whose runtime can reach the files, or that has a cloud connector.
@@ -136,15 +138,15 @@ OpenClaw's agent workspace (e.g., `~/clawd/`) is typically separate from the dat
 cd ~/training-data && claude
 ```
 
-Claude Code has full filesystem access: it reads `latest.json`, `DOSSIER.md`, and `section11/SECTION_11.md` directly.
+Verify that Claude Code can read `latest.json`, `DOSSIER.md`, and `section11/SECTION_11.md` in this directory; write and execution access are separate capabilities.
 
 ### Claude Cowork
 
-Grant Cowork access to the `~/training-data/` folder. All files are available directly.
+Grant Cowork access to the `~/training-data/` folder and verify that it can read the required files.
 
 ### ChatGPT Codex CLI
 
-Run from `~/training-data/`. Codex CLI has full filesystem access.
+Run from `~/training-data/` and verify that Codex CLI can read the required files; write and execution access are separate capabilities.
 
 ### Gemini CLI
 
@@ -153,7 +155,7 @@ cd ~/training-data
 gemini
 ```
 
-Gemini CLI has full filesystem access to the working directory.
+Verify that Gemini CLI can read the required files in the working directory; write and execution access are separate capabilities.
 
 ### OpenCode
 
@@ -183,7 +185,7 @@ Open-weight setups are another option, for example, GLM with ZCode, Qwen with Qw
 
 Your coach's instructions live in one canonical contract, not in this guide. Which one you use depends on whether the AI has a runtime filesystem at all, not on which sync method you chose, and not on the platform's name. If it has one, whether that is this machine or a provider-hosted computer, it is an agentic session: copy the block between the fences in [`PROJECT_INSTRUCTIONS_AGENTIC.md`](../../PROJECT_INSTRUCTIONS_AGENTIC.md) into the agent's project settings. That holds even when the data itself arrives through a connector.
 
-That contract names the Workout Reference Library (`section11/examples/workout-library/WORKOUT_REFERENCE.md`, with a fetch fallback) but not the report templates. Where the agent can actually reach them (a provider-hosted computer often cannot), point it at `section11/examples/reports/` as well.
+That contract names the Workout Reference Library and report templates. Verify that the agent can read the required files at `section11/examples/workout-library/WORKOUT_REFERENCE.md` and `section11/examples/reports/`; a path on your machine does not establish access from another runtime.
 
 ---
 
@@ -191,7 +193,7 @@ That contract names the Workout Reference Library (`section11/examples/workout-l
 
 If your AI coach has no runtime filesystem at all, such as a web or phone chat app, it cannot read a filesystem directly. It can still receive the files another way: through a connector or authenticated repository, as an upload or attachment, or by fetching a URL. The usual bridge is the first of those: sync.py writes to a cloud-synced folder, and the AI reads it through its connector.
 
-For a session with no runtime filesystem, the canonical contract is [`PROJECT_INSTRUCTIONS_WEB.md`](../../PROJECT_INSTRUCTIONS_WEB.md); copy the block between its fences into the AI's project settings. It does not name the report and workout templates by path, so where the connected source exposes them, point the AI at `section11/examples/reports/` and `section11/examples/workout-library/WORKOUT_REFERENCE.md` as well.
+For a session with no runtime filesystem, the canonical contract is [`PROJECT_INSTRUCTIONS_WEB.md`](../../PROJECT_INSTRUCTIONS_WEB.md); copy the block between its fences into the AI's project settings. It names report templates and the Workout Reference Library; verify that the connected source exposes the required files at `section11/examples/reports/` and `section11/examples/workout-library/WORKOUT_REFERENCE.md`, or supply them as attachments.
 
 An agent on a provider-hosted computer is a different case. It has a runtime filesystem, just not this machine's, so it uses the same bridge to receive the data but stays on the agentic contract.
 
@@ -226,7 +228,7 @@ We can't list every combination; there are many. The pattern is always the same:
 
 ## Automate the Refresh
 
-Set up a timer to run sync.py every **60 seconds** so your data is always fresh when you open your AI coach.
+Set up a timer to run sync.py every **60 seconds** for regular refreshes; check the export timestamp before relying on it.
 
 All four timer methods below (launchd, systemd, cron, Task Scheduler) **survive reboots and wake from sleep**. If you close your laptop at night and open it in the morning, sync picks up automatically; data refreshes within a minute.
 
@@ -473,6 +475,7 @@ tail -f ~/training-data/sync.log
 - `route_weather_default_start`: local HH:MM, default `"10:00"`, used only for date-only/exact-midnight workouts. `SECTION11_ROUTE_WEATHER_DEFAULT_START` in the timer environment overrides it. The AI labels ASSUMED and asks for the actual time. See [departure handling](../../README.md#route-weather-departure), including genuine midnight rides and confirmed push.py time updates.
 - `week_start`: training week start day (`mon`–`sun`, default: `mon`)
 - `zone_preference`: per-sport zone override for aggregations, e.g. `"run:hr,cycling:power"`. Only override what you need; unspecified sports default to power-preferred with HR fallback.
+- `report_main_sports`: optional comma-separated report IDs, e.g. `"cycling,swimming"`. Absent by default; only sports present in the period can be retained. The sync process environment `REPORT_MAIN_SPORTS` is the fallback. This affects report selection, main-sport load and per-sport curves; skiing is accepted as an alias for nordic_skiing, while everyday overrides never select a main sport. See the protocol for exact IDs and recorded historical settings.
 
 **Permissions**: the timer runs as your user. Ensure the output directory is writable.
 

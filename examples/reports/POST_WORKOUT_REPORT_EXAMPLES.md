@@ -1,5 +1,7 @@
 # Post-Workout Report Examples
 
+For the updated report-source illustration, Polarization/TID lines below use fictional period-local report_intensity blocks selecting cycling, with four power-covered sessions in the seven-day window and sixteen across four 28-day chunks. These intensity values and coverage counts are synthetic and independent of the legacy session aggregates. Both blocks use compatible mappings and complete observed sessions; fetch completeness is unknown. Other legacy aggregates remain preserved. These illustrations decode the file-level schema 2; counts do not imply exact covered dates.
+
 > Anonymized examples showing standard post-workout report format.  
 > See `POST_WORKOUT_REPORT_TEMPLATE.md` for field reference. Legacy examples do not supply recorded elevation, so Ascent is omitted. Missing matched-step data is stated explicitly; aggregate numbers are preserved. The fictional field excerpts below illustrate the new producer contract without inventing step actuals for those legacy reports.
 
@@ -9,7 +11,9 @@ The legacy scenarios retain their supplied aggregate measurements and omit new f
 
 ## Short-set compliance excerpts (synthetic)
 
-These independent scenarios illustrate the Compliance line, not a full report or athlete data. Each supported case has an exact captured prescription, matching current pairing and detail identity, three comparable sets of ten 30/15 work bouts, an authoritative 300 W target, established main-work roles and no essential secondary constraints. Every standard window has 29 observed seconds and every adherence window has 28 observed seconds unless stated otherwise. The accepted band is 297–315 W. All unlisted bout means are exactly 300 W. Keep the remaining activity fields and weekly totals in a complete report.
+`interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
+
+These independent scenarios illustrate the Compliance line, not a full report or athlete data. Each supported case has an exact captured prescription, matching current pairing and detail identity, three comparable sets of ten 30/15 work bouts, an authoritative 300 W target, established main-work roles and no essential secondary constraints. Every standard window has 29 observed seconds and every adherence window has 27 observed seconds unless stated otherwise. The accepted band is 297–315 W. All unlisted bout means are exactly 300 W. Keep the remaining activity fields and weekly totals in a complete report.
 
 **One miss:** set 2/bout 6 has an unrounded adherence mean of 295.8 W; all work is complete. Set means alone cannot supply the count.
 
@@ -35,7 +39,7 @@ Compliance: main work completed; adherence not evaluable, individual bout detail
 Compliance: main work incomplete; set 3/bout 10 has a 4 s standard-window deficit, exceeding the 3 s alignment allowance; no aggregate adherence percentage
 ```
 
-**Missing bout power:** a full standard span with only 27 observed seconds cannot establish completion even if its adherence window has 27/28 seconds. Pooled set coverage does not override this.
+**Missing bout power:** a full standard span with only 27 observed seconds cannot establish completion even if its adherence window has 26/27 seconds. Pooled set coverage does not override this.
 
 ```text
 Compliance: completion not evaluable; set 1/bout 1 has insufficient standard-window power coverage; adherence not evaluable
@@ -43,15 +47,15 @@ Compliance: completion not evaluable; set 1/bout 1 has insufficient standard-win
 
 ## Duration-based compliance excerpts (synthetic)
 
-These separate examples have exact paired prescriptions and qualified evidence-marker-4 detail with established main-work roles and no essential secondary constraints. They do not change the set examples above. Completion always uses the standard window. Recovery length and repeat count do not select the evaluator or window.
+These separate examples have exact paired prescriptions and qualified structure-version-6, evidence-marker-4 detail with established main-work roles and no essential secondary constraints. They do not change the set examples above. Completion always uses the standard window. Recovery length and repeat count do not select the evaluator or window.
 
-**Single short step with long recovery:** a 30 s effort at 300 W followed by 90 s recovery has a complete 29 s standard window. Its adherence row has 28 observed seconds and 8400 J, so the mean is 300 W. This same exclusion applies to each effort in 8 × 30 s / 90 s and 6 × 40 s / 2 min when their mapping is supported.
+**Single short step with long recovery:** a 30 s effort at 300 W followed by 90 s recovery has a complete 29 s standard window. Its adherence row has 27 observed seconds and 8100 J, so the mean is 300 W. This same exclusion applies to each effort in 8 × 30 s / 90 s and 6 × 40 s / 2 min when their mapping is supported.
 
 ```text
-Compliance: main work completed; 1/1 step on target (+0 W); 30 s prescribed, 29 s standard window, 28 s adherence window
+Compliance: main work completed; 1/1 step on target (+0 W); 30 s prescribed, 29 s standard window, 27 s adherence window
 ```
 
-**Duration boundary:** independent 60 s and 61 s efforts at 300 W both complete their standard windows. The 60 s effort uses 58 adherence seconds after two excluded seconds; the 61 s effort uses its 60 s standard window after only the first-second exclusion. With constant 300 W, each is on target. A clipped 61 s effort remains subject to the longer-step rule.
+**Duration boundary:** independent 60 s and 61 s efforts at 300 W both complete their standard windows. The 60 s effort uses 57 adherence seconds after two leading seconds and the final aligned second are excluded; the 61 s effort uses its 60 s standard window after only the first-second exclusion. With constant 300 W, each is on target. A clipped 61 s effort remains subject to the longer-step rule.
 
 **Long compressed bouts:** three 90 s efforts with 30 s recoveries each have 89 standard and adherence seconds. Their unrounded means are 300 / 295.8 / 300 W against 300 W. The first retained second remains included even though the efforts form a compressed set.
 
@@ -59,7 +63,7 @@ Compliance: main work completed; 1/1 step on target (+0 W); 30 s prescribed, 29 
 Compliance: main work completed; 2/3 work bouts on target (66.67%); set 1 2/3 (bout 2 −4.2 W, below band)
 ```
 
-**Pyramid:** 40/30/20 s efforts at 300/310/320 W have complete 39/29/19 s standard windows. The first two use 38/28 s average-adherence windows with means equal to their targets. The 20 s sprint uses a best 6 s of 320 W within its standard window, whose mean is also 320 W. Its stored 18 s average window does not judge the sprint. Different durations/evaluators do not establish an aggregate.
+**Pyramid:** 40/30/20 s efforts at 300/310/320 W have complete 39/29/19 s standard windows. The first two use 37/27 s average-adherence windows with means equal to their targets. The 20 s sprint uses a best 6 s of 320 W within its standard window, whose mean is also 320 W. Its stored 18 s average window does not judge the sprint. Different durations/evaluators do not establish an aggregate.
 
 ```text
 Compliance: main work completed; 40 s step on target (+0 W), 30 s step on target (+0 W), 20 s sprint on target (mean +0 W, best 6 s +0 W); no aggregate percentage for this mixed-duration pyramid
@@ -256,11 +260,11 @@ TSS: 10 (planned 10)
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk2
 
-Polarization: Z1+Z2 97%, Z3 1%, Z4+ 3%
-Durability: 2.14% 7d mean(3) / 2.50% 28d mean(11) (stable)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 2.14% 7d mean(3) / 2.50% 28d mean(11) (stable)
 EF: 1.45 7d mean(4) / 1.42 28d mean(14) (stable)
 HRRc: 36 bpm 28d mean(5); 7d: no data
-TID 28d: Polarized (PI: 3.18); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -4.85
 CTL: 71.20
@@ -369,11 +373,11 @@ TSS: 5
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk3
 
-Polarization: Z1+Z2 88%, Z3 7%, Z4+ 5%: Polarized (PI: 1.85)
-Durability: 3.20% 7d mean(3) / 2.75% 28d mean(12) (stable)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 3.20% 7d mean(3) / 2.75% 28d mean(12) (stable)
 EF: 1.38 7d mean(4) / 1.42 28d mean(15) (stable)
 HRRc: 32 bpm 7d mean(2) / 31 bpm 28d mean(8) (stable)
-TID 28d: Polarized (PI: 2.42); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -3.75
 CTL: 68.40
@@ -440,11 +444,11 @@ Effort response: negative
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk3
 
-Polarization: Z1+Z2 84%, Z3 2%, Z4+ 13%
-Durability: 2.95% 7d mean(3) / 2.50% 28d mean(11) (stable)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 2.95% 7d mean(3) / 2.50% 28d mean(11) (stable)
 EF: 1.46 7d mean(4) / 1.43 28d mean(14) (stable)
 HRRc: 34 bpm 7d mean(1) / 36 bpm 28d mean(5) (stable)
-TID 28d: Polarized (PI: 3.10); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -11.40
 CTL: 72.80
@@ -506,10 +510,10 @@ Reason: Precautionary (knee discomfort from ride)
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk4
 
-Polarization: Z1+Z2 98%, Z3 0%, Z4+ 2%
-Durability: 1.92% 7d mean(2) / 2.40% 28d mean(10) (improving)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 1.92% 7d mean(2) / 2.40% 28d mean(10) (improving)
 EF: 1.41 7d mean(3) / 1.42 28d mean(12) (stable)
-TID 28d: Polarized (PI: 3.15); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: +2.35
 CTL: 70.50
@@ -552,10 +556,10 @@ TSS: 6
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk2
 
-Polarization: Z1+Z2 97%, Z3 0%, Z4+ 3%
-Durability: 2.30% 7d mean(3) / 2.55% 28d mean(11) (stable)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 2.30% 7d mean(3) / 2.55% 28d mean(11) (stable)
 EF: 1.44 7d mean(4) / 1.43 28d mean(13) (stable)
-TID 28d: Polarized (PI: 3.22); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: +0.85
 CTL: 73.10
@@ -621,11 +625,11 @@ Effort response: negative
 **Weekly totals (rolling 7 days)**
 Phase: Base Wk4
 
-Polarization: Z1+Z2 92%, Z3 5%, Z4+ 3%
-Durability: 4.50% 7d mean(3) / 3.20% 28d mean(13) (declining)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 4.50% 7d mean(3) / 3.20% 28d mean(13) (declining)
 EF: 1.36 7d mean(4) / 1.41 28d mean(15) (declining)
 HRRc: 30 bpm 7d mean(2) / 33 bpm 28d mean(9) (declining)
-TID 28d: Polarized (PI: 2.95); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -8.20
 CTL: 78.40
@@ -699,11 +703,11 @@ Effort response: neutral
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk2
 
-Polarization: Z1+Z2 81%, Z3 6%, Z4+ 13%
-Durability: 2.80% 7d mean(2) / 2.95% 28d mean(12) (stable)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 2.80% 7d mean(2) / 2.95% 28d mean(12) (stable)
 EF: 1.48 7d mean(3) / 1.45 28d mean(14) (improving)
 HRRc: 33 bpm 7d mean(2) / 32 bpm 28d mean(8) (stable)
-TID 28d: Polarized (PI: 3.05); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: -6.50
 CTL: 76.20
@@ -774,11 +778,11 @@ Effort response: positive
 **Weekly totals (rolling 7 days)**
 Phase: Build Wk1
 
-Polarization: Z1+Z2 84%, Z3 4%, Z4+ 12%
-Durability: 2.30% 7d mean(2) / 2.65% 28d mean(11) (improving)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+Durability (cycling): 2.30% 7d mean(2) / 2.65% 28d mean(11) (improving)
 EF: 1.58 7d mean(3) / 1.50 28d mean(13) (improving)
 HRRc: 38 bpm 7d mean(2) / 34 bpm 28d mean(9) (improving)
-TID 28d: Polarized (PI: 3.12); drift: consistent
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Polarized (PI: 2.32); observed-session drift: consistent
 
 TSB: 3.20
 CTL: 72.50
@@ -804,4 +808,17 @@ Ride: Endurance 2h, Z2 steady
 ```
 
 ---
+
+
+## Synthetic power and HR fallback excerpt
+
+Cycling qualifies from period totals. Three of four sessions provide power zones; the fourth has only five-band HR. One source per session yields two partial lines, not a mixed line or a duplicate contribution:
+
+```text
+Polarization (cycling, power, 1/1 rolling week; 3/4 sessions): Z1+Z2 80%, Z3 15%, Z4+ 5%
+Polarization (cycling, HR, 1/1 rolling week; 1/4 sessions): Z1+Z2 95%, Z3 3%, Z4+ 2%
+Zones cover 4 observed cycling sessions across separate bases; each line is partial
+```
+
+No drift label follows from these partial buckets. If zone seconds use a different clock from moving time, show both durations with coverage ratio unavailable, for example `HR zones: 65m observed; session moving time: 60m; clocks not established`. Never cap the ratio at 100% or assign a current FTP to the period.
 

@@ -9,7 +9,7 @@ Read and write tools for runtimes that can execute code or trigger GitHub Action
 | `EXTERNAL_APIS.md` | Endpoint reference for Strava, MET Norway (yr.no), Open-Meteo and Intervals.icu streams + weather; planned-route forecasts come from sync.py's brief and maps |
 | [fit-file-and-merger/](fit-file-and-merger/) | Documentation for a multi-source FIT workflow: rewrite a virtual-ride FIT to a trainer identity, merge head-unit donor streams into it, upload to Garmin, re-check the stored result, then remove source duplicates. Cleanup gates and post-delete confirmation differ per platform, and current gaps are documented alongside them. Cycling-tested. Documentation only, no scripts published |
 
-`push.py` requires safety preview/confirm. `pull.py` is read-only and has no confirm gate.
+The `push.py` CLI requires safety preview/confirm. `pull.py` is read-only and has no confirm gate.
 
 ---
 
@@ -19,7 +19,7 @@ Write, read, move, delete, and annotate planned workouts on an athlete's Interva
 
 ### Safety: Preview by Default
 
-All write operations (push, move, delete, set-threshold, annotate) default to **preview mode**. Nothing is written unless you add `--confirm`.
+All CLI write operations (push, move, delete, set-threshold, annotate) default to **preview mode**. Nothing is written unless you add `--confirm`.
 
 **Agent rule:** Always run without `--confirm` first. Show the preview to the athlete. Add `--confirm` only after the athlete approves.
 
@@ -39,7 +39,7 @@ python push.py push --json week.json --confirm
 
 Read operations (`list`) have no safety gate. They never modify anything.
 
-**Scope:** All write operations (push, move, delete) operate on planned events only (future calendar items). Completed activities and training history cannot be modified or deleted through push.py.
+**Scope:** Push, move and delete operate on planned events only. Annotate can add notes to completed activities or planned events; set-threshold updates sport-specific settings. Completed activities cannot be moved or deleted through push.py.
 
 ### Setup
 
@@ -131,9 +131,9 @@ python push.py list
 python push.py list
 ```
 
-To keep your local JSON data fresh automatically (so push.py and your agent always have current data), see [json-local-sync](../json-local-sync/SETUP.md).
+For scheduled refreshes of your local JSON data, see [json-local-sync](../json-local-sync/SETUP.md).
 
-Python import also works:
+Python import also works, but library write methods write directly without the CLI preview/confirmation gate. Obtain the athlete's approval before calling them; use the CLI for the preview-first flow:
 
 ```python
 from push import IntervalsPush

@@ -9,10 +9,12 @@ Reference templates and examples for Section 11-compliant AI coaching reports.
 AI systems should structure athlete reports consistently.  
 See templates and examples below for annotated reference.
 
+Every period intensity line uses its own report_intensity block decoded with report_intensity_schema (2), with one line per selected sport and actual power/HR basis/mapping plus covered weeks and sessions. Use compatible report_intensity_comparison with its coverage limits; resolve explicit rolling refs with parent dates and monthly blocks by first occurrence across the ordered tiers; unresolved or old history is unavailable. Per-activity zones and zone_reference retain their meanings. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+
 **Pre-Workout Reports must include:**
 - Readiness assessment (HRV, RHR, Sleep vs baselines)
 - Load context (TSB, ACWR, Load/Recovery, Monotony if elevated)
-- Capability snapshot (Durability 7d mean + trend; TID drift if not consistent)
+- Capability snapshot (Durability (cycling) 7d mean + trend; TID drift if not consistent)
 - One Today block per planned session in calendar order (or rest day + next session preview)
 - Go/Modify/Skip recommendation with rationale
 
@@ -34,7 +36,7 @@ Post-workout duration displays round to whole minutes, while eligibility gates r
 
 **Season reports** use completed configured calendar weeks: Position, phase cycles ending at Deload (null weeks separate), Volume, Fitness with coupled ACWR known coverage, Intensity with dated half averages, matched-month YoY with prior values in brackets, non-empty Notable, season fun facts and Interpretation.
 
-All three use bold dated headers, local Data updated, blank-line groups and one labelled fact per line. Means say avg with window; omit missing/zero-only lines and retain partial/stale coverage. Fun facts precede Interpretation, with equivalents inline from a clear dossier bottle statement or documented banana fallback. Peaks appear in 7-day/Season fun facts; Most work in a week appears only in 28-day/Season.
+All three use bold dated headers, local Data updated, blank-line groups and one labelled fact per line. Means say avg with window; omit missing/zero-only lines and retain partial/stale coverage. Fun facts precede Interpretation for each period-selected eligible sport; power, work and equivalents remain cycling-only, with equivalents inline from a clear dossier bottle statement or documented banana fallback. Peaks appear in 7-day/Season fun facts; Most work in a week appears only in 28-day/Season.
 
 Permanent request aliases: "weekly report" means 7-day report; "block report" means 28-day report. The four old template/example paths remain managed pointers until the first release after 31 December 2026. Update personal instructions to the new filenames. The configured week start still controls history, Season, phase and planned-week features.
 
@@ -62,6 +64,8 @@ For fallback data, the single final attribution names the actual provider: "Weat
 | [7_DAY_REPORT_EXAMPLES.md](7_DAY_REPORT_EXAMPLES.md) | 2 synthetic example 7-day reports |
 | [28_DAY_REPORT_TEMPLATE.md](28_DAY_REPORT_TEMPLATE.md) | Template structure for 28-day reports (no data) |
 | [28_DAY_REPORT_EXAMPLES.md](28_DAY_REPORT_EXAMPLES.md) | 2 synthetic example 28-day reports |
+| [SEASON_REPORT_TEMPLATE.md](SEASON_REPORT_TEMPLATE.md) | Template structure for season reports (no data) |
+| [SEASON_REPORT_EXAMPLES.md](SEASON_REPORT_EXAMPLES.md) | Synthetic season examples |
 | [WEATHER_REPORT_TEMPLATE.md](WEATHER_REPORT_TEMPLATE.md) | On-request five-day planned-route weather |
 | [WEATHER_REPORT_EXAMPLES.md](WEATHER_REPORT_EXAMPLES.md) | Synthetic forecast, outlook and missing-data examples |
 
@@ -74,7 +78,7 @@ Generated **before** a planned session. Includes:
 - Bold Pre-workout date and zone-labelled Data updated header
 - Current readiness (HRV, RHR, Sleep vs baselines)
 - Load context (TSB, ACWR, Load/Recovery, Monotony if > 2.3)
-- Capability snapshot (Durability 7d mean + trend; TID drift if not consistent)
+- Capability snapshot (Durability (cycling) 7d mean + trend; TID drift if not consistent)
 - Four blank-separated status groups without subgroup headings; preserve all template fields and conditionals
 - A Today block per session with available type, route facts, duration, TSS and condensed main set; omit an absent structure rather than printing a no-structure line
 - Weather directly under outdoor rides and runs only, with labelled home location/source when no route is supplied
@@ -86,7 +90,7 @@ Generated **after** a completed session. Includes:
 - Key metrics (power, HR, decoupling, VI, carbs)
 - Zone distribution (Grey Zone and Quality tracking)
 - Load impact (updated CTL, ATL, TSB, weekly totals)
-- Capability update (Durability 7d/28d + trend, TID 28d + drift in weekly totals)
+- Capability update (Durability (cycling) 7d/28d + trend, TID 28d + drift in weekly totals)
 - Coaching interpretation
 - Descriptive W/kg, work, available exact power peaks, elapsed time and sport-aware pace from sync 3.147; peaks never establish FTP, zones or readiness
 

@@ -188,8 +188,9 @@ class CompactReportContractTests(unittest.TestCase):
         self.assertEqual(groups,[
             ['Phase','RHR','HRV','Sleep','Sleep Quality','Sleep context'],
             ['TSB','CTL','ATL','ACWR','Recovery Index','Ramp Rate','Load/Recovery',
-             'Durability','EF','Monotony'],
-            ['Polarization','TID 28d'],
+             'Durability (cycling)','EF','Monotony ([supplied main sports])','Hard days this week'],
+            ['Polarization ([sport], [basis], [covered/period weeks; covered/sport sessions])',
+             'TID 28d ([sport], [basis], [coverage])'],
             ['Total hours, last 7 days','Total activities, last 7 days',
              'Total TSS, last 7 days']])
         for required in ('**Pre-workout: [Weekday D Month]**',

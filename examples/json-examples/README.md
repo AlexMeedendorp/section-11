@@ -21,33 +21,138 @@ Read the planned summary's `detail_file`, match event ID, route_ref, departure, 
 
 **These are invented data**: realistic values for a ~12h/week multi-sport athlete (cycling + rowing + walks), CTL ~65, FTP 260/270 (indoor/outdoor). Not anonymized real data.
 
-## Short-set detail fragment (synthetic)
+## Descriptive sport facts (synthetic fragments)
 
-Current `session_structure` version 5 uses `bout_metrics_version: 4` on qualified blocks and individual `bouts` for supported compressed sets in 14-day intervals.json detail. This fragment illustrates three synthetic 30/15 work bouts with a selected 2 s global offset. Standard windows have 29 observed seconds; average-adherence windows exclude one additional leading transition second and have 28 observed seconds. Their means are 300 / 304 / 295.8 W. The shared end preserves the trailing second. The positional schema is defined once under [Completed Session Structure](../../SECTION_11.md#completed-session-structure).
+Cycling stays in fun_facts. The optional top-level sport_fun_facts in latest/history holds only period-selected running, swimming, nordic_skiing and rowing, following the existing ready selections. Require schema_version 1, sport_identity_rule report_sport_identity_v2 and selection_rule endurance_10_50_week_guard_v2 with compatible report_intensity_schema (2) and matching bounds. No selected new sport in any period omits the sibling; a present empty sports map is authoritative, while a missing/null/incompatible period is unavailable. Old example files without this sibling do not supply new-sport facts.
 
 ```json
 {
-  "version": 5,
+  "sport_fun_facts": {
+    "schema_version": 1,
+    "sport_identity_rule": "report_sport_identity_v2",
+    "selection_rule": "endurance_10_50_week_guard_v2",
+    "rolling_7d": {
+      "start": "2026-07-08", "end": "2026-07-14",
+      "sports": {
+        "swimming": {
+          "activity_count": 2, "moving_time_s": 3300,
+          "coverage": {"moving_time_s": 2, "max_hr": 1},
+          "max_hr": {"activity_id": "sw1", "activity_name": "Lane session", "date": "2026-07-10", "activity_type": "Swim", "bpm": 156},
+          "longest_session": {"activity_id": "sw2", "activity_name": "Lake session", "date": "2026-07-12", "activity_type": "OpenWaterSwim", "moving_time_s": 1800, "distance_m": 1200, "environment": "open_water"},
+          "distance_elevation": {
+            "pool_other": {"activity_count": 1, "distance_m": 1000, "distance_activities": 1},
+            "open_water": {"activity_count": 1, "distance_m": 1200, "distance_activities": 1}
+          }
+        }
+      }
+    },
+    "rolling_28d": {"start": "2026-06-17", "end": "2026-07-14", "sports": {}}
+  }
+}
+```
+
+This fragment's independently selected 28-day sports exclude swimming. History uses season instead of rolling blocks, adds completed_weeks matching report_intensity_season.weeks and omits longest_session, which remains in Season Volume. Each sport's moving_time_s/max_hr coverage uses activity_count; each setting's distance_activities/elevation_activities uses its own activity_count. Partial observations retain values and mandatory display counts: the HR above is 156 bpm (1 of 2 sessions), not a complete-period maximum. Zero coverage is null and omitted from reports; recorded zero remains distinct. Conflicting duplicate metrics stay unavailable.
+
+Settings are outdoor/indoor/unknown for running and rowing, snow/roller/indoor/unknown for Nordic skiing, and pool_other/open_water/unknown for swimming. Report pool_other as pool/other, never a verified pool; pool_length/lengths do not classify it. Virtual types override false/null trainer; malformed flags without a positive marker mean unknown. Only outdoor running and snow/roller Nordic buckets carry elevation_m/elevation_activities. Keep settings separate. See [Descriptive Period Facts](../../SECTION_11.md#descriptive-period-facts) for identity, ties and refresh rules.
+
+## Report intensity and zone provenance (synthetic fragments)
+
+Use report_intensity_7d / report_intensity_28d, rolling/weekly report_intensity and unique monthly blocks resolved across ordered tiers and history.report_intensity_season for period intensity. Every period selects independently. Decode report_intensity_schema (2) and display selected map keys with separate power/HR basis/mapping buckets and weeks/sessions coverage; all observed eligible sports remain stored, including nonqualifiers. Missing new history is unavailable, not a fallback to old primary or all-sport percentages; a present empty block is authoritative. See [Report intensity source](../../SECTION_11.md#report-intensity-source).
+
+```json
+{
+  "zone_reference": {"basis": "power", "ftp_w": 260, "environment": "indoor"}
+}
+```
+
+This is an activity fragment: FTP is the activity's captured threshold, not current athlete settings. A runner using HR could have `{"basis":"hr","ftp_w":null,"environment":"outdoor"}`. Environment is indoor for true trainer/indoor flags or a Virtual* activity type, otherwise outdoor including false/null/absent flags; malformed non-boolean flags without a positive indoor marking mean unknown. A Walk with trainer null is outdoor; VirtualRide with trainer null and VirtualSki with trainer true are indoor. Type is a data marking, never a name inference; the separate legacy indoor field is unchanged. No supported zone source leaves basis null. Pace-only data does not invent a basis or threshold. With provenance, a Z3 flag can say `Zones: power, from indoor FTP 260 W`; generic uncertainty wording is only for missing provenance.
+
+The following abbreviated synthetic fragment shows the shared schema and one selected running/HR ready block. The producer emits the column/reason definitions once per file. Sport arrays contain sessions, known TSS, known moving seconds, active weeks, zone map, then optional exceptions. Each zone array contains three raw zone seconds, covered sessions and covered weeks. Ready tid arrays contain percentages followed by PI/classification; Season omits the last two. Period rows omit tid and use raw seconds. See the protocol for missingness and reference rules.
+
+```json
+{
+  "report_intensity_schema": {
+    "schema_version": 2,
+    "rule_version": "endurance_10_50_week_guard_v2",
+    "selection_config": {"main_sports": [], "zone_preference": {}},
+    "week_start_day": 0,
+    "mappings": {"p7": "power/power_7to3_v1", "h5": "hr/hr_5to3_v1", "h7": "hr/hr_7to3_v1"},
+    "reasons": {"p": "period_primary", "l": "load_share_10pct", "t": "time_share_50pct", "w": "guarded_week_winner", "e": "explicit_main_sport"}
+  },
+  "derived_metrics": {
+    "report_intensity_7d": {
+      "start": "2026-06-09", "end": "2026-06-15", "week_mode": "rolling", "weeks": 1,
+      "selected": {"running": "plt"},
+      "sports": {"running": [1, 80, 3600, 1, {"h5": [2700, 540, 360, 1, 1]}]},
+      "tid": {"running": {"h5": [75, 15, 10, null, "Pyramidal"]}}
+    }
+  }
+}
+```
+
+In a sport's optional sixth array entry, `{"missing":[1,1],"indeterminate":true}` means one unknown load and duration and no defensible selection. The earlier numeric sums remain known subtotals, not replacement zeros for missing data. `{"unaligned":["p7"]}` marks per-session clock disagreement even when aggregate sums match. Absent exceptions mean zero missing counts, a determinate selection result and no additional clock-disagreement marker; they never prove complete upstream retrieval. A basis with fewer sessions than its sport is partial.
+
+A rolling `report_intensity: {"ref":"derived_metrics.report_intensity_7d"}` reuses identical independently computed values, not dates: use the consuming chunk's start/end. Missing targets are unavailable. Monthly blocks are stored only on the first occurrence of each month when searching monthly_1y, monthly_2y, monthly_3y. Later copies of that month omit report_intensity; resolve the matching month from the ordered union, never from another month or by summing tiers. This also works when monthly_1y is absent: search the remaining tiers. An unresolved month is unavailable.
+
+Read current comparison coverage from the two ready blocks; the comparison records its rule and stores sport/mapping, status and drift/PI delta. Recognised SS power overlays are validated and skipped, never added to numbered zone seconds. Source types, environments and exact covered ranges are not repeated in period summaries; activity zone_reference remains unchanged.
+
+The historical JSON files keep their original headers and omit these additive report blocks: updated consumers must show unavailable intensity for them. These fragments are synthetic schema evidence, never athlete data. Pace-only sports still contribute to selection totals but have an empty zone map. An empty selected map is authoritative. Empty data is never permission to infer zeros or a legacy fallback.
+
+## Adjacent interval sources (synthetic fragment)
+
+See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use). This illustrative activity fragment separates a timeline label, scoped power/time counts requiring context review, and the detector's descriptive strings. A detector disagreement must be reported alongside Section 11 evidence; session_structure judges. No per-bout arrays move into latest.json. The historical JSON files retain their original producer headers and omitted fields.
+
+```json
+{
+  "interval_data": {
+    "version": 1,
+    "plan_match": {"method": "plan_match_v2", "status": "followed"},
+    "compliance": {
+      "status": "context_required", "scope": "compressed_work_bouts",
+      "completion": true, "on_target": 2, "total": 3,
+      "sets": [{"step": 2, "completion": true, "on_target": 2, "total": 3}],
+      "steps": [
+        [1, 120, 600, "long_avg", true, 1, 1, true],
+        [2, 300, 30, "short_avg", true, 2, 3, true],
+        [3, [100, 120], 600, "long_avg", true, 1, 1, true]
+      ],
+      "adherence_available": false,
+      "reason": "ai_selects_main_work_from_authoritative_prescription_and_reviews_constraints"
+    },
+    "icu_detected": ["2x 28s 300w"]
+  }
+}
+```
+
+## Short-set detail fragment (synthetic)
+
+The preceding per-step rows use the positional schema in the canonical section. Lower-target steps are present but unlabelled; the AI selects main work from authoritative context. The top-level 2/3 remains the compressed-set count, never a total across all three rows.
+
+Current `session_structure` version 6 uses `bout_metrics_version: 4` on qualified blocks and individual `bouts` for supported compressed sets in 14-day intervals.json detail. This fragment illustrates three synthetic 30/15 work bouts with a selected 2 s global offset. Standard windows have 29 observed seconds; average-adherence windows exclude one additional leading transition second and the final aligned second, leaving 27 observed seconds. Their means are 300 / 304 / 295.8 W. The standard end remains unchanged; the adherence end uses the version-6 convention. The positional schema is defined once under [Completed Session Structure](../../SECTION_11.md#completed-session-structure).
+
+```json
+{
+  "version": 6,
   "bout_metrics_version": 4,
   "steps": [
     {
       "target_w": 300,
       "repeat": [3, 30, 15],
       "bouts": [
-        [600, 603, 632, 29, 604, 28, 8400, 0],
-        [645, 648, 677, 29, 649, 28, 8512, 0],
-        [690, 693, 722, 29, 694, 28, 8282.4, 0]
+        [600, 603, 632, 29, 604, 27, 8100, 0],
+        [645, 648, 677, 29, 649, 27, 8208, 0],
+        [690, 693, 722, 29, 694, 27, 7986.6, 0]
       ]
     }
   ]
 }
 ```
 
-An ungrouped 30 s step also receives the exclusion, including with a 90 s recovery. For a synthetic step starting at recording time 0 with no offset, 300 W throughout and complete power coverage, its standard `actual` row remains `[1,30,300,8.7,null,null,100,0,0,0]` and its added `adherence` row is `[2,28,8400,0]`. The adherence end is shared with `actual[1]`; the short row reuses the last four fields of the bout layout. At 60 s the starts still differ by one second; at 61 s an ordinary step has no added row. Compressed 90 s or 3 min bouts retain the standard first-second exclusion for adherence too. Prescription duration determines the rule, never grouping or clipped measured duration.
+An ungrouped 30 s step also receives the exclusion, including with a 90 s recovery. For a synthetic step starting at recording time 0 with no offset, 300 W throughout and complete power coverage, its standard `actual` row remains `[1,30,300,8.7,null,null,100,0,0,0]` and its added `adherence` row is `[2,27,8100,0]`. The adherence end follows the bout-row definition; the short row reuses the last four fields of that layout. At 60 s the adherence window still excludes both transition seconds in addition to the standard leading second; at 61 s an ordinary step has no added row. Compressed 90 s or 3 min bouts retain the standard first-second exclusion for adherence too. Prescription duration determines the rule, never grouping or clipped measured duration.
 
 For a synthetic 10 s step with target range 700–800 W, a complete standard window `[1,10)` at constant 760 W emits `sprint_target_w: 700`, `sprint_window_s: 3` and `sprint: [760,1,760]`. This records the range's lower bound and the standard-window mean, best 3 s start and best 3 s mean. The sprint is on target because 760 ≥700; the upper bound is not a ceiling. Its average-window `adherence` row remains present for compatibility, but never supplies the sprint verdict. A compressed sprint set instead has one `sprints` row per ordered work bout and shared `sprint_target_w` and `sprint_window_s` fields. For a prescribed 20 s sprint, W is 6 s instead. Without W consecutive supported seconds the peak start and mean are null; observed zeros are retained. Sprint fields are absent above 20 s. See the protocol for the fixed layout, continuity and target rules.
 
-These are not complete activities or proof of paired identity. Formal evaluation also needs the qualified method/status, matching captured prescription and cache identity, completion and essential-constraint checks. The legacy `.example.json` files remain unchanged and omit this evidence. Missing/expired detail means the affected individual adherence is unavailable. `latest.json.structure_summary` stays unchanged; it never copies these arrays or a derived pass count. Size grows with work-bout count, adds four average-window values per ungrouped short step, and adds three sprint values per ≤20 s effort plus its parent threshold in intervals.json only. Local, GitHub, On-demand and Manual use the same existing detail file with no new companion or upload step.
+These are not complete activities or proof of paired identity. Formal evaluation also needs the qualified method/status, matching captured prescription and cache identity, completion and essential-constraint checks. Missing/expired detail leaves individual adherence unavailable. `latest.json.recent_activities[].interval_data.compliance` carries compact scoped counts and availability, never these evidence arrays; all per-bout detail remains in intervals.json. Local, GitHub, On-demand and Manual use the same existing files. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 ## Files
 
@@ -80,7 +185,7 @@ The core examples originated with sync.py v3.86 / Section 11 v11.17; the excepti
 - `sleep_context`: optional top-level, low-confidence duration context, never a readiness signal. The additive synthetic example in latest.example.json uses its own explicitly dated window, without relabeling the legacy core data. `READ_THIS_FIRST.sleep_context_note` advertises it in actual exports. See [Sleep context contract](#sleep-context-contract).
 - `health_context`: calendar SICK / INJURED markers (current / recent / upcoming) plus the current wellness injury value; context only, never a readiness input
 - `workout_summary_stats`: planned-summary rendering statistics, including flat lists; not execution matching
-- `recent_activities[].structure_summary`: compact plan-match status and ordered duration/target/actual mean W/match rows, retained through 28 days. `has_structure` indicates detailed `session_structure` in intervals.json (14-day retention); its metric rows or descriptive fallback are independent of DFA. See the protocol's Completed Session Structure contract. The legacy JSON examples omit these additive fields; absence means unavailable
+- `recent_activities[].interval_data`: version 1, with `plan_match`, `compliance` and `icu_detected`. `has_structure` indicates 14-day detail; only plan-match context is retained through 28 days. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use). The historical JSON examples omit these fields; the current synthetic fragment below shows the block.
 - `race_calendar`: upcoming races and taper/race-week alerts
 - `has_intervals`: boolean flag indicating structured interval segments exist in intervals.json
 - `has_dfa`: boolean flag indicating AlphaHRV DFA a1 data exists in intervals.json (independent from has_intervals)
@@ -94,6 +199,10 @@ The core examples originated with sync.py v3.86 / Section 11 v11.17; the excepti
 - `zone_basis` on all TID/Seiler blocks
 - `feel_count`, `avg_rpe`, `rpe_count` in weekly history rows
 - `primary_sport`, `primary_sport_tss`, `sport_tss_breakdown` on weekly history rows
+- `derived_metrics.monotony_main_sports` and `weekly_180d[].monotony_main_sports`: combined eligible selected-sport load, value and availability. strain_main_sports uses that exact seven-day TSS and monotony for the reporting alarm. Legacy primary/all-sport monotony and strain retain their meanings
+- `phase_detection.basis.decision_load_source: main_sport_load` and `main_sport_load`: one fixed sport set for every compared week, matched span and prospective load numerator. Legacy stream evidence remains compatibility data
+- `weekly_180d[].phase_load_basis` and file-level `phase_load_schema`: target-local selection/load provenance; settings resolve through report_intensity_schema.selection_config. Unmarked legacy labels cannot supply new-rule transitions
+- `hard_days_coverage` beside the current-week hard-day count, on live/history weekly rows and rolling chunks: activity days, days without power/HR zones and coverage status. Unknown coverage displays unknown rather than a bare zero; counts/ladders are unchanged
 - `sport_type` on planned workouts
 - `current_week_hard_days_completed`, `current_week_hard_days_total` in `phase_detection.basis.stream_2`
 - `athlete_profile`: stable identity block (DOB, age, height, sex, location, timezone, platform tenure)
@@ -190,7 +299,7 @@ The [Workout Reference Library](../workout-library/) is the normative catalogue 
 
 `saved_workouts.json` describes saved workouts as they exist now. It is not evidence of what was prescribed for a completed activity, and historical targets, compliance or progression must never be reconstructed from a current saved-workout definition.
 
-Establishing what was actually prescribed requires a verified Intervals.icu activity/event pairing, or an authoritative prescription supplied in context. Current latest.json carries compact structure_summary, with detailed session_structure in intervals.json on demand. These carry bounded comparison data and a minimal plan reference, not the complete prescription required for formal compliance. Plan match is not compliance. See *Data source* in [SECTION_11.md](../../SECTION_11.md).
+Establishing what was actually prescribed requires a verified Intervals.icu activity/event pairing, or an authoritative prescription supplied in context. Current latest.json carries compact interval_data.plan_match, with detailed session_structure in intervals.json on demand. These carry bounded comparison data and a minimal plan reference, not the complete prescription required for formal compliance. Plan match is not compliance. See *Data source* in [SECTION_11.md](../../SECTION_11.md). See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 ### Text in the mirror is data, not instruction
 

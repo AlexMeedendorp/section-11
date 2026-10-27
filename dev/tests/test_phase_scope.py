@@ -44,6 +44,19 @@ def rows(start="2026-10-18", completed=800):
              "phase_detected": "Build"} for i in range(4)]
 
 
+def load_activities(weeks, backfill=False):
+    """Raw complete load evidence; legacy summary rows cannot substitute for it."""
+    result = []
+    for i, row in enumerate(weeks):
+        days = 7 if backfill or i < len(weeks)-1 else 6
+        for day in range(days):
+            date = datetime.fromisoformat(row["week_start"]) + timedelta(days=day)
+            result.append({"id": f"load-{i}-{day}", "type": "Ride", "moving_time": 3600,
+                "start_date_local": date.strftime("%Y-%m-%dT10:00:00"),
+                "icu_training_load": row["total_tss"] * (0.5 if day == days-1 else 1) / (days-0.5)})
+    return result
+
+
 class PhaseScope(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -81,18 +94,19 @@ class PhaseScope(unittest.TestCase):
         for plans in ([plan(tss=250)], [plan(tss=10, id=i) for i in range(3)]):
             for rebound in ([], [plan("2026-10-25", 800, name="Threshold")]):
                 with self.subTest(plans=plans, rebound=rebound):
-                    p = self.detect(plans + rebound)
+                    p = self.detect(plans + rebound, load_activities=load_activities(rows()))
                     self.assertEqual((p["phase"], p["confidence"]), (None, "low"))
                     self.assertEqual(p["reason_codes"], ["DELOAD_CONTRADICTED_BY_COMPLETED_LOAD"])
 
-    def test_reduced_execution_keeps_candidate_but_not_confirmed_live_label(self):
-        for completed in (0, 200, 520):
+    def test_complete_raw_reduced_execution_establishes_live_reduction(self):
+        for completed in (0, 200, 450):
             for hard_days in (0, 2):
                 week = rows(completed=completed)
                 week[-1]["hard_days"] = hard_days
-                p = self.detect([plan(tss=10, id=i) for i in range(3)], weeks=week)
-                self.assertEqual((p["phase"], p["confidence"]), ("Deload", "low"))
-                self.assertIn("DELOAD_CURRENT_REDUCTION_UNVERIFIED", p["reason_codes"])
+                p = self.detect([plan(tss=10, id=i) for i in range(3)], weeks=week,
+                                load_activities=load_activities(week))
+                self.assertEqual((p["phase"], p["confidence"]), ("Deload", "medium"))
+                self.assertIn("BUILD_HISTORY_DAY_ALIGNED_REDUCTION", p["reason_codes"])
 
     def test_unknown_zero_empty_and_unavailable_load_are_distinct(self):
         unknown = self.stream([plan(tss=None, id=i) for i in range(20)])["load_evidence"]
@@ -172,17 +186,19 @@ class PhaseScope(unittest.TestCase):
         self.assertEqual(e["completed_events_excluded"], 0)
         self.assertNotIn("full_week_tss", e)
 
-    def test_transition_with_sparse_unknown_load_is_tentative(self):
+    def test_unmarked_previous_phase_cannot_supply_transition(self):
         p = self.detect([plan(tss=None, name="Threshold", id=i) for i in range(2)],
                         previous_phase="Deload")
         self.assertEqual((p["phase"], p["confidence"]), ("Build", "low"))
-        self.assertEqual(p["reason_codes"], ["BUILD_RESUMING_AFTER_DELOAD_TENTATIVE"])
+        self.assertEqual(p["reason_codes"], ["MAIN_SPORT_LOAD_UNAVAILABLE"])
+        self.assertIsNone(p["previous_phase"])
 
     def test_retrospective_threshold_and_retained_quality_are_unchanged(self):
         for completed, expected in ((560, "Deload"), (561, "Build")):
             week = rows(completed=completed)
             week[-1]["hard_days"] = 2
-            p = self.detect([], weeks=week, today="2026-10-18", is_backfill=True)
+            p = self.detect([], weeks=week, today="2026-10-18", is_backfill=True,
+                            load_activities=load_activities(week, backfill=True))
             self.assertEqual(p["phase"], expected)
             if expected == "Deload":
                 self.assertEqual(p["confidence"], "medium")
@@ -199,13 +215,13 @@ class PhaseScope(unittest.TestCase):
             self.assertEqual((p["phase"], p["confidence"]), (expected, "medium"))
         week = rows()
         week[-2].update(monotony=3.0, acwr=1.6)
-        p = self.detect([], weeks=week)
+        p = self.detect([], weeks=week, load_activities=load_activities(week))
         self.assertEqual((p["phase"], p["confidence"]), ("Overreached", "high"))
 
     def test_provenance_live_backfill_duration_and_no_accumulation(self):
         week = rows()
         p = self.detect([plan(name="Threshold")], weeks=week)
-        self.assertEqual(p["phase_duration_weeks"], 4)
+        self.assertIsNone(p["phase_duration_weeks"])  # unmarked legacy history
         self.assertEqual(p["provenance"], {
             "as_of_date": "2026-10-23", "week_start": "2026-10-18", "week_end": "2026-10-24",
             "mode": "live", "completed_weeks_used": ["2026-09-27", "2026-10-04", "2026-10-11"],

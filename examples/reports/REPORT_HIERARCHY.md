@@ -29,10 +29,10 @@ When no planned ride has a usable route within 120 h, use the [template's explic
 
 For fallback data, the single final attribution uses the actual provider name: "Weather data by MET Norway, CC BY 4.0." Name and link both providers on that line only when separate report blocks use both.
 
-- **7-day:** per-session rows, selected key-session windows, Coggan Zones and Seiler TID 7d/28d, durability/EF/HRRc means with N, current load and recovery.
+- **7-day:** per-session rows, selected key-session windows, period-local report_intensity_7d and report_intensity_28d sport/basis lines with coverage, durability/EF/HRRc means with N, current load and recovery.
 - **28-day:** four supplied dated chunk blocks, full 28-day wellness and DFA, per-sport pairing counts, checked plan results, Best efforts and two-paragraph Interpretation. Preserve 14-day step detail; no ceilings or separate progression section.
-- **Season:** completed-week volume, CTL and coupled ACWR coverage, time-weighted Coggan Zones, separately labelled current Seiler TID and calendar-matched YoY. No invented prior-year phase labels.
-- **Fun facts:** all three use supplied cycling period facts immediately before Interpretation. Preserve coverage, freshness and attribution. Biggest week belongs only in 28-day/Season. Equivalents are illustrative and never fueling advice.
+- **Season:** completed-week volume, CTL and coupled ACWR coverage, producer report_intensity_season distributions weighted by zone seconds, separately labelled current 28-day TID and calendar-matched YoY. Decode the file's report_intensity_schema (2), resolving each month's block from the first containing tier in monthly_1y/2y/3y order. Each period selects its own sports; compare only matching sport/basis/mapping and retain coverage. No invented prior-year phase labels. All report intensity follows [Report intensity source](../../SECTION_11.md#report-intensity-source); missing new blocks are unavailable and legacy all-sport fields remain context only.
+- **Fun facts:** all three use period-selected cycling, running, swimming, Nordic skiing and rowing immediately before Interpretation. Read cycling from fun_facts and the other four from sport_fun_facts; missing/incompatible selection is unavailable. Preserve observed partial values with coverage, freshness and attribution. Biggest week belongs only in 28-day/Season; power, work and equivalents remain cycling-only. Equivalents are illustrative and never fueling advice.
 - **Plan status:** not_assessed remains distinct in source data but is never a count category. Reports distinguish pairing from checked execution, with marker-only session lines and duration checks for paired no-step sessions of every sport. A broad plan match is not formal adherence.
 - **Preservation:** post-workout Weekly totals, history week_start, phase detection, planned-week features and ordinary training-block concepts retain their existing meanings.
 
@@ -57,9 +57,9 @@ All report types share these formatting principles:
 | File | Description |
 |------|-------------|
 | `PRE_WORKOUT_REPORT_TEMPLATE.md` | Pre-workout briefing template |
-| `PRE_WORKOUT_REPORT_EXAMPLES.md` | 4 anonymized pre-workout examples |
+| `PRE_WORKOUT_REPORT_EXAMPLES.md` | Pre-workout examples |
 | `POST_WORKOUT_REPORT_TEMPLATE.md` | Post-workout analysis template |
-| `POST_WORKOUT_REPORT_EXAMPLES.md` | 4 anonymized post-workout examples |
+| `POST_WORKOUT_REPORT_EXAMPLES.md` | Post-workout examples |
 | `7_DAY_REPORT_TEMPLATE.md` | 7-day report template |
 | `7_DAY_REPORT_EXAMPLES.md` | 2 synthetic 7-day examples |
 | `28_DAY_REPORT_TEMPLATE.md` | 28-day report template |

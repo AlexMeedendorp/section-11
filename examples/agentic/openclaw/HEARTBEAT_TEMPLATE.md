@@ -17,6 +17,8 @@ Copy this file to your agent workspace as `HEARTBEAT.md` and fill in the bracket
 
 ### Data Sources
 
+`interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../../SECTION_11.md#which-interval-data-to-use).
+
 | Source | URL/Path |
 |--------|----------|
 | Latest JSON | [URL to latest.json] |

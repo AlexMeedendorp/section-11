@@ -3,6 +3,8 @@
 > Fictional examples showing standard pre-workout report format, not current athlete data.  
 > See `PRE_WORKOUT_REPORT_TEMPLATE.md` for field reference.
 
+The fictional Polarization/TID lines use period-local report_intensity blocks selecting cycling. Each seven-day example has four observed cycling sessions with compatible power zones in one rolling week; the 28-day shifting example has sixteen across four chunks. These new intensity values and coverage counts are synthetic, independently supplied for this illustration; they do not reanalyse other example metrics. Fetch completeness remains unknown. These illustrations decode the file-level schema 2; counts do not imply exact covered dates.
+
 The point-weather blocks use the shared [Point-weather location](../../SECTION_11.md#point-weather-location) rule. Example 2 uses `athlete_profile.location` from current `latest.json`; example 4 uses a current-chat statement; example 5 uses the current official dossier's Home region because the profile location is null/empty. Route data takes precedence; unresolved travel means omit weather or ask. Rest days, indoor sessions, walks and other sports have no weather. All dates, metrics, source assignments and weather values below are fictional, independent of the approved live-data layout references.
 
 Assume permitted geocoding and weather fetches succeeded where a home forecast is shown. The athlete timezone is Europe/Copenhagen. Weather times omit its zone label; Data updated keeps the local timestamp and zone. Link [Open-Meteo](https://open-meteo.com/) and [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) in the one final attribution line. GeoNames credit remains in API documentation and other geocoding displays; report places are labelled with the athlete's source. Missing values stay unavailable.
@@ -69,10 +71,10 @@ ACWR: 0.84 (optimal); start-of-day
 Recovery Index: 0.93 (good)
 Ramp Rate: -1.30
 Load/Recovery: 5.8
-Durability: 2.14% 7d mean(4) (stable)
+Durability (cycling): 2.14% 7d mean(4) (stable)
 EF: 1.44 7d mean(4) (stable)
 
-Polarization: Z1+Z2 97%, Z3 1%, Z4+ 2%; Polarized (PI: 3.20)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 
 Total hours, last 7 days: 14h12m
 Total activities, last 7 days: 11
@@ -108,10 +110,10 @@ ACWR: 1.04 (optimal); start-of-day
 Recovery Index: 0.88 (good)
 Ramp Rate: 0.45
 Load/Recovery: 6.0
-Durability: 1.85% 7d mean(3) (stable)
+Durability (cycling): 1.85% 7d mean(3) (stable)
 EF: 1.45 7d mean(3) (stable)
 
-Polarization: Z1+Z2 96%, Z3 1%, Z4+ 3%; Polarized (PI: 3.15)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 
 Total hours, last 7 days: 15h18m
 Total activities, last 7 days: 12
@@ -167,10 +169,10 @@ ACWR: 0.99 (optimal); start-of-day
 Recovery Index: 0.91 (good)
 Ramp Rate: 0.30
 Load/Recovery: 5.9
-Durability: 2.40% 7d mean(3) (improving)
+Durability (cycling): 2.40% 7d mean(3) (improving)
 EF: 1.47 7d mean(3) (improving)
 
-Polarization: Z1+Z2 95%, Z3 1%, Z4+ 4%; Polarized (PI: 3.10)
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
 
 Total hours, last 7 days: 16h6m
 Total activities, last 7 days: 13
@@ -208,12 +210,12 @@ ACWR: 1.17 (optimal); start-of-day
 Recovery Index: 0.68 (moderate)
 Ramp Rate: 1.10
 Load/Recovery: 7.1 (tolerance 6.4): over threshold; back off today.
-Durability: 5.80% 7d mean(3) (declining) ⚠️
+Durability (cycling): 5.80% 7d mean(3) (declining) ⚠️
 EF: 1.38 7d mean(3) (declining) ⚠️
 Monotony: 2.5: elevated, add variety this week
 
-Polarization: Z1+Z2 93%, Z3 2%, Z4+ 5%; Polarized (PI: 2.85)
-TID 28d: Pyramidal (PI: 1.90); drift: shifting ⚠️
+Polarization (cycling, power, 1/1 rolling week; 4/4 sessions): Z1+Z2 90%, Z3 3%, Z4+ 7%; Polarized (PI: 2.32)
+TID 28d (cycling, power, 4/4 rolling weeks; 16/16 sessions): Pyramidal; observed-session drift: shifting
 
 Total hours, last 7 days: 18h24m
 Total activities, last 7 days: 14
@@ -246,6 +248,18 @@ for when readiness recovers.
 
 Weather data by Open-Meteo, CC BY 4.0.
 ```
+
+## Synthetic multi-main-sport intensity excerpt
+
+A triathlon period with 60/28/12% eligible TSS selects cycling, running and swimming independently of zone availability. Cycling has two power sessions and running three five-band HR sessions in the rolling week; two swims have pace only. No other status or readiness rule changes.
+
+```text
+Polarization (cycling, power, 1/1 rolling week; 2/2 sessions): Z1+Z2 80%, Z3 15%, Z4+ 5%; Pyramidal
+Polarization (running, HR, 1/1 rolling week; 3/3 sessions): Z1+Z2 75%, Z3 15%, Z4+ 10%; Pyramidal
+Zones (swimming, 1 active rolling week; 0/2 sessions): unavailable, pace mapping deferred
+```
+
+Observed-session distributions are not proof of complete activity retrieval. A missing new block yields unavailable intensity rather than an all-sports fallback.
 
 ---
 

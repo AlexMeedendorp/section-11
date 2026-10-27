@@ -30,9 +30,9 @@ TSB: [start] -> [now] ([signed delta])
 Hours: [supplied hours]
 TSS: [supplied TSS]
 CTL: [supplied end CTL]
-Zones: [Coggan Z1+Z2 %, Z3 %, Z4+ %, basis]
-Hard days: [count, dates and supported names/reasons]
-Durability: [7-day avg, N]
+Zones ([sport], [basis], [covered/period weeks; covered/sport sessions]): [Z1+Z2 %, Z3 %, Z4+ %]
+Hard days: [count with missing-zone-day coverage or unknown; dates and supported names/reasons]
+Durability (cycling): [7-day avg, N]
 EF: [7-day avg, N]
 HRRc: [7-day avg, N]
 HRV: [7-day avg, N days]
@@ -52,7 +52,8 @@ Feel: [28-day avg, N sessions]
 RPE: [28-day avg, N sessions]
 
 **Intensity**
-TID 28d: [supplied Seiler classification, PI, basis]
+Zones 28d ([sport], [basis], [coverage]): [Z1+Z2 %, Z3 %, Z4+ %]
+TID 28d ([sport], [basis], [coverage]): [supplied observed classification, PI]
 
 **Key sessions**
 **[Status emoji] [date, name]**
@@ -62,7 +63,7 @@ Actual: [same-window observed power and duration]
 Long ride: [date, name, duration, supported observation]
 Tempo whole-ride decoupling: [dated series, each eligible whole-ride value; mark plan_changes_power values "plan changes power"]
 
-**Best efforts (last 28 days, previous 28 days in brackets)**
+**Best efforts ([sport], last 28 days, previous 28 days in brackets)**
 5 s: [W, date] ([previous W])
 1 min: [W, date] ([previous W])
 5 min: [W, date] ([previous W])
@@ -82,7 +83,7 @@ Easy-state guard: [eligible estimate and N, descriptive]
 ⚠️ [Title]
 [Fact label]: [one fact per line]
 
-**Fun facts (cycling, descriptive)**
+**Fun facts ([sport], descriptive)**
 [Groups below, without Peaks, with Most work in a week]
 
 **Interpretation**
@@ -93,17 +94,23 @@ Easy-state guard: [eligible estimate and N, descriptive]
 
 ## Sources and gates
 
+Repeat intensity lines for every selected sport and actual basis/mapping, with covered/period weeks and covered/sport sessions. Weeks mean rolling chunks in current reports and configured weeks in Season/months; a covered week is not necessarily fully measured. Decode the file-level report_intensity_schema (2); require matching rule_version in each block, otherwise unavailable. Display keys of selected; sports[sport] supplies totals, active-week and zone columns, while zones[mapping] supplies three raw seconds and session/week counts. Show active-week counts and partial coverage without inferring exact covered dates. Resolve explicit rolling refs using the consuming chunk's dates, and monthly blocks by first occurrence in monthly_1y, monthly_2y, monthly_3y. Distinct mappings of the same basis stay separately labelled. Selected sports without zones get a short zones-unavailable line; pace/GAP is deferred. Missing report_intensity blocks mean unavailable; a present empty block is authoritative. Never use legacy primary/all-sport fields as fallback. Use ready-block tid[sport][mapping] percentages; for compact rows divide each bucket's raw seconds by their sum, never average percentages. Keep observed coverage and unknown activity-fetch completeness explicit.
+
+`interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
+For compliance, read the compact per-step rows with their evaluator, completion and availability; select main work from the authoritative prescription. Unlabelled lower-target rows are not automatic exclusions, and compressed-set totals are never an all-steps aggregate.
+
 - Totals by sport use exact-window recent_activities, distinct IDs, moving_time_s and achieved TSS. Total hours/TSS must reconcile with the four supplied chunks, allowing display rounding. Do not reconstruct chunk metrics from activities or history. Missing metrics remove their own lines, not other supplied observations.
 - Pairing comes from plan_pairing for every sport. "Rides: 12 of 12 planned ✅" counts paired activities, not adherence. Checked against plan includes assessed step statuses and paired no-step activities with a non-null duration result; only followed steps or within-tolerance no-step durations contribute to its followed numerator. Do not substitute a duration check for a structured plan assessment. Exclude unassessed/unknown results from the checked denominator; never show not-assessed counts. Explain material retained-step coverage without inventing assessments: full detail remains 14 days; older step results are last captured. Pairing identity/duration refresh across 28 days.
 - Fitness uses exact dated start-of-period and current CTL/ATL/TSB. Start -> now is allowed here. If the start is missing, show only the dated current value. No seven-day ramp, FTP, eFTP, W/kg, ceilings or separate progression section.
-- Each chunk's hours, TSS, ctl_end, zone_distribution, hard_days, hard_day_details, capability means/N and wellness are supplied. Normalize zone hours only against the supplied total. Never infer Seiler TID from Coggan zones. Hard-day reasons use actual rung/basis: e.g. "Hard days: 3 (10 Jul intervals; 12 and 13 Jul by power Z3 only)" only when hard_day_details supports that distinction. No reclassification; unknown plan intensity stays unknown.
-- Chunk Durability/EF/HRRc say 7-day avg and N. HRRc only when present, numbers only, no trend words. All producer eligibility gates and per-session decoupling >=90 min/VI <=1.05 and EF cycling >=20 min/power+HR/VI <=1.05 gates remain. A per-session value with `decoupling_detail.comparability: plan_changes_power` stays in the series, marked "plan changes power", without a drift verdict or trend claim from that value; chunk Durability means are unchanged.
+- Each chunk's hours, TSS, ctl_end, hard_days, hard_day_details, capability means/N and wellness are supplied. Zones use chunk.report_intensity for each independently selected sport and actual basis/mapping, with weeks/sessions coverage. The full 28-day block includes all observations for its selected sports, including chunks where they did not qualify. Missing new blocks are unavailable. Hard-day reasons use actual rung/basis: e.g. "Hard days: 3 (10 Jul intervals; 12 and 13 Jul by power Z3 only)" only when hard_day_details supports that distinction. No reclassification; unknown plan intensity stays unknown.
+- Read each chunk's hard_days_coverage beside its count. Partial coverage shows the missing-day count, for example "Hard days: 2 (1 day without zone data)". Unknown or missing coverage displays unknown, never a bare 0. no_activities means no observed activities, not proven rest. Coverage is day-level power/HR source presence; it does not reclassify hard days or certify every activity's zones.
+- Chunk Durability/EF/HRRc say 7-day avg and N. HRRc only when present, numbers only, no trend words. All producer eligibility gates and per-session decoupling >=90 min/VI <=1.05 and EF cycling >=20 min/power+HR/VI <=1.05 gates remain. A per-session value with `decoupling_detail.comparability: plan_changes_power` stays in the series, marked "plan changes power", without a drift verdict or trend claim from that value; chunk Durability (cycling) retains these gates.
 - Wellness uses latest.json.wellness_28d, not seven-day wellness_data or a mean of chunk means. Each metric's own observed-day count is authoritative. Weight uses weight_kg.avg/days/latest/latest_date with display conversion; keep the existing current_status.weight slope gate independently. Feel/RPE use available exact-window recent_activities with N; no missing values become zero.
-- Intensity uses derived_metrics.seiler_tid_28d with its basis. Phase is current derived_metrics.phase_detection only, still based on configured calendar weeks.
+- Intensity uses derived_metrics.report_intensity_28d.selected, tid and sports coverage columns, with sport/basis/mapping and coverage labels. Keep its four-chunk scope distinct from each chunk's own selection. See [Report intensity source](../../SECTION_11.md#report-intensity-source). Phase is current derived_metrics.phase_detection only, still based on configured calendar weeks.
 - Key-session header markers and plan identity follow 7_DAY_REPORT_TEMPLATE.md. Use exact identified target/actual windows. Long-ride observations and a tempo whole-ride decoupling series remain clearly distinct from main-set measures. No invented target power from session average/NP.
-- Best efforts uses supplied capability.power_curve_delta current/previous anchor watts and hr_curve_delta with their own window. Attribute current dates from matching exact fun_facts.rolling_28d.peaks or exact activity observations; do not attach a date to a different maximum. Missing previous values remove only the bracket. Dates absent from the source are omitted, not guessed. Shift uses words, no percentages or rotation scores.
+- Best efforts repeats for each current 28-day selected sport using capability.curve_deltas_by_sport.sports[sport].power/hr and its declared windows. Show power only with observed power evidence and HR where available. Take dates only from each anchor's current_source; absent dates are omitted. Missing previous values remove only the bracket; partial maxima are observed lower bounds. Shift requires status=available and matched windows with at least three valid anchors on both sides; use words, no percentages or rotation scores. Missing new evidence is unavailable, never a legacy curve or fun-fact fallback.
 - Flags follow the 7-day per-flag layout and Z3 intent/basis rules. No high-drift count flag.
-- Fun facts source: latest.json.fun_facts.rolling_28d. Most work in a week is the supplied rolling chunk and its dates, never a calendar week. Peaks are omitted here.
+- Fun facts sources: latest.json.fun_facts.rolling_28d for cycling and sport_fun_facts.rolling_28d.sports for the other four fact sports, gated by derived_metrics.report_intensity_28d.selected. Require compatible identity/selection markers and matching start/end as defined in [Descriptive Period Facts](../../SECTION_11.md#descriptive-period-facts). Most work in a week is the supplied rolling chunk and its dates, never a calendar week. Peaks are omitted here.
 
 ## DFA a1 eligibility
 
@@ -121,16 +128,20 @@ Use supplied display values and formatted durations. Seconds-only durations may 
 
 ### Fun facts contract
 
-Place **Fun facts (cycling, descriptive)** immediately before **Interpretation**. Read the report-specific period object, never reconstruct facts from weekly compact caches. Observations are not tests, FTP/zone evidence or readiness evidence. Retain partial/stale coverage, date, activity name (ID if absent) and separate history freshness.
+Place **Fun facts ([sport], descriptive)** blocks immediately before **Interpretation**, in cycling, running, swimming, Nordic skiing, rowing order. Show only those sports selected by this report's own period selection. Read supplied period facts, never reconstruct from weekly compact caches. Missing or incompatible selection/facts are unavailable; an empty selection is authoritative. Observations are not tests, FTP/zone evidence or readiness evidence. Retain partial/stale coverage, date, activity name (ID if absent) and separate history freshness.
 
-Use these blank-line groups, omitting unavailable components:
+For cycling, use these blank-line groups, omitting unavailable components:
 1. Max power (1 s), with date/name; Max HR, with date/name.
-2. Longest ride, with date/name/duration and available distance; Distance for each nonzero environment; Climbing for each nonzero environment.
+2. Longest ride, with date/name/duration and available distance; Distance ridden for each nonzero environment; Climbed for each nonzero environment.
 3. Peaks: one line each for 5 s, 1 min, 5 min, 20 min and 60 min, with date/name. Include only in 7-day and Season fun facts; the 28-day report has its separate Best efforts section.
 4. Time in the saddle.
 5. Work with its energy equivalent inline; Carbs used with its carbohydrate equivalent inline; Most work in a day with date, kJ and same-day carbs. Add Most work in a week only in 28-day and Season, retaining the supplied dates.
 
-Use only Indoor and Outdoor as environment labels, solely from sync's indoor flag or emitted grouping. Never infer environment from names, source apps or platforms. Any indoor distance, speed or climbing outside the split also carries the indoor label. Format split facts as `Distance: 120 km (indoor)` and `Distance: 80 km (outdoor)`. Unknown environment is not Outdoor; state missing coverage when material. Use metres with explicit m if display conversion is unavailable. Omit a zero climbing side.
+For running, swimming, Nordic skiing and rowing, use three blank-line groups: Max HR with date/name; longest run/swim/Nordic session/row with date/name/duration and available distance, then distance and supported outdoor climbing; Running time / Swimming moving time / Nordic skiing time / Rowing time. Longest sessions belong here only in 7-day/28-day reports; Season keeps them in Volume. No power, work, carbs or equivalents belong to these four sports.
+
+Use Distance ridden / Distance run / Distance swum / Distance skied / Distance rowed, and Climbed. Typical lines fit 40 characters: `Distance ridden: 80 km (outdoor)`, `Distance run: 18 km (outdoor)`, `Distance swum: 2 km (pool/other)`, `Distance skied: 18 km (indoor)`, `Distance rowed: 24 km (indoor)`, `Climbed: 600 m (outdoor)`. Use only supplied settings: indoor, outdoor, open water, pool/other, snow, roller, unknown. Generic Swim is pool/other, never a verified pool; OpenWaterSwim is open water unless supplied as unknown. Settings come solely from the emitted fact environment. Never infer environment from names or pool-length fields. Keep indoor, snow, roller and outdoor distance separate. Label a longest session's distance with its setting too. Any indoor distance, speed or climbing outside the split must also carry (indoor). Unknown is never outdoor. Use metres with explicit m if display conversion is unavailable; omit zero-only climbing.
+
+Show observed partial values with coverage on the same fact line, for example `Max HR: 158 bpm, 10 Jul, Lake swim (2 of 3 sessions)` or `Distance rowed: 24 km (indoor, 2 of 3 sessions)`. Keep coverage and attribution when a line wraps. Duration/longest and HR counts use coverage against activity_count; distance/ascent counts use their own setting's activity_count. Zero coverage omits the metric; missing is never zero. Duplicate-conflicting metrics remain unavailable. Cycling retains its existing counts and partial/stale power coverage.
 
 A clear current official dossier statement of positive grams carbohydrate per bottle is sufficient, whether in prose or the Tested training fuel table. For example, "My training bottle contains 90 g carbohydrate" establishes grams per bottle without needing a table. Never infer grams from bottle volume, a product name or a serving without a per-bottle statement. Ambiguous/conflicting statements do not establish a bottle.
 

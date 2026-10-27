@@ -6,6 +6,8 @@ Synthetic values only. Both examples end on Tuesday, independent of the configur
 
 Cadence endurance has no steps and a 3300-second plan; Park walk has no steps and a 1800-second plan. Both durations are within tolerance. Valley endurance is a paired step plan without an assessment. The partly-followed ride has observed off-target steps.
 
+The intensity values illustrate synthetic report_intensity blocks selecting cycling only; walking is excluded from main-sport shares. Power covers all three observed cycling sessions in the rolling week; the independent 28-day block has 14/14 covered sessions across four chunks. Fetch completeness remains unknown. The flagged session has a synthetic power/indoor/260 W zone_reference. These illustrations decode the file-level schema 2; counts do not imply exact covered dates.
+
 ```text
 **7-day report: Wed 8 July to Tue 14 July 2026**
 Data updated: 14 Jul 15:30
@@ -36,11 +38,11 @@ HR: 131 average, 163 maximum
 HRRc: 31 bpm
 
 **Intensity and capability**
-Zones: Z1+Z2 91%, Z3 6%, Z4+ 3% (mixed basis)
-TID 7d: Pyramidal
-TID 28d: Pyramidal
+Zones (cycling, power, 1/1 rolling week; 3/3 sessions): Z1+Z2 91%, Z3 6%, Z4+ 3%
+TID 7d (cycling, power, 3/3 sessions): Pyramidal
+TID 28d (cycling, power, 4/4 rolling weeks; 14/14 sessions): Pyramidal
 
-Durability: 7-day avg 3.1% (N=2), 28-day avg 3.3% (N=8)
+Durability (cycling): 7-day avg 3.1% (N=2), 28-day avg 3.3% (N=8)
 EF: 7-day avg 1.30 (N=3), 28-day avg 1.28 (N=10)
 HRRc: 7-day avg 31 bpm (N=1), 28-day avg 32 bpm (N=4)
 
@@ -68,16 +70,16 @@ RPE: 7-day avg 3.7/10 (N=3) (previous 7 days 3.8/10, N=3)
 Session: 8 Jul, Cadence practice
 Z3 by power: 18m
 Z3 by HR: 2m
-Cause: creep, or zones/FTP off
+Zones: power, from indoor FTP 260 W
 
 **Fun facts (cycling, descriptive)**
 Max power (1 s): 715 W, 8 Jul, Cadence practice
 Max HR: 176 bpm, 12 Jul, Valley loop
 
 Longest ride: Valley loop, 12 Jul, 2h, 50 km (outdoor)
-Distance: 60 km (indoor)
-Distance: 50 km (outdoor)
-Climbing: 600 m (outdoor)
+Distance ridden: 60 km (indoor)
+Distance ridden: 50 km (outdoor)
+Climbed: 600 m (outdoor)
 
 Peak 5 s: 610 W, 8 Jul, Cadence practice
 Peak 1 min: 350 W, 8 Jul, Cadence practice
@@ -121,7 +123,7 @@ Sat 11: Ride, Recovery roll, 20m, 11 TSS (ridden 20m)
 
 **Fun facts (cycling, descriptive)**
 Longest ride: Easy spin, 9 Jul, 20m, 8 km (indoor)
-Distance: 8 km (indoor)
+Distance ridden: 8 km (indoor)
 
 Time in the saddle: 40m
 
@@ -130,3 +132,66 @@ Pairing identifies intent but does not establish execution quality. Missing powe
 ```
 
 Missing comparisons, zero climbing, unavailable peaks, absent equivalents and unplanned upcoming sessions are omitted. No status word or inferred success marker appears in the sparse session lines.
+
+## Runner intensity fragment
+
+For a synthetic period with running at 88% TSS and cycling at 12%, both sports qualify. Three running sessions supply HR and one ride supplies power, all within the rolling week. Separate buckets yield:
+
+```
+Zones (running, HR, 1/1 rolling week; 3/3 sessions): Z1+Z2 75%, Z3 15%, Z4+ 10%
+Zones (cycling, power, 1/1 rolling week; 1/1 sessions): Z1+Z2 90%, Z3 7%, Z4+ 3%
+TID 7d (running, HR, 3/3 sessions): Pyramidal
+TID 7d (cycling, power, 1/1 sessions): Pyramidal
+```
+
+If report_intensity is missing, state intensity unavailable when material; never reuse a cycling label or old all-sport/primary percentages. A present empty block remains empty. A selected sport without zones gets a short unavailable line, for example `Zones (swimming, 1 active rolling week; 0/2 sessions): unavailable, pace mapping deferred`.
+
+## Selected-sport fact fragments
+
+Each independent synthetic fragment assumes its named sport is selected for this report's period and that the matching facts are compatible. Snow ascent has no observations. Rowing duration coverage is partial; a longest session's distance is its own distance. Season longest sessions remain in Volume.
+
+```
+**Fun facts (running, descriptive)**
+Max HR: 172 bpm, 12 Jul, Park loop
+
+Longest run: Park loop, 12 Jul, 1h,
+10 km (outdoor)
+Distance run: 18 km (outdoor)
+Climbed: 160 m (outdoor)
+
+Running time: 1h50m
+
+**Fun facts (swimming, descriptive)**
+Max HR: 158 bpm, 10 Jul, Lake swim
+(2 of 3 sessions)
+
+Longest swim: Lake swim, 10 Jul, 40m,
+1.8 km (open water)
+Distance swum: 2 km (pool/other)
+Distance swum: 1.8 km (open water)
+
+Swimming moving time: 1h30m
+
+**Fun facts (Nordic skiing, descriptive)**
+Max HR: 165 bpm, 11 Jul, Steady ski
+
+Longest Nordic session: Snow loop,
+12 Jul, 1h, 12 km (snow)
+Distance skied: 12 km (snow)
+Distance skied: 8 km (roller)
+Distance skied: 10 km (indoor)
+Climbed: 90 m (roller)
+
+Nordic skiing time: 2h30m
+
+**Fun facts (rowing, descriptive)**
+Max HR: 162 bpm, 12 Jul, Steady row
+
+Longest row: Steady row, 12 Jul, 1h,
+12 km (indoor), 3 of 4 sessions
+Distance rowed: 24 km
+(indoor, 2 of 3 sessions)
+Distance rowed: 6 km (outdoor)
+
+Rowing time: 2h30m (3 of 4 sessions)
+```

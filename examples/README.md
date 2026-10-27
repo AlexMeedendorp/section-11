@@ -23,7 +23,7 @@ Working implementations and reference documentation for Section 11 integrations.
 
 ### Option A: Automated Sync (Recommended for web chat)
 
-Best for: Always-fresh data via GitHub, zero maintenance after setup.
+Best for: Scheduled data refresh via GitHub, with occasional manual sync.py updates.
 
 → [json-auto-sync/SETUP.md](json-auto-sync/SETUP.md)
 
@@ -35,7 +35,7 @@ Best for: One-off exports, different time ranges, no GitHub needed.
 
 ### Option C: Local Automated Sync
 
-Best for: Agentic platforms (OpenClaw, Claude Code, Cowork, Hermes, etc.) whose runtime can reach your data directory; where it cannot, the AI reads a cloud-synced copy via connector. Always-fresh data, no GitHub needed. See [Privacy & Security](../README.md#privacy--security).
+Best for: Agentic platforms (OpenClaw, Claude Code, Cowork, Hermes, etc.) whose runtime can reach your data directory; where it cannot, the AI reads a cloud-synced copy via connector. Scheduled data refresh, no GitHub needed. See [Privacy & Security](../README.md#privacy--security).
 
 → [json-local-sync/SETUP.md](json-local-sync/SETUP.md)
 
@@ -49,14 +49,14 @@ Best for: Phone or browser users who want fresh data without a schedule or local
 
 ## Shared Files
 
-Both methods use the same `sync.py` script and produce these files:
+All four methods use the same `sync.py` script and produce these files:
 
 | File | Purpose | Auto-created |
 |------|---------|--------------|
 | `latest.json` | Current 7-day training data for AI consumption | Yes |
 | `history.json` | Longitudinal data: daily (90d), weekly (180d), monthly (3y) | Yes |
 | `intervals.json` | Per-interval segment data for recent structured sessions | Yes |
-| `routes.json` | Route/terrain data for events with GPX/TCX attachments | When attachments exist |
+| `routes.json` | Route/terrain data for events with GPX/TCX attachments | Every successful sync (`events` may be `[]`) |
 | `saved_workouts.json` | Read-only mirror of the athlete's Intervals.icu saved workouts | Every sync (refreshed on its own 6h throttle) |
 | `ftp_history.json` | FTP tracking for Benchmark Index | Yes |
 | `archive/` | Daily UTC snapshots of `latest.json`, overwritten by later successful runs that day (GitHub workflow only, scheduled or Sync Now) | Yes |
@@ -97,10 +97,11 @@ latest.json
 │   ├── fitness          → CTL, ATL, TSB, ramp_rate
 │   ├── thresholds       → FTP, eFTP, LTHR, W', P-max, VO2max (per-sport)
 │   └── current_metrics  → Weight, RHR, HRV, sleep, subjective state, vitals, body comp
+├── sport_fun_facts      → Optional period-selected running/swimming/Nordic/rowing facts; cycling remains in fun_facts
 ├── derived_metrics      → Section 11 calculated values (see below)
-│   ├── capability       → Durability, EF, HRRc trends + TID drift (7d vs 28d)
+│   ├── capability       → Durability (cycling), EF, HRRc trends + main-sport TID drift and per-sport curve deltas
 │   └── phase_detection  → Dual-stream phase detection with confidence
-├── recent_activities    → Detailed activity data with zones, EF, HRRc, has_intervals, has_dfa, dfa_summary, effort_response, has_structure, structure_summary, terrain_summary/weather_summary (outdoor only)
+├── recent_activities    → Detailed activity data with zones, EF, HRRc, has_intervals, has_dfa, dfa_summary, effort_response, has_structure, interval_data (plan_match/compliance/icu_detected), terrain_summary/weather_summary (outdoor only)
 ├── wellness_data        → Daily HRV, RHR, sleep, subjective state, vitals, nutrition, lifestyle
 ├── planned_workouts     → Upcoming scheduled sessions with workout_summary
 ├── workout_summary_stats → Planned-summary rendering statistics (including flat lists), not execution matching
@@ -113,6 +114,7 @@ history.json
 ├── data_gaps            → Detected gaps in training data
 ├── summaries            → Period aggregates (90d, 180d, 1y, 2y, 3y)
 ├── daily_90d            → Day-by-day detail (last 90 days)
+├── sport_fun_facts      → Optional completed-week Season facts for selected running/swimming/Nordic/rowing
 ├── weekly_180d          → Week-by-week (last 180 days)
 └── monthly_1y/2y/3y     → Month-by-month (up to 3 years)
 
@@ -123,8 +125,8 @@ intervals.json (on-demand: load when analyzing activities with has_intervals: tr
 ├── fetch_state{}        → INTERNAL retry/fetch bookkeeping; not a consumer contract
 └── activities[]         → Per-activity interval segments
     ├── activity_id      → Matches id in latest.json recent_activities
-    ├── session_structure → Completed-step metrics or descriptive fallback (independent of DFA)
-    ├── interval_summary → Group summary (e.g., "4x 9m56s 259w")
+    ├── session_structure → Plan-aware evidence for completion and atomic compliance; fallback is descriptive
+    ├── interval_summary → Intervals.icu detected groups (e.g., "4x 9m56s 259w"), descriptive cross-check only
     ├── zone_basis       → What `zone` refers to: power | hr | pace (omitted if unresolved)
     └── intervals[]      → WORK + RECOVERY segments with power, HR, cadence, zone, timing
 
@@ -158,7 +160,7 @@ saved_workouts.json (on-demand: load when selecting, reusing, or discussing a sa
     └── workout_doc      → Full structure as received; targets may be relative or absolute
 ```
 
-> `latest.json` carries compact completed-step `structure_summary` through 28 days. `has_structure` points to detailed `session_structure` in `intervals.json` within 14-day retention; after expiry only the last summary is carried forward. Detailed thirds/WORK efforts appear only without usable plan windows. Read method/status and issues; plan match is not compliance. See the protocol's Completed Session Structure contract. Flat planned lists have summaries; sync does not emit inferred roles. Coaching interpretation follows SECTION_11's Main work rule using prescription structure, durations and targets, with name or description as context only and optional workout step text.
+> `latest.json` carries compact completed-step `interval_data.plan_match` through 28 days. `has_structure` points to detailed `session_structure` in `intervals.json` within 14-day retention; after expiry only the last summary is carried forward. Detailed thirds/WORK efforts appear only without usable plan windows. Read method/status and issues; plan match is not compliance. See the protocol's Completed Session Structure contract. Flat planned lists have summaries; sync does not emit inferred roles. Coaching interpretation follows SECTION_11's Main work rule using prescription structure, durations and targets, with name or description as context only and optional workout step text. See [Which interval data to use](../SECTION_11.md#which-interval-data-to-use).
 
 > **Note on the two libraries:** `saved_workouts.json` mirrors the athlete's own saved workouts in Intervals.icu. It is **not** the [Workout Reference Library](workout-library/), which is the normative catalogue of session templates Section 11 designs plans from. Full description: [Saved Workouts Mirror](json-examples/README.md#saved-workouts-mirror).
 
@@ -172,17 +174,17 @@ Pre-calculated values for Section 11 compliance: AI should use these, not calcul
 |--------|-------------|
 | `acwr` | Acute:Chronic Workload Ratio (0.8–1.3 optimal) |
 | `recovery_index` | HRV/RHR composite (>1.0 = good recovery) |
-| `monotony` / `strain` | Training variability (Foster) |
+| `monotony` / `strain` | Legacy all-sport training variability (Foster); reporting alarms use monotony_main_sports / strain_main_sports |
 | `grey_zone_percentage` | Z3 time %: minimize in polarized training |
 | `quality_intensity_percentage` | Z4+ time %: target ~20% |
 | `easy_time_ratio` | Easy time ratio: target ~0.80 |
-| `consistency_index` | Plan adherence (completed/planned) |
+| `consistency_index` | Planned-date match ratio (matched dates / planned dates), not execution adherence |
 | `phase_detected` | Auto-detected: Build, Base, Peak, Taper, Deload, Recovery, Overreached, null |
 | `phase_detection` | Full phase detection object: phase, confidence, reason_codes, basis (dual-stream), phase_duration_weeks |
 | `benchmark_indoor` / `benchmark_outdoor` | 8-week FTP progression |
-| `seiler_tid_7d` / `seiler_tid_28d` | Seiler TID classification (Polarized/Pyramidal/Threshold/HIT/Base) |
-| `capability.durability` | Aggregate decoupling 7d/28d mean + trend (improving/stable/declining) |
-| `capability.tid_comparison` | TID drift detection (consistent/shifting/acute_depolarization) |
+| `report_intensity_7d` / `report_intensity_28d` | Period-local main sports, separate power/HR mapping buckets and weeks/sessions coverage. Legacy primary/all-sport fields retain their meanings. See [Report intensity source](../SECTION_11.md#report-intensity-source) |
+| `capability.durability` | Cycling decoupling 7d/28d mean + trend (improving/stable/declining) |
+| `capability.report_intensity_comparison` | Same sport/basis/mapping observed-session drift with coverage read from both ready blocks; partial/incompatible evidence has null drift. Legacy tid_comparison_primary and tid_comparison remain unchanged |
 | `readiness_decision` | Pre-computed go/modify/skip with priority ladder (P0–P3) and signal breakdown |
 | `capability.efficiency_factor` | Aerobic efficiency (power÷HR normalized) 7d/28d with trend |
 | `capability.hrrc` | Heart rate recovery 7d/28d aggregate trend (improving/stable/declining) |
