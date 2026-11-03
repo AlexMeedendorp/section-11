@@ -23,7 +23,7 @@ Working implementations and reference documentation for Section 11 integrations.
 
 ### Option A: Automated Sync (Recommended for web chat)
 
-Best for: Scheduled data refresh via GitHub, with occasional manual sync.py updates.
+Best for: Scheduled data sync via GitHub, with verified updates through the same workflow.
 
 → [json-auto-sync/SETUP.md](json-auto-sync/SETUP.md)
 
@@ -49,7 +49,13 @@ Best for: Phone or browser users who want fresh data without a schedule or local
 
 ## Shared Files
 
-All four methods use the same `sync.py` script and produce these files:
+All four methods use the same sync engine. Installed setups run `section11/examples/sync.py`;
+GitHub uses its active workflow wrappers. Personal data remains outside `section11/`.
+Local automatic updates are opt-in; GitHub uses a manual Update dispatch by
+default, and `SECTION11_AUTO_UPDATE=true` enables verified direct updates. See
+[updates and rollback](maintenance/UPDATING.md).
+
+The engine produces these files:
 
 | File | Purpose | Auto-created |
 |------|---------|--------------|
@@ -68,17 +74,22 @@ Read `latest.json.data_overview` first for companion presence, relative location
 See [json-examples/](json-examples/) for fictional example output of these files. They end in `.example.json`, are schema references only, and are never athlete data.
 
 ```bash
-# Manual local export
-python sync.py --output latest.json
-
-# Push to GitHub
-python sync.py
+# Local export from an installed data directory
+python3 section11/examples/sync.py --output latest.json
 
 # Different time range
-python sync.py --days 90 --output 90days.json
+python3 section11/examples/sync.py --days 90 --output 90days.json
 ```
 
 See individual SETUP.md files for detailed instructions.
+
+### Requests and private state
+
+Local sync installs a standard timer at `check_interval_minutes` in `.sync_config.json`: 1, 2, 5 or 10 minutes (default 1). Run `--update` after changing the interval. One minute fits within the limit in the measured offline scenarios, not as a guarantee for every athlete. sync.py starts from your choice and can choose a slower step or pause when allowance requires it. A normal local run makes 4 Intervals.icu requests; first runs and refreshes cost more. The provider limits are 8,000 per API key per UTC day and 2,500 per 15 minutes. sync reserves 1,000 for other tools, leaving at most 7,000 daily; a lower reported limit wins. It counts only its own and push.py's requests in shared state, so choose a slower interval if other tools use the key. GitHub and On-demand ignore this setting and have no daily allowance controller or step-down. Their updated workflow can reuse slow sources for a quiet 4-request tick instead of about 31; refreshes and misses cost more. See [counts, refresh schedules and warnings](json-local-sync/SETUP.md#automate-the-refresh).
+
+Private request accounting and source responses live in `<data folder>/state/`. Local and Manual keep them between runs, and whole-folder cloud sync uploads state too. A whole-folder connector can technically read it; `data_overview.state_note` and `READ_THIS_FIRST.state_note` explicitly tell AI tools to ignore it. GitHub and On-demand create state fresh on each runner but never keep, commit or upload it through the supplied workflows, so the AI does not receive it through those paths. Read `source_freshness` for status. See [locations, cleanup and SECTION11_STATE_DIR](json-local-sync/SETUP.md#private-sync-state).
+
+We recommend one setup per user. Stop the old timer or workflow before changing the sync path or moving machines, to protect Intervals.icu. The count is per data folder, API key and athlete, with no coordination across folders.
 
 ---
 
@@ -90,6 +101,7 @@ All methods produce the same JSON structure compatible with Section 11 protocol:
 latest.json
 ├── READ_THIS_FIRST      → AI instructions + quick stats + wellness_field_scales legend
 ├── metadata             → Timestamps, version
+├── source_freshness     → Source status/age, local request budget, effective schedule and warnings
 ├── alerts               → Graduated severity flags (info → alarm)
 ├── readiness_decision   → Pre-computed go/modify/skip with signal breakdown
 ├── summary              → Activity breakdown by type
@@ -218,15 +230,17 @@ After replacing a file, compare these markers with the source:
 | Source | Marker |
 |---|---|
 | `SECTION_11.md` | `Protocol Version` |
-| Root `latest.json`, not `archive/` | `metadata.last_updated` |
-| Official `DOSSIER.md`, if used | Authority, Official dossier location, Dossier revision and Last reviewed |
+| Root `latest.json`, not `archive/` | `export_freshness.generated_at` (legacy fallback: `metadata.last_updated`) |
+| Root `DOSSIER.md`, if used | Authority, Dossier revision and Last reviewed; uploads are delivery copies of the data-folder root file |
 | Trend questions | `latest.json.history.age_days` and the relevant `history.json` |
 | Interval or route detail | `generated_at` in `intervals.json` or `routes.json`, plus the detail's own status/freshness |
 | Saved workouts | `saved_workouts.json.refresh.status` and `refresh.last_success_at` |
 
 Matching markers support a file-read check; they do not prove every fact was read correctly. Ask whether more than one copy is reachable. Resolve conflicting official copies before use.
 
-`metadata.last_updated` uses the sync machine's clock without a timezone offset. The protocol expects under 24 hours and asks for refresh beyond 48 hours. Companions have separate schedules: history becomes due after more than 28 whole days or a script change, with scheduling/retry gates described in [GitHub troubleshooting](json-auto-sync/SETUP.md#historyjson-not-generated); saved workouts have their own throttle and retained-snapshot status. A newly written companion does not prove a fresh provider forecast or new route analysis.
+Use `export_freshness.generated_at` and a trusted current time, falling back to `metadata.last_updated`. Both are UTC (Z); only older exports without an offset need the sync machine's known timezone. If time or timezone is unknown, say age cannot be verified when relevant. Mention a missed `expected_update_by` once when relevant and look for a newer copy. Without a known deadline, expect under 12 hours and mention snapshot age at 12-24 hours when relevant; beyond 24 hours, request refresh for advice needing current data even during a permitted pause, and continue qualified coaching. Companions have separate schedules: history becomes due after more than 28 whole days or a script change, with scheduling/retry gates described in [GitHub troubleshooting](json-auto-sync/SETUP.md#historyjson-not-generated); saved workouts have their own throttle and retained-snapshot status. A newly written companion does not prove a fresh provider forecast or new route analysis.
+
+For ordinary coaching, use export age and relevant `latest.json.source_freshness.warnings`, not a per-source freshness audit. Only `source_stale` is a source-data notice; other codes explain sync operation. Valid caches can stay usable as acquisition ages grow. Native availability, coverage and date rules still apply. See [Source freshness](json-examples/README.md#source-freshness).
 
 If the source is current but the delivered copy is old, replace frozen uploads, refresh/re-import as the connector requires, and let cloud-drive synchronization finish first. Claude GitHub needs Sync now; Gemini imports must be repeated; ChatGPT retrieves permitted content on demand where available. Use [Platform Setup](../README.md#platform-setup) and its vendor links for other cases. Raw GitHub content can remain cached for a few minutes after a commit. Wait, then read again.
 

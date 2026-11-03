@@ -10,7 +10,7 @@ An open protocol for deterministic, auditable AI-powered endurance coaching. Bui
 
 ## What Is This?
 
-**Section 11** is a structured framework that enables AI systems (ChatGPT, Claude, Gemini, Grok (web/app), Mistral, etc.) to provide evidence-based endurance training advice with full auditability and deterministic reasoning.
+**Section 11 (S11)** is a structured framework that enables AI systems (ChatGPT, Claude, Gemini, Grok (web/app), Mistral, etc.) to provide evidence-based endurance training advice with full auditability and deterministic reasoning.
 
 ### Core Principles
 
@@ -48,6 +48,8 @@ Section 11 operates no hosted backend. Your data passes through the services you
 
 Configured credentials go to their corresponding service: the Intervals.icu API key in its Authorization header, and a GitHub token to GitHub for configured publishing or issue creation. They are never included in exported or published JSON.
 
+sync.py and push.py use [private sync state](examples/json-local-sync/SETUP.md#private-sync-state) in `<data folder>/state/` for request accounting and cached athlete responses. Local and Manual keep it between runs; syncing the whole folder to cloud storage uploads it too, and a whole-folder connector can technically read it. `data_overview.state_note` and `READ_THIS_FIRST.state_note` in latest.json explicitly tell AI tools to ignore it. The supplied publishing and workflow artifact paths never commit or upload state. GitHub and On-demand retain only profile, curves and messages in a separate Actions cache, outside the repository and training-data download; raw core responses and accounting stay runner-only. Use `latest.json.source_freshness` for status.
+
 ---
 
 ## Quick Start
@@ -62,18 +64,36 @@ You can also follow the step-by-step guides below.
 
 ### 1. Create Your Dossier: your stable private context
 
-Copy `DOSSIER_TEMPLATE.md` and fill in the context your AI cannot read from your data: background, equipment, stable constraints, health and injury history, tested fueling, and how you prefer to be coached. Current thresholds and load always come from your JSON. You can start coaching before the dossier exists; a missing dossier limits personalisation, not safety.
+Create `DOSSIER.md` in the data-folder root (repository root on GitHub) from `DOSSIER_TEMPLATE.md` and fill in the context your AI cannot read from your data: background, equipment, stable constraints, health and injury history, tested fueling, and how you prefer to be coached. Current thresholds and load always come from your JSON. You can start coaching before the dossier exists; a missing dossier limits personalisation, not safety.
 
 ### 2. Set Up Your Data Sync
 
 Choose how your data reaches the AI:
 
-- **[Local sync](examples/json-local-sync/SETUP.md):** runs on a machine you control every 60 seconds. The AI reads the files directly if its runtime can reach them, or through a cloud connector.
-- **[GitHub sync](examples/json-auto-sync/SETUP.md):** writes to a private repository every 30 minutes by default. Schedules are best-effort; **Sync Now** requests a run and may queue. Runs consume Actions minutes. See [schedule options and costs](examples/json-auto-sync/SETUP.md#sync-schedule-and-github-actions-usage) before changing frequency.
+- **[Local sync](examples/json-local-sync/SETUP.md):** uses a standard timer on a machine you control at your chosen check interval of 1, 2, 5 or 10 minutes; sync.py can reduce them to a slower step or pause when allowance requires it. The AI reads the files directly if its runtime can reach them, or through a cloud connector.
+- **[GitHub sync](examples/json-auto-sync/SETUP.md):** writes to a private repository every 30 minutes by default. Schedules are best-effort; **Sync Now** requests a run and may queue. In a private repository, runs consume Actions minutes; a public repository runs free but publishes your data ([trade-offs](examples/json-auto-sync/SETUP.md#public-repositories)). See [schedule options and costs](examples/json-auto-sync/SETUP.md#sync-schedule-and-github-actions-usage) before changing frequency.
 - **[On-demand sync](examples/json-on-demand/SETUP.md):** trigger from your phone or browser, then download the JSON artifact or refresh your connector. No schedule or local Python.
-- **[Manual export](examples/json-manual/SETUP.md):** run once for your chosen date range, then upload. Re-export when data changes.
+- **[Manual export](examples/json-manual/SETUP.md):** run once for your chosen date range, then upload. Choose `--no-timer` explicitly for manual-only setup; otherwise installation includes auto sync. Re-export when data changes.
 
 Plain raw URLs require a public repository. For private data, use authenticated access or uploads.
+
+**We recommend one setup per user.** Before changing the sync path or moving to another machine, stop the old timer or workflow first to protect Intervals.icu. The local count is per data folder, API key and athlete; separate folders do not coordinate, even on the same machine.
+
+A normal local run uses **4 Intervals.icu requests**. The provider allows **8,000 per key per UTC day** and **2,500 per 15 minutes**; sync reserves 1,000 for other tools and uses at most 7,000 daily, or less if the provider reports a lower limit. One-minute checks fit within the limit in the measured offline scenarios; this is not a guarantee for every athlete. sync.py counts only its own and push.py's requests in shared state, so choose a slower interval if other tools use the key. With the updated workflow, GitHub and On-demand can fall from about **31 requests to 4** on a quiet slow-cache hit. Refreshes, new activities and cache misses cost more; these setups have no daily allowance controller or automatic step-down. See [interval choices, measured daily counts and automatic step-down](examples/json-local-sync/SETUP.md#automate-the-refresh), including the larger first run after updating.
+
+All installed setups keep the verified date release in `section11/` and personal
+data, dossier and `custom/` files beside it. Each setup checks for a new official
+release once per UTC day. By default you get a notice and confirm with `--update`
+(Local, Manual) or **Update** in the sync workflow (GitHub, On-demand); automatic
+installation is opt-in, and `--rollback` or **Rollback** restores the previous
+installation. See [updates and rollback](examples/maintenance/UPDATING.md),
+including commit readback, owner workflow recovery and first-release requirements.
+
+Outside `section11/`, updates remove any file in any folder named exactly like a
+release or historical Section 11 file, except the update guide's keep list.
+Protected names ignore case; removal names must match exactly. Keep your own files
+in `custom/` or outside the data folder. The local rollback ZIP is short-term
+recovery until the next changing install, not a backup; GitHub retains Git history.
 
 ### 3. Configure Your AI Platform
 
@@ -84,11 +104,18 @@ Choose your path:
 
 ### 4. Make Files Available to Your AI
 
-Supply `SECTION_11.md`, your current `latest.json`, and `DOSSIER.md` if you use one. Supply companion JSON when the task needs it, plus the [report templates](examples/reports/) and [Workout Reference Library](examples/workout-library/) for reports and prescriptions.
+Give a filesystem agent access to the installed `section11/` folder and current
+exported data. For web chat:
 
-Use the runtime's data folder, an authenticated repository/cloud connector, or uploads. If your connector exposes only data, supply the protocol and dossier separately or connect the protocol repository too.
+- **GitHub sync or On-demand:** use a connector or a link to your own repository first.
+  If the chat can use neither, open your repository's **Code > Download ZIP** and
+  give that ZIP to the chat or project. It includes the installed protocol and templates.
+- **Manual export:** upload the exported data files, `DOSSIER.md` if used, and a ZIP of the `section11/`
+  folder only. Never zip the whole data folder, which can contain credentials and rollback state.
 
-Uploads are frozen. Replace old copies after updates, without leaving two official versions. Connectors may need refresh or re-import; check [Platform Setup](#platform-setup).
+An uploaded ZIP is a snapshot. Re-upload for fresh data and after updates, replacing
+the previous upload. Keep the optional dossier as root `DOSSIER.md`; uploads are delivery copies. Keep any repository containing it private; Git keeps old versions.
+Connectors may need refresh or re-import; check [Platform Setup](#platform-setup).
 
 ### Having trouble?
 
@@ -215,7 +242,10 @@ Create a Project and add Project Instructions. Select repository files through t
 
 #### Gemini (Gems)
 
-Create a Gem. Put the project contract in Instructions and `SECTION_11.md`, plus your optional dossier, in Knowledge. Supply current JSON separately. Use ordinary chats for repository import. Do not upload the whole repository as a ZIP; ordinary ZIP upload has a ten-file limit.
+Create a Gem and put the project contract in Instructions. Follow the delivery
+steps in [Quick Start](#4-make-files-available-to-your-ai) for the installed files
+and data. Gemini limits ZIP uploads. If a Gem rejects or truncates the ZIP, use
+repository import in an ordinary Gemini chat; it is not a Gem Knowledge source.
 
 #### Grok (web/app)
 
@@ -295,7 +325,7 @@ If you use a dossier, ask about something it records:
 **Good response includes:**
 
 - ✅ Your recorded bottle/equipment, or a clear statement that the official copy or entry is unavailable
-- ✅ On "Which dossier did you read?", the matching authority statement, Official dossier location, revision and last-reviewed date
+- ✅ On "Which dossier did you read?", the matching authority statement, data-folder root, revision and last-reviewed date, identifying uploads as delivery copies
 - ✅ On "How many should I take on my next long ride?", a current JSON/planned-session read before prescribing numbers, or a statement that no session is planned
 
 **Bad response:**
@@ -321,7 +351,9 @@ Plain `raw.githubusercontent.com` URLs return 404 for private repositories as we
 
 ### Data appears stale after sync
 
-Compare the source and the AI's `latest.json` using `metadata.last_updated`, which uses the sync machine's clock without a timezone offset. The protocol expects under 24 hours and requests refresh beyond 48 hours.
+Compare the source and the AI's `latest.json` using `export_freshness.generated_at` and a trusted current time, falling back to `metadata.last_updated`. Both are UTC (Z); only older exports with a naive `last_updated` need the sync machine's known timezone. If time or timezone is unknown, say age cannot be verified when relevant. After `expected_update_by`, mention late delivery once when relevant and look for a newer accessible copy. Manual, On-demand and unknown schedules have no deadline: expect under 12 hours and mention age at 12-24 hours when relevant. Beyond 24 hours, request refresh for advice needing current data, even during a permitted pause. Continue qualified coaching; lateness alone is never a global stop.
+
+For ordinary coaching, read `source_freshness.warnings`: mention `source_stale` only when its named sources affect the answer. Other warning codes describe sync operation, not bad data. Sync owns cached-source validity; do not rejudge per-source acquisition ages or statuses. Empty warnings and a recent `as_of` do not certify a live feed. Metric dates and native validity rules still apply. See the [field reference](examples/json-examples/README.md#source-freshness).
 
 If the source is old, check sync below. Otherwise replace uploads, refresh/re-import connectors, or let your cloud folder finish syncing. Raw GitHub content can lag a few minutes. Ask for a fresh read in this response; use a new conversation if old values persist.
 
@@ -329,7 +361,7 @@ If the source is old, check sync below. Otherwise replace uploads, refresh/re-im
 
 Check the API key, athlete ID and run log; no recent activities can legitimately mean no new activity data.
 
-- **Local:** check the timer and `sync.log`, keep `.sync_config.json` at the data root, and try `--debug`. See [local troubleshooting](examples/json-local-sync/SETUP.md#verification-and-troubleshooting).
+- **Local:** check the timer, `sync.log` and `source_freshness` for a step-down, pause or provider hold before treating the timer as broken. Keep `.sync_config.json` at the data root and retain `state/` there unless you set a state override. See [request allowance and pauses](examples/json-local-sync/SETUP.md#request-allowance-and-pauses) for the exact pause message and recovery steps.
 - **GitHub:** inspect **Actions → Auto-Sync Intervals.icu Data**. Check secrets, Actions minutes and workflow permissions; request **Sync Now** when needed. See [workflow troubleshooting](examples/json-auto-sync/SETUP.md#troubleshooting).
 - **On-demand:** trigger the workflow and download its completed `training-data` artifact within seven days, or refresh your connector.
 - **Manual:** export again and replace uploads.
@@ -358,7 +390,7 @@ Check [Platform Setup](#grok-webapp), including administrator provisioning in Bu
 
 ### AI uses the wrong dossier or ignores your preferences
 
-Ask for its authority statement, Official dossier location, revision and last-reviewed date; compare with your official copy. Resolve conflicting copies yourself, then replace or remove superseded ones.
+Root `DOSSIER.md` in the data-folder root (repository root on GitHub) is authoritative. Ask for its authority statement, revision and last-reviewed date; compare uploads with that root file. Resolve conflicting delivery copies yourself, then replace or remove superseded ones. If the dossier is configured or kept elsewhere, including an old `Official dossier location` field, the AI tells you once that the standard location is the data-folder root and asks you to move it. It never moves or copies it itself; until moved, it uses the copy you point to. Keep any repository containing it private; Git keeps old versions.
 
 Dossier changes require your exact approval and verified write access, otherwise the AI returns a revised artifact for you to save. Check that its revision increased. The [dossier template](DOSSIER_TEMPLATE.md) explains preference precedence and maintenance.
 
@@ -499,8 +531,6 @@ The script writes `routes.json` on every sync, with terrain analysis for planned
 
 `latest.json` starts with `data_overview`, immediately after `READ_THIS_FIRST` when present: companion files, locations and route/weather/map availability. The AI reads it first; file presence does not guarantee access.
 
-**Upgrading from before 11.80:** GitHub and On-demand users must replace both `sync.py` and `.github/workflows/auto-sync.yml` once. Follow the [upgrade steps](examples/json-auto-sync/SETUP.md#updating-an-existing-repository), retaining custom settings and On-demand's manual-only trigger.
-
 Keep the export folder between runs, including `routes.json` and `route_eta_history.json`. GitHub/On-demand persist these and maps in the repository; their six-JSON download artifact excludes maps and ETA history. Manual uploads need no extra map step. Run one sync process at a time; automated local timers should use `--lockfile`.
 
 ### Route Weather
@@ -521,9 +551,7 @@ It is inventory, not the Workout Reference Library or proof of historical prescr
 
 ### Update Notifications
 
-**GitHub/On-demand:** the shared output-only workflow sends no update notification. Replace `sync.py` and update workflow changes manually, preserving customizations; see [Updating an Existing Repository](examples/json-auto-sync/SETUP.md#updating-an-existing-repository). The separate configured direct-publishing path can open update issues.
-
-**Local:** sync prints a daily notice when updates are available. Use `python3 section11/examples/sync.py --update`; renames/removals need a second confirmation. Declining or running non-interactively leaves orphaned files. See [Staying Up to Date](examples/json-local-sync/SETUP.md#staying-up-to-date).
+**GitHub/On-demand:** select **Update** in the sync workflow to accept a verified replacement after its notice; **Status** shows the plan without installing. **Local:** run `python3 section11/examples/sync.py --update` after the daily advisory. Automatic installation is opt-in for both. See [Updating Section 11](examples/maintenance/UPDATING.md).
 
 ### Data Hierarchy
 
