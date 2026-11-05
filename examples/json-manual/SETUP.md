@@ -1,5 +1,35 @@
 # Manual JSON Export
 
+Manual export saves your Intervals.icu training data as files on your computer. Run it when you need fresh data, then give the files to your AI. You do not need GitHub.
+
+## Get help from your AI
+
+You choose the folder and enter credentials. An AI with command access can help; otherwise, you run the commands. Copy this prompt:
+
+> Help me set up Manual export. Before acting, read the full guide at https://github.com/CrankAddict/section-11/blob/main/examples/json-manual/SETUP.md. If you can access my installed section11/ folder, read the same file at section11/examples/json-manual/SETUP.md. Check Python and your command access. Keep my existing data folder and dossier. Explain replacements and ask before changing my automatic-refresh preference. Help me export and share the correct files with my AI.
+
+## Install and export
+
+1. Open Terminal on Mac or PowerShell on Windows, then check Python with `python3 --version` (on Windows, `py -3 --version`); you need 3.11 or newer. If it is missing or older, install it from [python.org](https://www.python.org/downloads/), reopen the terminal and check again. Then install Requests: `python3 -m pip install requests`. On Windows, use `py -3` instead of `python3`. If installation fails, follow [Prerequisites](#prerequisites).
+2. In Intervals.icu **Settings**, find your Athlete ID near the bottom and your API key under **Developer Settings**.
+3. Choose your data folder and open a terminal there (Terminal on Mac, PowerShell on Windows). To get there: on Mac, type `cd ` (with a space) in Terminal, drag the folder into the window and press Return; on Windows, open the folder in File Explorer, click the address bar, type `powershell` and press Enter.
+4. Download `section11-YYYY.MM.DD.zip` from the [latest official release](https://github.com/CrankAddict/section-11/releases/latest), then extract it into `Downloads/section11-bootstrap`, outside the data folder. Start with an empty `section11-bootstrap` folder. On Mac, create it in Downloads, double-click the ZIP (Safari may already have unzipped it for you) and move the new `section11` folder into it. On Windows, right-click the ZIP, choose **Extract All** and set the destination to `Downloads\section11-bootstrap`. Either way, you should end up with `Downloads/section11-bootstrap/section11/examples/sync.py`.
+5. For manual-only use, run `python3 "$HOME/Downloads/section11-bootstrap/section11/examples/sync.py" --init --no-timer`. Existing setups use `--update` instead of `--init`. Omit `--no-timer` if you want to keep automatic refresh. Before accepting, move your own files from `section11/` to `custom/`: the whole `section11/` folder is replaced. Unprotected same-name files elsewhere can also be removed; see the [removal rules](../maintenance/UPDATING.md#local-updates-and-automatic-toggle).
+6. Run `python3 section11/examples/sync.py --setup` and enter your credentials.
+7. On Mac or Linux, run `SECTION11_EXPORT_MODE=manual python3 section11/examples/sync.py --output latest.json`. In Windows PowerShell, first run `$env:SECTION11_EXPORT_MODE = 'manual'`, then `py -3 section11/examples/sync.py --output latest.json`, then `Remove-Item Env:SECTION11_EXPORT_MODE`. Check that `latest.json` contains your current data. The default export covers seven days; add `--days 14` for fourteen days. See [export options](#usage).
+
+## Give the files to your AI
+
+Upload `latest.json` and `history.json`, plus `intervals.json` for detailed session analysis. Include your dossier if used and a ZIP of **only `section11/`** for the protocol and templates. Never zip the whole data folder: it contains credentials. An AI on the same computer can read the files directly; verify its access. See [Use with AI](#use-with-ai) for other companion files.
+
+Set up your AI with [Section 11's project instructions](../../README.md#3-configure-your-ai-platform).
+
+Keep the data folder between exports. Run another export and replace uploaded copies when data changes; refresh the Section 11 upload after updates too.
+
+[Full technical guide on GitHub](#technical-guide)
+
+# Technical guide
+
 `interval_data.plan_match` supplies timeline labels; `interval_data.compliance` summarizes gated Section 11 evidence from session_structure; `interval_data.icu_detected` is descriptive only. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
 
 Export Intervals.icu data locally for different time ranges.
@@ -10,7 +40,7 @@ Export Intervals.icu data locally for different time ranges.
 - `requests` library in that interpreter: `python3 -m pip install requests` (Windows: `py -3 -m pip install requests`)
 - [Intervals.icu](https://intervals.icu) account with training data
 
-Check `python3 --version` and `python3 -c "import requests"` first (PowerShell: `py -3 --version` and `py -3 -c "import requests"`). macOS `/usr/bin/python3` is too old (3.9); select Python 3.11 or newer.
+Check `python3 --version` and `python3 -c "import requests"` first (PowerShell: `py -3 --version` and `py -3 -c "import requests"`). If Python is missing or older, install Python 3.11 or newer from [python.org](https://www.python.org/downloads/), then reopen the terminal and repeat the check. macOS `/usr/bin/python3` is too old (3.9); select Python 3.11 or newer.
 
 If pip reports `externally-managed-environment` (Homebrew Python or recent Debian/Ubuntu), create a venv **outside the data folder**, which is often cloud-synced: `python3 -m venv "$HOME/.venvs/section11"`, then `"$HOME/.venvs/section11/bin/python" -m pip install requests`. Run the bootstrap `--init` with `"$HOME/.venvs/section11/bin/python"` and use it for later commands so the standard timer uses it too. Windows equivalent: `py -3 -m venv "$env:LOCALAPPDATA\Section11\venv"`, then `& "$env:LOCALAPPDATA\Section11\venv\Scripts\python.exe" -m pip install requests`; use `& "$env:LOCALAPPDATA\Section11\venv\Scripts\python.exe"` instead of `py -3` below.
 
@@ -111,7 +141,7 @@ python3 section11/examples/sync.py --days 90 --output 90days.json
 
 ### Repository delivery
 
-Use [GitHub sync](../json-auto-sync/SETUP.md) or [On-demand sync](../json-on-demand/SETUP.md) for repository delivery through the shared workflow. The legacy direct API publisher is not one of the four supported setup paths. Existing local API publishers keep their destination and private configuration and run `python3 section11/examples/sync.py` without `--output`. Release maintenance follows data work, including definitive failure or defer, using the same half/full policy as file exports. An unknown data publication holds maintenance for reconciliation and is never retried.
+Use [GitHub sync](../json-auto-sync/SETUP.md#github-sync-setup-guide) or [On-demand sync](../json-on-demand/SETUP.md) for repository delivery through the shared workflow. The legacy direct API publisher is not one of the four supported setup paths. Existing local API publishers keep their destination and private configuration and run `python3 section11/examples/sync.py` without `--output`. Release maintenance follows data work, including definitive failure or defer, using the same half/full policy as file exports. An unknown data publication holds maintenance for reconciliation and is never retried.
 
 ### Request allowance
 

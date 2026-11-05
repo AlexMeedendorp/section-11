@@ -1,5 +1,36 @@
 # GitHub Sync Setup Guide
 
+GitHub sync keeps your Intervals.icu training files in your own private GitHub repository, a folder stored online. GitHub refreshes them, so your computer can be off. Your AI needs access to those files afterwards.
+
+## Get help from your AI
+
+You create the repository, enter secrets and do the GitHub clicks. Your AI can explain each step. Copy this prompt:
+
+> Walk me through GitHub sync. Before acting, read the full guide at https://github.com/CrankAddict/section-11/blob/main/examples/json-auto-sync/SETUP.md. If you can access my installed section11/ folder, read the same file there at section11/examples/json-auto-sync/SETUP.md. I will do the clicks and enter credentials in GitHub. If I already have a repository, preserve my data, schedule and settings. Help me check the first sync and my AI's access to the private files.
+
+## Set up a new repository
+
+1. In Intervals.icu **Settings**, find your Athlete ID near the bottom and your API key under **Developer Settings**.
+2. At [github.com/new](https://github.com/new), create a repository such as `training-data`. Choose **Private**, leave **Add a README file** unchecked, and click **Create repository**. Do not fork Section 11.
+3. From the [latest official release](https://github.com/CrankAddict/section-11/releases/latest), download `section11-YYYY.MM.DD-auto-sync.yml`. Return to your new repository. Click **creating a new file** to create `.github/workflows/auto-sync.yml`, paste that file's contents and commit it. Keep its default settings. If the published file is unavailable or says `UNSEALED`, wait for a verified release; see [workflow setup](#step-2-set-up-github-repository).
+4. Open **Settings > Secrets and variables > Actions > New repository secret**. Add `ATHLETE_ID` and `INTERVALS_KEY` with your values. If required, select **Read and write permissions** under **Settings > Actions > General > Workflow permissions** and save; see [permissions](#step-4-enable-workflow-permissions).
+5. Open **Actions > Auto-Sync Intervals.icu Data > Run workflow**. Enable workflows if prompted, keep the default branch and **Operation: Sync**, then run it. In **Code**, check for a successful `Sync training data` commit and a current timestamp in `latest.json`.
+6. Connect your AI to the private repository and check it can read `latest.json` and `section11/`. Without a connector, use **Code > Download ZIP** and upload that repository ZIP to your AI. Uploads need replacing when data changes; see [AI access](#usage-with-ai).
+
+Set up your AI with [Section 11's project instructions](../../README.md#3-configure-your-ai-platform).
+
+A private repository uses your GitHub Actions minutes. The default schedule needs about 1,500 a month, more if runs take longer than a minute; GitHub Free includes 2,000. See [GitHub Actions minutes](#github-actions-minutes).
+
+## Already set up?
+
+Follow [existing-repository steps](#updating-an-existing-repository) to keep your schedule and settings, including both workflow files if you use workout push. Move your own files to `custom/` first: `section11/` is replaced. Unprotected same-name files elsewhere can also be removed; see the [removal rules](../maintenance/UPDATING.md#local-updates-and-automatic-toggle).
+
+Refreshes are scheduled every 30 minutes by default, but runs can be delayed or skipped; use **Sync Now** in your repository's README when needed. Release installation is separate: **Operation: Update** accepts it immediately. See [updates and undo](../maintenance/UPDATING.md#updating-section-11).
+
+[Full technical guide on GitHub](#technical-guide)
+
+# Technical guide
+
 This guide explains how to create an automated JSON data mirror of your Intervals.icu training data for use with AI coaching systems.
 
 > **Already using GitHub sync?** Keep your repository, literal cron lines, settings,
@@ -19,7 +50,7 @@ This guide explains how to create an automated JSON data mirror of your Interval
 
 The data mirror syncs your Intervals.icu metrics to a GitHub repository on a schedule, every 30 minutes by default, producing JSON files that AI systems can read through a GitHub connector or other authenticated repository access, or by URL for a public repository. GitHub runs scheduled workflows on a best-effort basis, so a scheduled sync can be late or skipped. For fresh data right after a workout, use [Sync Now](#sync-now). See [Sync Schedule and GitHub Actions Usage](#sync-schedule-and-github-actions-usage) before choosing a different schedule.
 
-With the updated workflow, GitHub sync can use **4 Intervals.icu requests on a quiet cache-hit run instead of about 31**. First runs, scheduled refreshes, changed activities and misses cost more. The schedule is unchanged.
+With the updated workflow, GitHub sync can use **4 Intervals.icu requests on a quiet cache-hit run instead of about 31**. Slow-cache reuse and the hosted per-run request controller apply to every schedule, including hourly, three-hour and hybrid schedules, and to Sync Now. First runs, scheduled refreshes, changed activities and misses cost more. Hourly, three-hour and hybrid schedules still have no known export delivery deadline; that does not disable cache reuse.
 
 ### Private state and request limits
 
@@ -223,7 +254,7 @@ https://raw.githubusercontent.com/[your-username]/[repo-name]/main/saved_workout
 ```
 
 - `latest.json`: current 7-day snapshot with activities, wellness, fitness metrics, and derived Section 11 values. Rewritten on every successful sync.
-- `latest.json.source_freshness`: source status (`fresh`, `stale`, `deferred`, `unavailable`), acquisition age and coverage, plus local budget, effective schedule and warnings. Null age means unknown. A new export timestamp does not make a retained source fresh. See the [field reference](../json-examples/README.md#source-freshness).
+- `latest.json.source_freshness`: source status (`fresh`, `stale`, `deferred`, `unavailable`), acquisition age and coverage, plus the hosted per-run request count, source schedule and warnings. Null age means unknown. A new export timestamp does not make a retained source fresh. See the [field reference](../json-examples/README.md#source-freshness).
 - `latest.json.sleep_context`: uses a 35-date wellness window (D−34..D), while existing baselines/reports retain their original 28-date slice. This is low-confidence context only, never readiness. No separate sleep file or history refresh is needed. The existing workflow carries it inside latest.json, including the manual-run download artifact. The AI discovers it through `READ_THIS_FIRST.sleep_context_note`. Missing dates, unknown athlete timezone or current-date mismatch remain explicit unavailable states. Retained wellness keeps its acquisition time in `source_updated_at` and its refresh status in `source_freshness`; without a usable required snapshot, the previous export is preserved. Existing archive and Git-history retention still apply to the whole export.
 - `history.json`: longitudinal data with tiered granularity: daily (90 days), weekly (180 days), and monthly (up to 3 years). Generated automatically on first run, regenerated when outdated.
 - `intervals.json`: interval/DFA payloads and completed-session structure detail (14-day retention). Written on every successful sync. `has_structure` in latest.json identifies available detail; the compact `interval_data.plan_match` survives detail expiry through the 28-day recent-activity window. These committed JSON files retain the activity-detail cache needed by auto-sync; private request/source state is separate and is not persisted by the workflow. See [Which interval data to use](../../SECTION_11.md#which-interval-data-to-use).
