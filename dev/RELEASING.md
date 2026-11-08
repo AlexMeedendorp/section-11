@@ -7,6 +7,8 @@ Python/Requests environment. No tool installs dependencies.
 
 When retiring an official file, add its exact basename to `Distribution.HISTORICAL_NAMES` in `examples/sync.py` so later releases still remove old copies.
 
+The first-line `# Section 11 workflow v11.105` comment in each `auto-sync.yml` template records the Section 11 version in which that workflow last changed: update it when changing the workflow, and leave it unchanged in releases that do not change the workflow.
+
 ## First release
 
 The public main producer and legacy manifest must remain unchanged until a
@@ -73,7 +75,8 @@ tree must equal W's tree; preserve W as the immutable release source/tag target.
 
 The workflow runs on the default branch only. A blank source input uses its
 pinned main commit after the first release; the infrastructure-only stage waits
-for an explicit source input. The scheduled 02:17 UTC release remains unchanged.
+for an explicit source input. The workflow has no schedule: a release starts only
+when it is dispatched, by the maintainer's daily trigger or manually.
 Unchanged manifest content is a no-op; a different second release on the same UTC
 date is refused. Never retag or replace published assets to resolve a failure.
 
