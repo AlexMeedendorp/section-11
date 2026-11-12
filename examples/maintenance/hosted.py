@@ -1,5 +1,6 @@
 """Stable hosted adapter: bootstrap, data publication, cache and maintenance."""
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -9,10 +10,10 @@ import stat
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
-from direct_commit import DirectPublisher, blob_sha
+from direct_commit import ConfirmationBound, DirectPublisher, blob_sha
 from distribution import Distribution as D, UnknownOutcome, _sync
 from github_api import GitHub, APIError
 import hosted_update as update
@@ -20,24 +21,53 @@ import validate_data
 
 WRAPPER_API = 2
 BACKUP = _sync.CarryForwardBackup
+PUBLICATION_DEADLINE = None
 
 class HostedGitHub(GitHub):
     """Separate bounded data/control transport; never used for upstream reads."""
     def __init__(self, repo, token=None):
         super().__init__(repo, token)
         self.count = 0
-        self.deadline = time.monotonic() + 300
+        started = time.monotonic()
+        self.deadline = started + 300
+        self.publication_deadline = min(started + 240, PUBLICATION_DEADLINE
+                                        if PUBLICATION_DEADLINE is not None else float('inf'))
+        self.confirming = False
+
+    @contextmanager
+    def confirmation_reads(self):
+        # At most three four-read checks, including the original readback.
+        # Reserve 30 seconds against the wrapper's 270-second phase deadline.
+        self.confirm_until = min(time.monotonic() + 45, self.deadline, self.publication_deadline)
+        self.confirm_count = 0
+        self.confirming = True
+        try:
+            yield
+        finally:
+            self.confirming = False
 
     def request(self, method, path, **kwargs):
         if path != self.prefix and not path.startswith(self.prefix + '/'):
             raise ValueError('cross-repository API path')
         remaining = self.deadline - time.monotonic()
+        if self.confirming:
+            if method != 'GET':
+                raise ValueError('confirmation is read-only')
+            if self.count >= 1200 or self.confirm_count >= 12:
+                raise ConfirmationBound('readback-request-bound')
+            remaining = min(remaining, self.confirm_until - time.monotonic())
+            # Admit a read only with its full ten-second timeout available.
+            if remaining <= 10:
+                raise ConfirmationBound('readback-deadline')
+            self.confirm_count += 1
         if self.count >= 1200 or remaining <= 0:
             raise ValueError('data/control request admission bound reached')
         self.count += 1
         headers = {'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + self.token}
         response = requests.request(method, D.API + path, headers=headers,
                                     timeout=min(10, max(0.1, remaining)), allow_redirects=False, **kwargs)
+        if self.confirming and time.monotonic() >= self.confirm_until:
+            raise ConfirmationBound('readback-deadline')
         if not 200 <= response.status_code < 300:
             raise APIError(response.status_code, 'GitHub data/control request refused; no automatic retry')
         if len(response.content) > 64 * 1024 * 1024:
@@ -109,6 +139,8 @@ def trigger(api, event, env):
         raise ValueError('run identity differs from the default-branch invocation')
     update.eligible_day(run['created_at'], name, True, scheduled=True)
     operation = event.get('inputs', {}).get('operation', 'Sync') or 'Sync'
+    if operation == 'Other':
+        operation = event.get('inputs', {}).get('other_operation', '')
     if operation not in ('Sync', 'Update', 'Status', 'Rollback', 'Sync timer'):
         raise ValueError('unknown workflow operation')
     return {'event': name, 'created_at': run['created_at'], 'attempt': run['run_attempt'],
@@ -191,22 +223,25 @@ def materialize_install(root, source, state_bytes, readme_bytes):
     (root / update.CONTROL).write_bytes(state_bytes)
 
 
-def prepare(source, source_release, verifier):
+def prepare(source, source_release, verifier, *, runtime=None, argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--wrapper-api', type=int, required=True)
     parser.add_argument('--accept-install', action='store_true')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.wrapper_api != WRAPPER_API or not args.accept_install:
         raise ValueError('owner wrapper update required; explicit installation acceptance missing')
     pub = publisher()
     event = D.json(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())
     info = trigger(pub.api, event, os.environ)
+    output(operation=info['operation'])
     before = pub.snapshot()
     root = Path(os.environ['GITHUB_WORKSPACE'])
     check_checkout(pub, before, root)
     source_raw, source_files, source_identity = source_release
     identity = update.installed_identity(pub, before)
-    controller = update.HostedUpdater(pub, lambda: verifier.Distribution.fetch(), os.environ)
+    controller = (update.HostedUpdater(pub, lambda: verifier.Distribution.fetch(), os.environ)
+                  if runtime is None else
+                  update.HostedUpdater(pub, runtime.latest, os.environ, suffix_capable=True))
     initial_state = controller.state(before)
     operation = info['operation']
     if operation == 'Status':
@@ -268,7 +303,7 @@ def cache_prepare():
     output(enabled='true', prefix=prefix, key=key)
 
 
-def run_sync():
+def run_sync(*, isolated=False):
     info = context()
     if not info['run_sync']:
         raise ValueError('this is a maintenance-only invocation')
@@ -289,7 +324,8 @@ def run_sync():
     env.update({'SECTION11_SYNC_WRAPPER_API': str(WRAPPER_API),
                 'SECTION11_CARRY_FORWARD_VERSION': '1',
                 'SECTION11_EXPORT_EVENT': export_event, 'SECTION11_EXPORT_CRON': info['cron']})
-    subprocess.run([sys.executable, str(Path(info['source']) / 'examples/sync.py'),
+    python = [sys.executable, '-I', '-B'] if isolated else [sys.executable]
+    subprocess.run([*python, str(Path(info['source']) / 'examples/sync.py'),
                     '--athlete-id', athlete, '--intervals-key', key, '--days', str(days),
                     '--output', 'latest.json'], cwd=os.environ['GITHUB_WORKSPACE'], env=env, check=True)
     finalize_export()
@@ -428,22 +464,78 @@ def cache_promote():
     output(ready='true')
 
 
-def maintain():
+def maintenance_due(api, env, now=None):
+    """Conservative, bounded native-run evidence; never writes a check record.
+
+    Only first attempts created in the last 30 minutes may maintain. Thus every
+    eligible attempt in the previous ten minutes belongs to a run created in
+    the last 40 minutes. Exclude completed skipped runs; count failures and
+    no-ops through their last update. Incomplete evidence defers maintenance.
+    Reruns and long-queued runs still sync; explicit operations remain available.
+    """
+    from urllib.parse import urlencode
+    now = datetime.now(timezone.utc) if now is None else now
+    def instant(value):
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if stamp.tzinfo is None or stamp > now:
+            raise ValueError('invalid maintenance run timestamp')
+        return stamp.astimezone(timezone.utc)
+    run_id = env['GITHUB_RUN_ID']
+    run = api.get('/actions/runs/' + run_id)
+    if (str(run.get('id')) != run_id or run.get('run_attempt') != int(env['GITHUB_RUN_ATTEMPT'])
+            or run.get('head_branch') != env['SECTION11_DEFAULT_BRANCH']
+            or run.get('head_repository', {}).get('full_name') != env['GITHUB_REPOSITORY']
+            or run.get('event') != env['GITHUB_EVENT_NAME']
+            or type(run.get('workflow_id')) is not int or run['workflow_id'] < 1):
+        raise ValueError('maintenance run identity differs')
+    if run['run_attempt'] != 1 or now - instant(run['created_at']) > timedelta(minutes=30):
+        return False
+    query = urlencode({'branch': env['SECTION11_DEFAULT_BRANCH'], 'per_page': 100,
+                       'created': '>=' + (now - timedelta(minutes=40)).strftime('%Y-%m-%dT%H:%M:%SZ')})
+    page = api.get('/actions/workflows/' + str(run['workflow_id']) + '/runs?' + query)
+    runs, count = page.get('workflow_runs'), page.get('total_count')
+    if not isinstance(runs, list) or type(count) is not int or count != len(runs) or count >= 100:
+        return False
+    if len({r.get('id') for r in runs}) != len(runs) or not any(r.get('id') == run['id'] for r in runs):
+        return False
+    for other in runs:
+        if (other.get('workflow_id') != run['workflow_id']
+                or other.get('head_branch') != env['SECTION11_DEFAULT_BRANCH']):
+            raise ValueError('maintenance history identity differs')
+        if other['id'] == run['id']:
+            continue
+        if other.get('status') == 'completed' and other.get('conclusion') == 'skipped':
+            continue
+        # A queued or active sibling is conservatively counted too. The shared
+        # writer group serializes mutations, but is not used as timestamp proof.
+        if other.get('status') != 'completed' or now - instant(other['updated_at']) < timedelta(minutes=10):
+            return False
+    return True
+
+
+def maintain(*, runtime=None):
     info = context()
     success = info.get('published', False)
     if info.get('publication_uncertain'):
         raise UnknownOutcome('data publication needs reconciliation; no maintenance attempted')
     pub = publisher()
+    if runtime is not None and not maintenance_due(pub.api, os.environ):
+        print('Automatic application maintenance deferred by the ten-minute run allowance; data outcome unchanged.')
+        return
     before = pub.snapshot(info['base'])
-    day = update.eligible_day(info['created_at'], info['event'], success,
-                              info['attempt'], info['scheduled'])
+    day = (update.eligible_day(info['created_at'], info['event'], success,
+                              info['attempt'], info['scheduled']) if runtime is None else
+           datetime.now(timezone.utc).strftime('%Y.%m.%d'))
     if day is None:
         return
-    controller = update.HostedUpdater(pub, _sync._fetch_verified_release, os.environ)
+    controller = (update.HostedUpdater(pub, _sync._fetch_verified_release, os.environ)
+                  if runtime is None else
+                  update.HostedUpdater(pub, runtime.latest, os.environ, suffix_capable=True))
     if info['source_is_latest']:
         raw, files = D.tree(Path(info['source']))
         controller._release = (raw, files, info['source_identity'])
-    after, status = controller.maintain(before, day, success, run_attempt=info['attempt'])
+    options = {} if runtime is None else {'claim_attempt': False}
+    after, status = controller.maintain(before, day, success, run_attempt=info['attempt'], **options)
     info['base'] = after['commit']
     context(info)
 

@@ -37,6 +37,7 @@ On Windows, use `py -3` instead of `python3` throughout.
    Mac: type `cd ` (with a space), drag the folder into Terminal and press Return.  
    Windows: open it in File Explorer, enter `powershell` in the address bar and press Enter.
 6. Download `section11-YYYY.MM.DD.zip` from the [latest official release](https://github.com/CrankAddict/section-11/releases/latest) and extract it into an empty `Downloads/section11-bootstrap` folder, outside your data folder.  
+   A same-day release adds `-N` after the date in the ZIP name.  
    Mac: create that folder, double-click the ZIP (Safari may already have unzipped it) and move `section11` inside.  
    Windows: right-click the ZIP, choose **Extract All**, destination `Downloads\section11-bootstrap`.
 7. Move your own files from `section11/` to `custom/` first ([removal rules](../maintenance/UPDATING.md#local-updates-and-automatic-toggle)). From your data folder, install for manual-only use:
@@ -104,7 +105,8 @@ If pip reports `externally-managed-environment` (Homebrew Python or recent Debia
 ## First-Time Setup
 
 Use the same [verified release bootstrap and data-folder setup](../json-local-sync/SETUP.md#initial-setup)
-as every local user. Download the canonical ZIP from the official date release,
+as every local user. Download the canonical ZIP from the latest official release
+(its name may include a same-day `-N` suffix),
 extract it outside the data folder, then run from your data folder:
 
 ```bash
@@ -271,13 +273,23 @@ after updates, replacing the previous upload.
 
 ### Automate it
 
-Automatic maintenance follows the same daily rule as Local; see
+Current installs accept same-day releases. If an older update check reports
+`invalid date release tag` for a same-day release, it keeps your export result and waits for the next
+plain-date release. See [same-day releases](../maintenance/UPDATING.md#same-day-releases).
+
+Automatic maintenance follows the same ten-minute allowance as Local; see
 [Updating Section 11](../maintenance/UPDATING.md#local-updates-and-automatic-toggle).
-Manual-only setups check only when you run them. Half mode exports a fixed
-`update_notice` for an outstanding verified update or repair.
+Manual-only setups check only when you run them, after data work; failed checks
+count. Automatic installation is opt-in, and half mode uses the same allowance
+to report an outstanding verified update or repair in `update_notice`.
+After a successful verification, unchanged release and installation inputs need
+no release-file download. A clock moved back behind the saved attempt time
+defers once for ten minutes.
 
 Auto sync is already the installation default. For timer status and the persistent
 manual-only opt-out, see [json-local-sync](../json-local-sync/SETUP.md#automate-the-refresh).
+If `latest.json` stopped updating after an automatic update, see the
+[recovery guide](../maintenance/UPDATING.md#rollback-and-interruption-recovery).
 
 ---
 

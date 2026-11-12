@@ -39,16 +39,16 @@ setup.
 `test_data_overview.py` exercises companion discovery, relative paths, output placement, local-time/DST labels, 16-point wind directions and compact snapshots after display additions. It loads the exact self-contained Python publication rules from `examples/maintenance/validate_data.py` for offline validation, fallback, deletion and reset/retry restoration tests. No GitHub or Git operation is needed. Athlete setups install the complete managed release and matching owner-controlled wrappers; see [updates](../examples/maintenance/UPDATING.md).
 
 `test_fix_round.py` turns the twelve undecided-behaviour probes into regression
-checks for the common 04:00 UTC rule, reruns and failure claims, same-date notices,
+checks for Local's ten-minute allowance and the legacy hosted daily rule, reruns and failure claims, same-date notices,
 rollback beyond unrelated history, exact prior edited trees, no-op slot retention,
 README setup and bounded
 release discovery. Only the common local transaction schema 3 remains; release
 receipts retain schema 1. Retired installers, launchers and the prototype kit are
 removed. `test_fix_round2.py` turns repeat-audit probes R01-R10 into acceptance
-regressions for complete metadata repair, verified custom guidance, early daily
+regressions for complete metadata repair, verified custom guidance, early attempt
 claims, early data failure and unknown-publication
 holds, explicit policy independence, guidance-only rollback retention, failed
-re-check reminders and invocation-start timing. Scheduler and service operations
+re-check reminders and Local's post-data check-start timing. Scheduler and service operations
 remain synthetic; these tests do not establish live platform acceptance.
 `test_fix_round3.py` converts Q01-Q05 into regressions for hosted pending plans
 before full installation, timer-only reminder resolution, one current rollback
@@ -58,15 +58,72 @@ configured intervals, opt-out and targeted rollback; retired migration tests are
 explicit, automatic, first-install and rollback paths, plus the approved Python
 prerequisite text. Billing arithmetic uses the guides' stated assumptions only.
 `test_update_round3.py` covers local config/CLI opt-in, post-data invocation,
-UTC daily attempts, verified installation, receiptless adoption, no prompts,
+ten-minute attempts including failures, verified installation, receiptless adoption, no prompts,
 downgrade refusal, rollback with later custom edits, and handled switch failures.
 Earlier update suites retain adoption, request-budget and trusted validation
 regressions. The direct hosted tests in `test_b2_hosted.py`, `test_b2_workflow.py`
 and `test_b2_integration.py` replace retired PR lifecycle expectations. They cover
 synthetic sealed pins and unsealed refusal, real historical fixtures, literal
 dispatch arguments, exact parent/tree publication, unknown outcomes, daily
-claims, rollback and data/cache isolation. All transport is mocked; actual Actions,
+claims for legacy callers, rollback and data/cache isolation. All transport is mocked; actual Actions,
 branch policy, scheduling, publication and production Python parity need owner tests.
+
+`test_local_check_cp5a.py` covers the shared ten-minute Local/Manual allowance,
+post-data timing, failed attempts, one deferral after a backward clock move and
+old-reader compatibility. Warm checks reuse a verified result when release and
+installation inputs match, without ZIP/raw-manifest downloads; installation fetches
+fresh verified bytes. `test_hosted_runtime_cp3.py` and `test_final_workflow_cp4.py`
+cover per-run runtime verification, installed-application fingerprint reuse,
+older half-mode applications, Other, first-adoption downloads and conservative
+ten-minute maintenance deferral without a check-only commit.
+
+**Old hosted workflow only:** v11.105 retains daily maintenance from 04:00 UTC
+and its sealed bootstrap. Those historical fixtures and assertions are intentional.
+
+The demo builder (`dev/demo/build_demo.py`) accepts the current published source
+workflow after checking its fixed gate and exact bytes against the source release
+manifest. It creates owner files only, with fictional data at 05:07 UTC daily;
+the normal runtime verification and application-maintenance allowance remain.
+Build from the matching full release source, which includes `dev/demo/`:
+
+```sh
+python3 -I -B dev/demo/build_demo.py --source /path/to/release-source --output /path/to/new-demo-kit
+```
+
+The output separates `SETUP_DEMO.md` (owner instructions, kept outside the
+repository) from `repo/` (files for the repository root). The repository files are
+`demo/ABOUT_THIS_DEMO.md`, `demo/generate.py`, `DOSSIER.md`, `custom/README.md` and
+`.github/workflows/auto-sync.yml`. The demo explanation is the owner's unchanged
+text. Point the repository description to `demo/ABOUT_THIS_DEMO.md` and set the
+homepage to `https://github.com/CrankAddict/section-11-demo/blob/main/demo/ABOUT_THIS_DEMO.md`.
+
+The kit supplies no root README, LICENSE or .gitignore. The first Sync's normal
+installation creates the standard README from the verified release's template;
+data publication updates its timestamp. Section 11's license is installed at
+`section11/LICENSE`. To replace an existing demo's workflow, copy only
+`repo/.github/workflows/auto-sync.yml` to `.github/workflows/auto-sync.yml`.
+Never replace the root README of a running demo or copy the whole kit over it.
+
+A repeat Sync on the same UTC date shows as a failed run with no data commit when
+`latest.json` is unchanged. Its unchanged-latest guard reports the generic
+"Hosted acquisition or phase verification failed" message. A changed update
+notice can change the exported bytes; use Status or Update for maintenance alone.
+
+`test_demo_kit.py` uses the real source workflow and manifest, never a substituted
+legacy workflow. It checks refusal before output, guarded finalization, step
+conditions, the repository/owner-instruction separation, first-install README
+creation and byte preservation outside the three demo transformations. Run it
+with each workflow release, then review the generated workflow before the owner
+replaces the demo's active file. Offline checks do not prove publication.
+
+Builder compatibility requires the reviewed fixed gate, manifest `files` hashes,
+the two named slow-cache/sync step ranges, and the literal source cron. The
+generated step also depends on `select`, `bootstrap` and `prepare` outputs,
+wrapper API 2, the `finalize-export` phase, both runtime and application identity
+arguments, and the step-deadline interface. Step-range or schedule changes refuse
+the build, as do a changed validation identity/command block or missing deadline
+guard. Changes to phase support, outputs, deadlines or downstream conditions
+require reviewing the builder and its real-workflow tests together.
 
 `test_b1_local.py` covers the common accepted local installer, whole-tree replacement,
 timer adapters under mocked OS commands, persistent opt-out, root-tool recovery,

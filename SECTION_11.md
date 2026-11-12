@@ -1,6 +1,6 @@
 # Section 11 - AI Coach Protocol
 
-**Protocol Version:** 11.107  
+**Protocol Version:** 11.113  
 **Last Updated:** 2026-11-08
 **License:** [MIT](https://opensource.org/licenses/MIT)
 
@@ -12,6 +12,30 @@ paths for those installed files. If a required file is unavailable, say what is
 missing and ask for it.
 
 ### Changelog
+
+**v11.113 - Same-day release compatibility (2026-11-11, doc-only):**
+
+The update and setup guides now describe same-day releases accurately. A deliberate second release on a UTC day, named `YYYY.MM.DD-2`, `-3` and so on, is marked latest like every release. Current Local, Manual and hosted installs accept it under their usual update settings. An older Local or Manual update check that reports `invalid date release tag` installs nothing, keeps the sync or export result and picks up the next plain-date release. An old pinned hosted workflow whose recorded release is plain-dated keeps syncing and can update with the next plain-date release; a new setup from such an outdated workflow cannot start while latest is a same-day release and needs the current workflow file. Replacing a working old workflow is optional and enables same-day releases. This corrects v11.108's note that hosted updates keep them off: that holds for an existing plain-date install, not for a new setup from an outdated workflow. No code or workflow changes.
+
+**v11.112 - Hosted publication confirmation (2026-11-11, sync.py v3.175):**
+
+After a hosted run updates the data branch, it now reads the result back up to three times, a few seconds apart, before reporting an unknown outcome. The write itself is never repeated. A confirmation that still fails names a safe reason and the commit, without links or tokens, and maintenance keeps waiting as before. Workflow files are unchanged.
+
+**v11.111 - Hosted step deadlines (2026-11-10, sync.py v3.174):**
+
+Each long step in the hosted workflows now runs under a fixed guard with its own deadline, set just inside the step's time limit. At that deadline, or when a run is cancelled, the guard stops the step's program and everything it started before the step ends, so a stalled download, sync or publish can no longer keep running beside a later step. A publication that is cut off is treated as uncertain, so maintenance does not act on it. Workflow v11.111.
+
+**v11.110 - Local update check every 10 minutes (2026-11-10, sync.py v3.173):**
+
+Local and Manual now check for a verified Section 11 update at most once every 10 minutes after the data work, instead of once a day after 04:00 UTC. When the latest release and the local installation are unchanged since the last verified check, the check reuses that result and downloads nothing. Automatic installation stays opt-in with `auto_update`; otherwise the check only reports that an update is available.
+
+**v11.109 - Local timer fix (2026-11-10, sync.py v3.172):**
+
+A Local update no longer removes and reloads a timer that has not changed. On a Mac, an automatic update from release 2026.11.03 to 2026.11.10 could stop its own timer and leave the installation unfinished, so `latest.json` stopped updating. Running the fixed release's `sync.py --update` from the data folder completes that installation and reloads the timer. If an ordinary update or setup cannot confirm a timer's loaded state, it leaves the timer unchanged and prints a note.
+
+**v11.108 - Same-day release names (2026-11-09, sync.py v3.171):**
+
+A second release on the same UTC day, started deliberately by the maintainer, is named `YYYY.MM.DD-2`, `-3` and so on, ordered numerically. Local and Manual accept these names; hosted updates keep them off until the final workflow update enables them. The release tool compares against the previous release's source manifest instead of its ZIP, confirms that GitHub reports the new release as latest, and resumes an interrupted publication for the same source.
 
 **v11.107 - Local config filename (2026-11-08, sync.py v3.170):**
 
@@ -31,8 +55,8 @@ GitHub scheduled runs use the hosted slow-source cache and per-run request contr
 
 **v11.103 - Verified release updates (2026-11-03, sync.py v3.166):**
 - Every setup installs the complete verified date release. The first installation is accepted once after a single warning. See [updates and rollback](examples/maintenance/UPDATING.md) for installation rules.
-- Local init/update install or refresh the standard timer at `check_interval_minutes` unless `--no-timer` is chosen. Remove any timer you previously made yourself. Updates are confirmed with `--update` by default; automatic installation is opt-in. `--rollback` restores the previous installation, and an identical reinstall preserves that slot.
-- Every setup checks once per UTC day on the first run starting at or after 04:00 UTC, after data work even if sync failed or credentials were missing. Unknown data publication holds maintenance for reconciliation. An unclaimed day can be claimed by a rerun; failed or unknown maintenance consumes the day. On-demand checks only on user-started runs. GitHub uses Sync, Update, Status and Rollback in one owner-installed workflow with separate direct data, installation and control commits.
+- Local init/update install the standard timer at `check_interval_minutes` unless `--no-timer` is chosen, and rewrite it only when it changed. Remove any timer you previously made yourself. Updates are confirmed with `--update` by default; automatic installation is opt-in. `--rollback` restores the previous installation, and an identical reinstall preserves that slot.
+- Local/Manual check after data work at most once every 10 minutes, including failed checks; the final hosted workflow verifies the latest official runtime each run and defers automatic application maintenance after a recent run, without a check-only commit. Unknown data publication holds maintenance for reconciliation. On-demand checks only on user-started runs. Old workflow (v11.105): hosted maintenance retains its daily 04:00 UTC rule. See [update timing](examples/maintenance/UPDATING.md#utc-timing-rejection-and-rollback).
 - latest.json can carry fixed `installation_notice` and `update_notice` reminders for outstanding verified updates or repairs, including same-date repairs; mention them briefly and coach normally. Explicit Update clears a rolled-back release's automatic skip. Request budgets, multi-sport calculations, report contracts, export freshness and the hosted slow-source cache retain their behavior.
 
 **v11.102 - Export delivery expectation (2026-10-29, sync.py v3.165):**

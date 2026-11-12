@@ -63,7 +63,7 @@ class LocalAutoTests(Offline):
         self.assertIn('JSON boolean', result)
         fetch.assert_not_called()
 
-    def test_verified_install_no_prompt_and_once_each_utc_day(self):
+    def test_verified_install_no_prompt_and_ten_minute_interval(self):
         before = inventory(self.target)
         result, _ = self.run_auto()
         self.assertIn('installed ' + self.wire.tags[0] + ' -> ' + self.wire.tags[1], result)
@@ -71,7 +71,9 @@ class LocalAutoTests(Offline):
         record, _, _, _ = SYNC._previous_install(self.root)
         self.assertEqual(recovery_bytes(self.root, record), before)
         self.run_auto(index=2)[1].assert_not_called()
-        self.clock.now.return_value = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
+        self.clock.now.return_value = datetime(2026, 10, 25, 0, 8, 59, tzinfo=timezone.utc)
+        self.run_auto(index=2)[1].assert_not_called()
+        self.clock.now.return_value = datetime(2026, 10, 25, 0, 9, tzinfo=timezone.utc)
         self.assertIn('installed', self.run_auto(index=2)[0])
         self.assertEqual(len(list((self.root / '.section11-state').glob('transaction-*'))), 1)
         self.assertTrue(self.rollback())
@@ -220,6 +222,8 @@ class LocalAutoTests(Offline):
 
     def test_post_refresh_metadata_failure_preserves_journal_without_another_write(self):
         self.run_auto()
+        self.protected['.sync_config.json'] = b'{"auto_update":true,"check_interval_minutes":5}'
+        write(self.root, {'.sync_config.json': self.protected['.sync_config.json']})
         previous = (self.root / '.section11-state/previous.json').read_bytes()
         self.clock.now.return_value = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
         state_write, command = SYNC._write_install_state, SYNC.LocalTimers.command

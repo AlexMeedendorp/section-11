@@ -4,6 +4,24 @@ Intervals.icu → GitHub/Local JSON Export
 Exports training data for LLM access.
 Supports both automated GitHub sync and manual local export.
 
+Version 3.175 - Hosted publication reads the data branch back up to three times
+  before reporting an unknown outcome, without repeating the write; a confirmation
+  that still fails names a safe reason and the commit. Protocol v11.112.
+
+Version 3.174 - Hosted workflow steps stop everything they started at their own
+  deadline or on cancel, so no later step can overlap a stopped one; an interrupted
+  publication stays uncertain for maintenance. Protocol v11.111.
+
+Version 3.173 - Local and Manual check for verified updates at most every 10 minutes after
+  data work, instead of once a day; an unchanged release reuses the last verified check
+  without downloading. Protocol v11.110.
+
+Version 3.172 - Local updates no longer reload an unchanged timer, so a Mac update
+  cannot stop its own timer; --update completes an install stopped that way. Protocol v11.109.
+
+Version 3.171 - Same-day release names (YYYY.MM.DD-N) ordered numerically; hosted
+  suffix support stays off until the verified entry enables it. Protocol v11.108.
+
 Version 3.170 - Rename local credentials to .sync_config, with automatic migration,
   legacy read fallback and rollback compatibility. Protocol v11.107.
 
@@ -6229,7 +6247,7 @@ class IntervalsSync:
     GITHUB_API_URL = "https://api.github.com"
     FTP_HISTORY_FILE = "ftp_history.json"
     HISTORY_FILE = "history.json"
-    VERSION = "3.170"
+    VERSION = "3.175"
     ROUTE_TERRAIN_VERSION = "3.142"
     ROUTE_RETRY_BACKOFF_SECONDS = 15 * 60
     INTERVALS_FILE = "intervals.json"
@@ -22804,13 +22822,29 @@ class Distribution:
                 "unknown": sorted(unknown)}
 
     @staticmethod
-    def release_date(tag):
+    def calendar_day(tag):
         if not isinstance(tag, str) or not re.fullmatch(r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}", tag):
             raise DistributionError("invalid date release tag: " + str(tag))
         try:
             return datetime.strptime(tag, "%Y.%m.%d").date()
         except ValueError as exc:
             raise DistributionError("invalid calendar release date: " + tag) from exc
+
+    @classmethod
+    def release_key(cls, tag):
+        """Stable release order: UTC calendar date, then a bounded sequence."""
+        if not isinstance(tag, str) or not re.fullmatch(
+                r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}(?:-[1-9][0-9]{0,5})?", tag):
+            raise DistributionError("invalid date release tag: " + str(tag))
+        day, separator, suffix = tag.partition("-")
+        sequence = int(suffix) if separator else 1
+        if separator and sequence < 2:
+            raise DistributionError("invalid release sequence: " + tag)
+        return cls.calendar_day(day), sequence
+
+    @classmethod
+    def release_date(cls, tag):
+        return cls.release_key(tag)[0]
 
     @staticmethod
     def utc_tag(instant=None):
@@ -22905,7 +22939,7 @@ class Distribution:
     @classmethod
     def release_metadata(cls, tag=None):
         from urllib.parse import quote
-        # The publisher advances this pointer only in increasing UTC date order.
+        # The publisher advances this pointer in numeric (date, sequence) order.
         # No release-history enumeration is needed by an installed client.
         suffix = "/tags/" + quote(tag, safe="") if tag else "/latest"
         try:
@@ -22934,10 +22968,13 @@ class Distribution:
         raise DistributionError("unresolved release tag")
 
     @classmethod
-    def fetch(cls, tag=None):
+    def fetch(cls, tag=None, *, _reuse=None):
         release = cls.release_metadata(tag)
         tag = release["tag_name"]
         commit = cls.resolve_tag(tag)
+        # Local maintenance may reuse an outcome, never installation bytes.
+        if _reuse is not None and _reuse(release, commit):
+            return None
         assets = [a for a in release["assets"] if a["name"] == "section11-" + tag + ".zip"]
         if len(assets) != 1 or assets[0]["size"] > cls.MAX_BYTES:
             raise DistributionError("missing/ambiguous/oversized canonical release asset")
@@ -23058,7 +23095,7 @@ def _local_release_status(root, raw, files, identity):
         raise DistributionError("release is missing the permanent examples/sync.py entry")
     installed = _known_local_identity(root)
     if installed:
-        if Distribution.release_date(installed["tag"]) > Distribution.release_date(identity["tag"]):
+        if Distribution.release_key(installed["tag"]) > Distribution.release_key(identity["tag"]):
             raise DistributionError("automatic date downgrade refused")
         if installed["tag"] == identity["tag"] and (installed["commit"] != identity["commit"] or
                                                        installed["manifest_sha256"] != Distribution.digest(raw)):
@@ -23304,8 +23341,17 @@ class LocalTimers:
         after = {k: before[k] if self.resource_matches(k, before[k], v) else v for k, v in after.items()}
         changed = before != after
         return {'before': {'resources': before}, 'after': after, 'enabled': enabled,
-                'minutes': standard['minutes'], 'remove': [standard] if (changed or enabled) and any(v is not None for v in before.values()) else [],
-                'create': standard if enabled else None}
+                'minutes': standard['minutes'], 'remove': [standard] if changed and any(v is not None for v in before.values()) else [],
+                'create': standard if changed and enabled else None}
+
+    @staticmethod
+    def require_safe_change(plan):
+        # Every standard launcher sets this in its own action/environment,
+        # including cron and the Windows Python launcher. Do not change those
+        # definitions just to detect the already installed timers.
+        if (plan['before']['resources'] != plan['after'] and
+                os.environ.get('SECTION11_EXPORT_MODE') == 'local_scheduled'):
+            raise DistributionError('timer change requires a terminal; run python3 section11/examples/sync.py --update')
 
     def describe(self, plan):
         if plan['enabled']:
@@ -23333,6 +23379,139 @@ class LocalTimers:
         return result
 
     cron_digest = staticmethod(lambda value: Distribution.digest(value.encode()) if value is not None else None)
+
+    @staticmethod
+    def launchd_readback(text, target):
+        """Read direct job fields, never similarly named nested runtime fields."""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines or lines[0].strip() != target + ' = {':
+            raise DistributionError('unrecognized launchd job readback')
+        remaining = iter(lines[1:])
+        def block(name, depth=0):
+            if depth > 32:
+                raise DistributionError('excessive launchd nesting')
+            fields = [] if name == 'arguments' else {}
+            for value in remaining:
+                if value == '}':
+                    return fields
+                if isinstance(fields, list):
+                    fields.append(value)
+                    continue
+                if name == 'inherited environment' and value == '<redacted inherited environment>':
+                    continue  # Sanitized operator fixtures only.
+                separator = ' => ' if ' => ' in value else ' = '
+                if separator not in value:
+                    raise DistributionError('unrecognized launchd field')
+                key, value = value.split(separator, 1)
+                if not key or key in fields:
+                    raise DistributionError('duplicate or empty launchd field')
+                fields[key] = block(key, depth + 1) if separator == ' = ' and value == '{' else value
+            raise DistributionError('incomplete launchd job readback')
+        fields = block('job')
+        if next(remaining, None) is not None:
+            raise DistributionError('trailing launchd job readback')
+        return fields
+
+    def confirm_active(self, plan, config):
+        """Prove the recorded launchd job, loading only proven absence at a terminal."""
+        standard = self.standard(config)
+        if standard['kind'] != 'launchd':
+            raise DistributionError('activation recovery requires proven launchd readback')
+        identity = {'kind': 'launchd', 'name': standard['name']}
+        if (set(plan) != {'before', 'after', 'remove', 'create'} or
+                set(plan['before']) != {'resources'} or
+                set(plan['before']['resources']) != set(standard['resources']) or
+                plan['after'] != standard['resources'] or
+                plan['remove'] not in ([], [identity]) or plan['create'] not in (None, identity)):
+            raise DistributionError('unrecognized recorded standard timer')
+        if self.read(standard) != plan['after']:
+            raise DistributionError('timer definition differs from activation record')
+        self.ensure_active(standard, plan['after'])
+
+    def ensure_active(self, standard, resources, activate_missing=True):
+        """Inspect before activation; never unload or replace an identical timer."""
+        scheduled = os.environ.get('SECTION11_EXPORT_MODE') == 'local_scheduled'
+        if standard['kind'] == 'systemd':
+            name = standard['name'] + '.timer'
+            enabled = self.call(['systemctl', '--user', 'is-enabled', name])
+            if enabled.returncode == 0 and enabled.stdout.strip() == 'enabled' and not enabled.stderr.strip():
+                active = self.call(['systemctl', '--user', 'is-active', name])
+                if active.returncode == 0 and active.stdout.strip() == 'active' and not active.stderr.strip():
+                    return
+                raise DistributionError('standard systemd timer activity is not confirmed')
+            missing = enabled.returncode != 0 and enabled.stdout.strip() == 'disabled' and not enabled.stderr.strip()
+            command = ['systemctl', '--user', 'enable', '--now', name]
+        elif standard['kind'] == 'launchd':
+            missing = not self.launchd_active(resources, scheduled)
+            command = ['launchctl', 'bootstrap', 'gui/' + str(os.getuid()), str(self.home / 'Library/LaunchAgents' / standard['name'])]
+        else:
+            return
+        if not missing:
+            if standard['kind'] == 'launchd':
+                return
+            raise DistributionError('standard timer activation is ambiguous')
+        if scheduled or not activate_missing or self.read(standard) != resources:
+            raise DistributionError('recorded standard timer is not confirmed loaded')
+        try:
+            self.call(command, write=True)
+            if self.read(standard) != resources:
+                raise DistributionError('timer definition changed during activation')
+            self.ensure_active(standard, resources, activate_missing=False)
+        except (Exception, KeyboardInterrupt) as exc:
+            raise TimerOutcomeUnknown('timer activation readback uncertain; preserve state for owner reconciliation') from exc
+        return True
+
+    def restore_active(self, standard, resources):
+        """Ordinary commands may continue when no activation was attempted."""
+        try:
+            return self.ensure_active(standard, resources)
+        except TimerOutcomeUnknown:
+            raise
+        except DistributionError:
+            print('Section 11: timer left unchanged; could not confirm its loaded state')
+
+    def restore_unchanged(self, config):
+        """Setup restores an existing identical timer, without creating a new one."""
+        if config.get('auto_sync', True) is not True or os.environ.get('SECTION11_EXPORT_MODE') == 'local_scheduled':
+            return
+        standard = self.standard(config)
+        if standard['kind'] in ('launchd', 'systemd') and self.read(standard) == standard['resources']:
+            self.restore_active(standard, standard['resources'])
+
+    def launchd_active(self, resources, scheduled):
+        """Return False only for the exact missing-service diagnostic."""
+        import plistlib
+        key, raw = next(iter(resources.items()))
+        definition = plistlib.loads(raw.encode())
+        target = 'gui/' + str(os.getuid()) + '/' + definition['Label']
+        result = self.call(['launchctl', 'print', target])
+        output = (result.stdout + '\n' + result.stderr).strip()
+        if len(output.encode()) > 1024 * 1024:
+            raise DistributionError('oversized launchd job readback')
+        if result.returncode:
+            missing = r'(?:Bad request\.\s*)?Could not find service "' + re.escape(definition['Label']) + r'" in domain for user gui: ' + str(os.getuid())
+            if re.fullmatch(missing, output):
+                return False
+            raise DistributionError('recorded standard timer is not confirmed loaded')
+        actual = self.launchd_readback(result.stdout, target)
+        required = {'path': key[5:], 'type': 'LaunchAgent',
+                    'program': definition['ProgramArguments'][0],
+                    'arguments': definition['ProgramArguments'],
+                    'working directory': definition['WorkingDirectory'],
+                    'stdout path': definition['StandardOutPath'],
+                    'stderr path': definition['StandardErrorPath'],
+                    'run interval': str(definition['StartInterval']) + ' seconds'}
+        environment, properties = actual.get('environment'), actual.get('properties')
+        if (any(actual.get(k) != v for k, v in required.items()) or
+                not isinstance(environment, dict) or not isinstance(properties, str) or
+                'runatload' not in {p.strip() for p in properties.split('|')} or
+                any(environment.get(k) != v for k, v in definition['EnvironmentVariables'].items()) or
+                ('XPC_SERVICE_NAME' in environment and environment['XPC_SERVICE_NAME'] != definition['Label'])):
+            raise DistributionError('loaded timer differs from activation record')
+        if scheduled and (
+                actual.get('state') != 'running' or actual.get('pid') != str(os.getpid())):
+            raise DistributionError('this run is not the recorded launchd job')
+        return True
 
     def activate(self, kind, name, active, resources, scratch):
         if kind == 'cron':
@@ -23377,9 +23556,16 @@ class LocalTimers:
                 raise DistributionError('timer recovery readback mismatch; preserve installation')
             before['cron'], after['cron'] = restored, current.get('cron')
         expected, wanted = (after, before) if reverse else (before, after)
-        changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)} | (set(after) if plan['create'] else set())
-        if any(not self.resource_matches(k, current.get(k), expected.get(k)) for k in changed):
+        if any(not self.resource_matches(k, current.get(k), expected.get(k)) for k in before.keys() | after.keys()):
             raise DistributionError('timer changed after review; preserve installation')
+        # Older recovery records also request remove/create for identical
+        # definitions. Never replay those operations, including on rollback.
+        changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+        if not changed:
+            if any(v is not None for v in wanted.values()) and os.environ.get('SECTION11_EXPORT_MODE') != 'local_scheduled':
+                return self.restore_active(standard, wanted)
+            return
+        self.require_safe_change(plan)
         removed = [plan['create']] if reverse and plan['create'] else ([] if reverse else plan['remove'])
         added = plan['remove'] if reverse else ([plan['create']] if plan['create'] else [])
         for entry in removed:
@@ -23426,17 +23612,90 @@ def _previous_install(data_dir, check_current=True):
 
 
 def _auto_update_state(state):
+    """Keep this schema readable by older releases after rollback."""
     path = Distribution.ordinary(state, "auto-update.json")
     value = Distribution.json(path.read_bytes()) if path.exists() else {}
     if not isinstance(value, dict) or set(value) - {"last_attempt", "skip_release", "available_release", "available_tree", "available_entries", "available_timer_only"}:
         raise DistributionError("invalid auto-update state; preserve state")
     if 'available_timer_only' in value and type(value['available_timer_only']) is not bool:
         raise DistributionError("invalid timer-only update plan; preserve state")
+    if "last_attempt" in value:
+        day = value["last_attempt"]
+        if not isinstance(day, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day):
+            raise DistributionError("invalid automatic check day; preserve state")
+        Distribution.calendar_day(day.replace("-", "."))
     return value
 
 
+def _claim_local_update_check(state, now):
+    """Claim under the installation lock; older releases ignore this file."""
+    path = Distribution.ordinary(state, "local-check.json")
+    verified = {}
+    if path.exists():
+        value = Distribution.json(path.read_bytes())
+        if (not isinstance(value, dict) or 'last_attempt_at' not in value or
+                set(value) - {"last_attempt_at", "verified"}):
+            raise DistributionError("invalid local check state; preserve state")
+        stamp = value["last_attempt_at"]
+        try:
+            last = datetime.fromisoformat(stamp) if isinstance(stamp, str) else None
+            if last is None or last.utcoffset() != timedelta(0) or last.isoformat() != stamp:
+                raise ValueError("expected canonical UTC timestamp")
+        except ValueError as exc:
+            raise DistributionError("invalid local check time; preserve state") from exc
+        if 'verified' in value:
+            verified = value['verified']
+            if (not isinstance(verified, dict) or set(verified) !=
+                    {'tag', 'commit', 'tree', 'context', 'basenames', 'outcome'} or
+                    verified['outcome'] not in ('current', 'skipped', 'ahead', 'available') or
+                    not isinstance(verified['commit'], str) or not re.fullmatch('[0-9a-f]{40}', verified['commit']) or
+                    any(not isinstance(verified[key], str) or not re.fullmatch('[0-9a-f]{64}', verified[key])
+                        for key in ('tree', 'context'))):
+                raise DistributionError("invalid verified local check; preserve state")
+            Distribution.release_key(verified['tag'])
+            names = verified['basenames']
+            if (not isinstance(names, list) or not 0 < len(names) <= Distribution.MAX_FILES or
+                    any(not isinstance(name, str) or len(name) > 240 or '/' in name or
+                        not _safe_manifest_path(name) for name in names) or names != sorted(set(names))):
+                raise DistributionError("invalid verified release names; preserve state")
+        if last > now:
+            # Rebase once after a backward clock move, then wait ten minutes.
+            _write_install_state(state, "local-check.json", {"last_attempt_at": now.isoformat()})
+            return None
+        if now - last < timedelta(minutes=10):
+            return None
+    # Clear prior evidence before requests; a failure cannot bless a new outcome.
+    _write_install_state(state, "local-check.json", {"last_attempt_at": now.isoformat()})
+    return verified
+
+
+def _local_check_identity(data_dir, saved, basenames, plan=None):
+    """Hash the local inputs to an outcome, without storing private settings."""
+    if plan is None:
+        config_raw, config = _local_config(data_dir)
+        plan = {'tree': _ordinary_tree_digest(data_dir / 'section11'),
+                'entries': _entry_digests(data_dir, basenames),
+                'custom': _custom_preimage(data_dir),
+                'config_digest': Distribution.digest(config_raw) if config_raw is not None else None,
+                'timer': LocalTimers(data_dir).plan(config)}
+    context = {key: plan[key] for key in ('entries', 'custom', 'config_digest', 'timer')}
+    context['state'] = {key: value for key, value in saved.items() if key != 'last_attempt'}
+    return {'tree': plan['tree'],
+            'context': Distribution.digest(json.dumps(context, sort_keys=True).encode())}
+
+
+def _local_check_message(outcome, tag):
+    return {'current': 'already current with ' + tag,
+            'skipped': 'rolled-back release ' + tag + ' remains skipped',
+            'ahead': 'installed content is newer than the latest official release; wait for its release or review --update',
+            'available': 'official release ' + tag + ' available; run python3 section11/examples/sync.py --update'}[outcome]
+
+
 def auto_update_local(data_dir, enabled, _locked=False, advisory_only=False, started_at=None):
-    """Post-data maintenance; its failure never changes the data result."""
+    """Post-data maintenance; its failure never changes the data result.
+
+    started_at, when supplied, is the check start, not the sync invocation start.
+    """
     if (enabled is False and not advisory_only) or os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
         return
     message = ""
@@ -23452,14 +23711,12 @@ def auto_update_local(data_dir, enabled, _locked=False, advisory_only=False, sta
             state = data_dir / ".section11-state"
             saved = _auto_update_state(state)
             now = (started_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-            if now.hour < 4:
-                return
-            today = now.date().isoformat()
-            if saved.get("last_attempt", "") >= today:
-                message = "already checked this UTC day (or recorded clock is ahead)"
+            verified = _claim_local_update_check(state, now)
+            if verified is None:
+                message = "automatic check not due yet (ten-minute interval)"
             else:
-                # Claim the day before any request, including unsuccessful checks.
-                saved["last_attempt"] = today
+                # Keep the daily claim for older readers, never a timestamp here.
+                saved["last_attempt"] = now.date().isoformat()
                 # A failed discovery does not resolve a previously verified plan.
                 if not _local_notice_matches(data_dir, saved):
                     for key in ("available_release", "available_tree", "available_entries", "available_timer_only"):
@@ -23467,18 +23724,39 @@ def auto_update_local(data_dir, enabled, _locked=False, advisory_only=False, sta
                 _write_install_state(state, "auto-update.json", saved)
                 if not isinstance(enabled, bool):
                     raise DistributionError("auto_update must be a JSON boolean")
-                raw, files, identity = _fetch_verified_release()
+                def reuse(release, commit):
+                    nonlocal message
+                    if (not verified or verified['tag'] != release['tag_name'] or verified['commit'] != commit or
+                            (enabled and verified['outcome'] == 'available')):
+                        return False
+                    if _local_check_identity(data_dir, saved, verified['basenames']) != {
+                            key: verified[key] for key in ('tree', 'context')}:
+                        return False
+                    if verified['outcome'] == 'available' and not _local_notice_matches(data_dir, saved):
+                        return False
+                    message = _local_check_message(verified['outcome'], verified['tag'])
+                    return True
+                fetched = _fetch_verified_release(_reuse=reuse)
+                if fetched is None:
+                    _write_install_state(state, 'local-check.json',
+                                         {'last_attempt_at': now.isoformat(), 'verified': verified})
+                    print('Section 11 auto-update: ' + message)
+                    return
+                raw, files, identity = fetched
                 status = _local_release_status(root, raw, files, identity)
                 _ensure_custom(data_dir, files)
                 expected = _local_plan(data_dir, raw, files)
                 plan = expected['distribution']
                 needs_install = _local_install_needed(data_dir, raw, identity, expected)
                 if saved.get("skip_release") == identity["tag"]:
-                    message = "rolled-back release " + identity["tag"] + " remains skipped"
+                    outcome = 'skipped'
+                    message = _local_check_message(outcome, identity['tag'])
                 elif status["content_ahead"]:
-                    message = "installed content is newer than the latest official release; wait for its release or review --update"
+                    outcome = 'ahead'
+                    message = _local_check_message(outcome, identity['tag'])
                 elif not needs_install:
-                    message = "already current with " + identity["tag"]
+                    outcome = 'current'
+                    message = _local_check_message(outcome, identity['tag'])
                 else:
                     saved.update(available_release=identity["tag"],
                                  available_tree=_ordinary_tree_digest(root),
@@ -23487,7 +23765,8 @@ def auto_update_local(data_dir, enabled, _locked=False, advisory_only=False, sta
                                                            any(expected['entries'].values())))
                     _write_install_state(state, "auto-update.json", saved)
                     if not enabled:
-                        message = "official release " + identity["tag"] + " available; run python3 section11/examples/sync.py --update"
+                        outcome = 'available'
+                        message = _local_check_message(outcome, identity['tag'])
                     else:
                         _install_local(data_dir, raw, files, identity, expected, _locked=True)
                         message = "installed " + status["installed_date"] + " -> " + identity["tag"]
@@ -23495,10 +23774,20 @@ def auto_update_local(data_dir, enabled, _locked=False, advisory_only=False, sta
                             message += "; replaced/removed: " + ", ".join(plan["changed"] + plan["removed"])
                         if expected['cleanup_names']:
                             message += '; removed outside section11/: ' + ', '.join(expected['cleanup_names'])
+                        # Reconcile the installed result against these freshly verified bytes.
+                        expected = _local_plan(data_dir, raw, files)
+                        outcome = None if _local_install_needed(data_dir, raw, identity, expected) else 'current'
                 if saved.get("skip_release") == identity["tag"] or status["content_ahead"] or not needs_install:
                     for key in ("available_release", "available_tree", "available_entries", "available_timer_only"):
                         saved.pop(key, None)
                     _write_install_state(state, "auto-update.json", saved)
+                if outcome is not None:
+                    names = sorted({name.rsplit('/', 1)[-1] for name in files})
+                    verified = dict(tag=identity['tag'], commit=identity['commit'], basenames=names,
+                                    outcome=outcome, **_local_check_identity(
+                                        data_dir, _auto_update_state(state), names, plan=expected))
+                    _write_install_state(state, 'local-check.json',
+                                         {'last_attempt_at': now.isoformat(), 'verified': verified})
     except (Exception, KeyboardInterrupt) as exc:
         message = "stopped; sync result retained; " + " ".join(str(exc).split())
     print("Section 11 auto-update: " + message)
@@ -23572,11 +23861,11 @@ def _distribution_lock(data_dir, create=True, cleanup=True):
     return locked()
 
 
-def _fetch_verified_release():
+def _fetch_verified_release(*, _reuse=None):
     if _RELEASE_REQUEST_BUDGET.get() is not None:
-        return Distribution.fetch()
+        return Distribution.fetch(_reuse=_reuse) if _reuse is not None else Distribution.fetch()
     with _release_request_budget():
-        return Distribution.fetch()
+        return Distribution.fetch(_reuse=_reuse) if _reuse is not None else Distribution.fetch()
 
 
 _ROOT_ENTRIES = ('sync.py', 'push.py', 'pull.py')
@@ -23827,20 +24116,112 @@ class LocalRecovery:
             raise DistributionError('invalid recovery archive; preserve state') from exc
 
 
+def _verified_activation_completion(state, record):
+    """Verify every preimage before confirming or restoring the recorded timer."""
+    fields = {'schema', 'transaction', 'phase', 'previous_tree', 'previous_entries',
+              'installed_tree', 'installed_inventory', 'installed_entries', 'timers_digest',
+              'cleanup', 'archive_digest', 'archive_members', 'obsolete_archive', 'config_before',
+              'config_had_auto_sync', 'config_after', 'config_changed', 'installed_tag'}
+    if (set(record) != fields or type(record['schema']) is not int or record['schema'] != 4 or
+            record['phase'] != 'timer-activation' or
+            any(type(record[k]) is not bool for k in ('config_had_auto_sync', 'config_after', 'config_changed')) or
+            record['config_after'] is not True or
+            (record['config_before'] is not None and type(record['config_before']) is not bool) or
+            any(not isinstance(record[k], dict) for k in ('previous_entries', 'installed_inventory',
+                'installed_entries', 'cleanup', 'archive_members'))):
+        raise DistributionError('unrecognized activation record')
+    for key in ('previous_tree', 'installed_tree', 'timers_digest', 'archive_digest'):
+        if not (key == 'previous_tree' and record[key] is None) and not re.fullmatch('[0-9a-f]{64}', str(record[key])):
+            raise DistributionError('invalid activation digest')
+    Distribution.release_date(record['installed_tag'])
+    data_dir, name = state.parent, record['transaction']
+    previous = Distribution.ordinary(state, 'previous.json')
+    if previous.exists():
+        prior = _previous_install(data_dir, check_current=False)[0]
+        if prior['transaction'] == name or record['obsolete_archive'] != prior['transaction'] + '.zip':
+            raise DistributionError('previous pointer differs from activation predecessor')
+    elif record['obsolete_archive'] is not None:
+        raise DistributionError('activation predecessor is missing')
+    directory = state / name
+    if directory.is_symlink() or not directory.is_dir():
+        raise DistributionError('non-ordinary activation staging')
+    # Check cleanup's whole deletion scope before any completion write.
+    import stat
+    for base, dirs, files in os.walk(directory, followlinks=False):
+        for child in dirs + files:
+            mode = (Path(base) / child).lstat().st_mode
+            if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+                raise DistributionError('non-ordinary activation staging')
+    target = data_dir / 'section11'
+    identity = _local_identity(target)
+    if (identity is None or identity['tag'] != record['installed_tag'] or
+            _local_tree_digest(target) != record['installed_tree'] or
+            _entry_digests(data_dir, cleanup=record['cleanup']) != record['installed_entries'] or
+            LocalRecovery.inventory({'old': target}) != record['installed_inventory']):
+        raise DistributionError('installed activation preimage differs')
+    timers = Distribution.ordinary(directory, 'timers.json').read_bytes()
+    if Distribution.digest(timers) != record['timers_digest']:
+        raise DistributionError('activation timer digest differs')
+    loose = Distribution.ordinary(directory, 'recovery.zip')
+    published = Distribution.ordinary(state, name + '.zip')
+    if loose.exists() == published.exists():
+        raise DistributionError('activation archive location is ambiguous')
+    archive = loose if loose.exists() else published
+    members = LocalRecovery.read(archive, record['archive_digest'])
+    sources = {'old': directory / 'old', 'entries': directory / 'entries',
+               'timers.json': directory / 'timers.json'}
+    if (members != record['archive_members'] or
+            members.get('timers.json', {}).get('sha256') != record['timers_digest'] or
+            LocalRecovery.inventory(sources) != members or
+            _local_tree_digest(directory / 'old') != record['previous_tree'] or
+            _entry_digests(directory / 'entries', cleanup=record['cleanup']) != record['previous_entries']):
+        raise DistributionError('activation recovery preimage differs')
+    _auto_update_state(state)
+    _, config = _local_config(data_dir)
+    if type(config.get('auto_sync', True)) is not bool or config.get('auto_sync', True) != record['config_after']:
+        raise DistributionError('activation timer policy differs')
+    LocalTimers(data_dir).confirm_active(Distribution.json(timers), config)
+    return archive
+
+
 def _cleanup_staging(state):
-    """Only journalled pre-activation or committed cleanup is repeatable."""
+    """Repeat cleanup, or finish activation only after a complete preimage proof."""
     path = Distribution.ordinary(state, 'transaction.json')
     if not path.exists():
         return
-    record = Distribution.json(path.read_bytes())
+    try:
+        record = Distribution.json(path.read_bytes())
+    except ValueError as exc:
+        raise DistributionError('interrupted update: preserve transaction.json before sync') from exc
+    if not isinstance(record, dict):
+        raise DistributionError('interrupted update: preserve transaction.json before sync')
     name = record.get('transaction', '')
-    if record.get('schema') != 4 or not re.fullmatch(r'transaction-[a-f0-9]{32}', name):
+    if type(record.get('schema')) is not int or record.get('schema') != 4 or not re.fullmatch(r'transaction-[a-f0-9]{32}', str(name)):
         raise DistributionError('interrupted update: preserve transaction.json before sync')
     if record.get('phase') == 'timer-activation':
         previous = Distribution.ordinary(state, 'previous.json')
-        if previous.exists() and Distribution.json(previous.read_bytes()).get('transaction') == name:
+        try:
+            prior = Distribution.json(previous.read_bytes()) if previous.exists() else {}
+            if not isinstance(prior, dict):
+                raise ValueError('invalid previous pointer')
+        except ValueError as exc:
+            raise DistributionError('interrupted update: preserve transaction.json before sync') from exc
+        if prior.get('transaction') == name:
             # previous.json is published only after confirmed timer readback.
             record['phase'] = 'committed'
+        else:
+            try:
+                archive = _verified_activation_completion(state, record)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                raise DistributionError('interrupted update: preserve transaction.json before sync') from None
+            # Only proven absence can load the recorded timer at a terminal.
+            # Keep schema 4 readable by the 2026.11.10 rollback implementation.
+            destination = state / (name + '.zip')
+            if archive != destination:
+                os.rename(archive, destination)
+            _write_install_state(state, 'previous.json', {k: v for k, v in record.items() if k != 'phase'})
+            record['phase'] = 'committed'
+            _write_install_state(state, 'transaction.json', record)
     if record.get('phase') not in ('staging', 'rollback-staging', 'committed', 'rollback-complete'):
         raise DistributionError('interrupted update: preserve transaction.json before sync')
     directory = state / name
@@ -23865,6 +24246,8 @@ def _cleanup_staging(state):
             if not re.fullmatch(r'transaction-[a-f0-9]{32}\.zip', obsolete):
                 raise DistributionError('invalid obsolete recovery archive')
             Distribution.ordinary(state, obsolete).unlink(missing_ok=True)
+    if record['phase'] == 'committed':
+        _clear_local_update(state.parent, record['installed_tag'])
     path.unlink()
 
 
@@ -24077,16 +24460,13 @@ def _install_local(data_dir, raw, files, identity, expected, _locked=False):
     with contextlib.nullcontext() if _locked else _distribution_lock(data_dir):
         if _local_plan(data_dir, raw, files, expected['timer_choice']) != expected:
             raise DistributionError('installation changed after review; no files changed')
+        LocalTimers.require_safe_change(expected['timer'])
         _local_release_status(data_dir / 'section11', raw, files, identity)
         # Only actual installation changes consume the previous-installation slot.
         if not _local_install_needed(data_dir, raw, identity, expected):
             _ensure_custom(data_dir, files)
             if expected['timer']['enabled']:
-                state = data_dir / '.section11-state'
-                _write_install_state(state, 'transaction.json', {
-                    'phase': 'timer-refresh', 'timer': LocalTimers.recovery(expected['timer'])})
-                LocalTimers(data_dir).apply(expected['timer'], state)
-                (state / 'transaction.json').unlink()
+                LocalTimers(data_dir).apply(expected['timer'], data_dir / '.section11-state')
             _clear_local_update(data_dir, identity['tag'])
             return expected['distribution']
         state, target = data_dir / '.section11-state', data_dir / 'section11'
@@ -24171,12 +24551,12 @@ def _install_local(data_dir, raw, files, identity, expected, _locked=False):
                 raise DistributionError('active installation readback mismatch')
             _write_install_state(state, 'transaction.json', dict(record, phase='timer-activation'))
             timer_started = bool(expected['timer']['remove'] or expected['timer']['create'])
-            LocalTimers(data_dir).apply(expected['timer'], transaction)
+            timer_started = LocalTimers(data_dir).apply(expected['timer'], transaction) or timer_started
             os.rename(archive, state / (transaction.name + '.zip'))
             _write_install_state(state, 'previous.json', record)
-        except (Exception, KeyboardInterrupt):
+        except (Exception, KeyboardInterrupt) as exc:
             # After a scheduler operation may have started, never guess or resend.
-            if timer_started:
+            if timer_started or isinstance(exc, TimerOutcomeUnknown):
                 raise
             if switched:
                 os.rename(target, transaction / 'failed')
@@ -24239,6 +24619,7 @@ def _rollback_local(data_dir, record):
         raise DistributionError('rollback extraction differs from previous installation')
     _previous_install(data_dir)
     timer_plan = Distribution.json((recovered / 'timers.json').read_bytes())
+    LocalTimers.require_safe_change(timer_plan)
     # Restore the legacy name before any old producer/timer can be activated.
     # Keep conflicting unused bytes outside the JSON upload selection.
     current = Distribution.ordinary(data_dir, '.sync_config')
@@ -24372,7 +24753,7 @@ def _review_update(status_only=False, timer_choice=None, _init=False, _locked=Fa
 
 
 def notify_if_updates_available():
-    """Official release advisory after data work, once per UTC day."""
+    """Official release advisory after data work, at most every ten minutes."""
     auto_update_local(Path.cwd(), False, advisory_only=True)
 
 
@@ -24497,7 +24878,7 @@ def _main(installation_root=None, distribution_locked=False, started_at=None):
     parser.add_argument("--rollback", action="store_true", help="Restore the previous local installation without network access")
     auto = parser.add_mutually_exclusive_group()
     auto.add_argument("--auto-update", dest="auto_update", action="store_true", default=None,
-                      help="After data work, check for verified updates once per UTC day at or after 04:00 UTC")
+                      help="After data work, check for verified updates at most once every 10 minutes")
     auto.add_argument("--no-auto-update", dest="auto_update", action="store_false",
                       help="Disable local auto-update for this run, overriding config")
     timer = parser.add_mutually_exclusive_group()
@@ -24544,6 +24925,7 @@ def _main(installation_root=None, distribution_locked=False, started_at=None):
             if zone_pref_input:
                 config["zone_preference"] = zone_pref_input
             _write_install_state(Path.cwd(), '.sync_config', config)
+            LocalTimers(Path.cwd()).restore_unchanged(config)
         print("\n✅ Config saved to .sync_config")
         print("\nUsage:")
         print("  Export locally:    python3 section11/examples/sync.py --output latest.json")
@@ -24663,7 +25045,8 @@ def _main(installation_root=None, distribution_locked=False, started_at=None):
             enabled = args.auto_update if args.auto_update is not None else (
                 config.get("auto_update", False) if isinstance(config, dict) else False)
             auto_update_local(installation_root or _installation_root(), enabled,
-                              _locked=distribution_locked, advisory_only=enabled is False, started_at=started_at)
+                              _locked=distribution_locked, advisory_only=enabled is False,
+                              started_at=datetime.now(timezone.utc))
         if sync is not None:
             try:
                 line = sync.request_budget.summary()
@@ -24865,7 +25248,7 @@ def _run_sync(sync, args, github_token, github_repo):
                 publication_complete = False
                 print(f"   ⚠️ saved_workouts.json push failed (non-critical): {e}")
         
-        # Local API runs use the post-data daily hook. Hosted maintenance is
+        # Local API runs use the post-data ten-minute hook. Hosted maintenance is
         # owned by the verified controller after data work.
     
     # Unknown publication is distinct from definitive failure for maintenance.
